@@ -3,6 +3,7 @@ import type {
   AssignmentOwnerCommitReceipt,
   AssignmentOwnerJournalEntry,
   DigitalWorkerAssignment,
+  DigitalWorkerLease,
   DigitalWorkerStoreDocument,
   JsonObject
 } from '../../shared/digital-worker-types'
@@ -12,6 +13,7 @@ import type {
   WorkItem,
   WorkItemActor,
   WorkItemOwner,
+  WorkItemTransferContinuation,
   WorkItemTransferInput,
   WorkItemTransferResult
 } from '../../shared/project-workspace-types'
@@ -29,11 +31,47 @@ interface TransferContext {
   activeAssignment?: DigitalWorkerAssignment
 }
 
+export interface WorkItemTransferRuntimePreparation {
+  pausedSessionIds: string[]
+  pausedRunIds: string[]
+  predecessorSessionId?: string
+  predecessorRunId?: string
+}
+
+export interface WorkItemTransferRuntimePrepareInput {
+  requestId: string
+  projectId: string
+  goalId?: string
+  workItemId: string
+  activeAssignment?: Pick<DigitalWorkerAssignment, 'id' | 'assigneeKind' | 'assigneeId'>
+  activeWorkerLeases: Array<Pick<DigitalWorkerLease, 'id' | 'assignmentId' | 'workerId' | 'fencingToken'>>
+}
+
+export interface WorkItemTransferRuntimeContinueInput {
+  requestId: string
+  projectId: string
+  goalId?: string
+  workItemId: string
+  workItemTitle: string
+  target: WorkItemOwner
+  assignmentId: string
+  previousAssignmentId?: string
+  preparation?: WorkItemTransferRuntimePreparation
+}
+
+export interface WorkItemTransferRuntime {
+  prepare(input: WorkItemTransferRuntimePrepareInput): Promise<WorkItemTransferRuntimePreparation>
+  continue(input: WorkItemTransferRuntimeContinueInput): Promise<WorkItemTransferContinuation>
+}
+
 export class WorkItemTransferService {
   private readonly projectStore: ProjectWorkspaceStore
   private readonly workerStore: DigitalWorkerStore
 
-  constructor(private readonly rootDir: string) {
+  constructor(
+    private readonly rootDir: string,
+    private readonly runtime?: WorkItemTransferRuntime
+  ) {
     this.projectStore = new ProjectWorkspaceStore(rootDir)
     this.workerStore = new DigitalWorkerStore(rootDir)
   }
@@ -52,10 +90,66 @@ export class WorkItemTransferService {
     if (!context.activeAssignment && context.workItem.owner) {
       context = await this.bootstrapCurrentAssignment(coordinator, context, input, actor)
     }
+    const preparation = await this.prepareRuntimeTransfer(context, input)
+    const releasedWorkerLeaseIds = await this.releaseActiveWorkerLeases(context.activeAssignment)
     const receipt = context.activeAssignment
       ? await this.reassign(coordinator, context, input, actor)
       : await this.assign(coordinator, context, input, actor)
-    return this.resultFromReceipt(coordinator, receipt, input, actor, false)
+    return this.resultFromReceipt(
+      coordinator,
+      receipt,
+      input,
+      actor,
+      false,
+      preparation,
+      releasedWorkerLeaseIds
+    )
+  }
+
+  private async prepareRuntimeTransfer(
+    context: TransferContext,
+    input: WorkItemTransferInput
+  ): Promise<WorkItemTransferRuntimePreparation | undefined> {
+    if (!this.runtime) return undefined
+    const activeWorkerLeases = context.activeAssignment
+      ? this.workerStore.read().leases.filter((lease) =>
+        lease.assignmentId === context.activeAssignment!.id && lease.status === 'active')
+      : []
+    return this.runtime.prepare({
+      requestId: input.requestId,
+      projectId: context.project.id,
+      ...(context.workItem.goalId ? { goalId: context.workItem.goalId } : {}),
+      workItemId: context.workItem.id,
+      ...(context.activeAssignment
+        ? {
+            activeAssignment: {
+              id: context.activeAssignment.id,
+              assigneeKind: context.activeAssignment.assigneeKind,
+              assigneeId: context.activeAssignment.assigneeId
+            }
+          }
+        : {}),
+      activeWorkerLeases: activeWorkerLeases.map((lease) => ({
+        id: lease.id,
+        assignmentId: lease.assignmentId,
+        workerId: lease.workerId,
+        fencingToken: lease.fencingToken
+      }))
+    })
+  }
+
+  private async releaseActiveWorkerLeases(
+    assignment: DigitalWorkerAssignment | undefined
+  ): Promise<string[]> {
+    if (!assignment || !this.runtime) return []
+    const leases = this.workerStore.read().leases.filter((lease) =>
+      lease.assignmentId === assignment.id && lease.status === 'active')
+    const released: string[] = []
+    for (const lease of leases) {
+      await this.workerStore.releaseLease({ leaseId: lease.id, fencingToken: lease.fencingToken })
+      released.push(lease.id)
+    }
+    return released
   }
 
   private async preflight(input: WorkItemTransferInput, actor: WorkItemActor): Promise<TransferContext> {
@@ -69,7 +163,7 @@ export class WorkItemTransferService {
     if (!project || project.status !== 'active') {
       throw new ProjectWorkspaceError('project_inactive', `Project ${workItem.projectId} is not active`)
     }
-    assertWorkItemAuthorized(project, workItem, actor, 'transfer', input.expectedRevision)
+    assertWorkItemAuthorized(project, workItem, actor, 'transfer', input.expectedRevision, state)
     const active = workers.assignments.filter(
       (assignment) => assignment.workItemId === workItem.id && assignment.status === 'active'
     )
@@ -167,7 +261,9 @@ export class WorkItemTransferService {
     receipt: AssignmentOwnerCommitReceipt,
     input: WorkItemTransferInput,
     actor: WorkItemActor,
-    idempotentReplay: boolean
+    idempotentReplay: boolean,
+    preparation?: WorkItemTransferRuntimePreparation,
+    releasedWorkerLeaseIds: string[] = []
   ): Promise<WorkItemTransferResult> {
     const state = await this.projectStore.getState()
     const workItem = state.workItems.find((candidate) => candidate.id === receipt.workItemId)
@@ -177,6 +273,29 @@ export class WorkItemTransferService {
     const project = state.workspaces.find((candidate) => candidate.id === workItem.projectId)
     if (!project) throw new ProjectWorkspaceError('not_found', `Project ${workItem.projectId} does not exist`)
     const events = await coordinator.listAudit(input.requestId)
+    const continuation = this.runtime
+      ? await this.runtime.continue({
+          requestId: input.requestId,
+          projectId: project.id,
+          ...(workItem.goalId ? { goalId: workItem.goalId } : {}),
+          workItemId: workItem.id,
+          workItemTitle: workItem.title,
+          target: { ...input.target },
+          assignmentId: receipt.assignmentId,
+          ...(receipt.previousAssignmentId ? { previousAssignmentId: receipt.previousAssignmentId } : {}),
+          ...(preparation ? { preparation } : {})
+        }).catch((error): WorkItemTransferContinuation => ({
+          status: 'successor_failed',
+          pausedSessionIds: preparation?.pausedSessionIds ?? [],
+          pausedRunIds: preparation?.pausedRunIds ?? [],
+          releasedWorkerLeaseIds,
+          ...(preparation?.predecessorSessionId
+            ? { predecessorSessionId: preparation.predecessorSessionId }
+            : {}),
+          ...(preparation?.predecessorRunId ? { predecessorRunId: preparation.predecessorRunId } : {}),
+          error: boundedError(error)
+        }))
+      : undefined
     return {
       requestId: input.requestId,
       projectId: project.id,
@@ -186,15 +305,28 @@ export class WorkItemTransferService {
       ...(receipt.previousAssignmentId ? { previousAssignmentId: receipt.previousAssignmentId } : {}),
       assignmentId: receipt.assignmentId,
       workItem,
-      authorization: inspectWorkItemAuthorization(project, workItem, ownerActor(input.target)),
+      authorization: inspectWorkItemAuthorization(project, workItem, ownerActor(input.target), state),
       auditEventIds: events.map((event) => event.id),
-      idempotentReplay
+      idempotentReplay,
+      ...(continuation
+        ? {
+            continuation: {
+              ...continuation,
+              releasedWorkerLeaseIds: [
+                ...new Set([...continuation.releasedWorkerLeaseIds, ...releasedWorkerLeaseIds])
+              ]
+            }
+          }
+        : {})
     }
   }
 }
 
-export function createWorkItemTransferService(rootDir: string): WorkItemTransferService {
-  return new WorkItemTransferService(rootDir)
+export function createWorkItemTransferService(
+  rootDir: string,
+  runtime?: WorkItemTransferRuntime
+): WorkItemTransferService {
+  return new WorkItemTransferService(rootDir, runtime)
 }
 
 function normalizeTransferInput(value: WorkItemTransferInput | unknown): WorkItemTransferInput {
@@ -340,4 +472,9 @@ function positiveInteger(value: unknown, label: string): number {
     throw new ProjectWorkspaceError('invalid_input', `${label} must be a positive integer`)
   }
   return value as number
+}
+
+function boundedError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error)
+  return text.replace(/\s+/g, ' ').trim().slice(0, 1_000) || 'Successor session creation failed'
 }

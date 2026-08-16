@@ -36,6 +36,12 @@ export type InteractiveOperationKind =
   | 'issue_create'
   | 'checkpoint_restore'
   | 'provider_operation'
+  | 'migration_apply'
+  | 'migration_rollback'
+  | 'project_export'
+  | 'project_import'
+  | 'project_delete'
+  | 'media_generation'
 
 export type InteractiveOperationSource = 'renderer' | 'dag' | 'session_lifecycle'
 
@@ -164,6 +170,8 @@ export type EffectTarget =
       scopePath?: string
       patchSha256?: string
       patchBytes?: number
+      /** Stable app-private reference used to resolve the frozen bytes after Project import. */
+      artifactRef?: string
       artifactRoot: string
       artifactRootIdentity: FileSystemIdentity
       indexArtifactPath: string
@@ -351,6 +359,11 @@ export type EffectTarget =
       commandArgs?: string[]
       url?: string
       serverIdentityDigest: string
+      /** Added in v2; legacy targets remain readable but cannot resume without this binding. */
+      pluginRegistryItemKey?: string
+      pluginContentDigest?: string
+      pluginCapabilityDigest?: string
+      pluginServerId?: string
       discoveryDigest: string
       toolName: string
       toolArgumentsDigest: string
@@ -430,6 +443,98 @@ export type EffectTarget =
       targetPreFiles: number
       targetPreBytes: number
       trashRelativePath: string
+    }
+  | {
+      kind: 'project_portable_export'
+      projectId: string
+      goalId: string
+      workItemId: string
+      runId: string
+      artifactId: string
+      evidenceId: string
+      acceptanceId: string
+      format: 'caogen.project-aggregate.v1'
+    }
+  | {
+      kind: 'project_portable_import'
+      operationId: string
+      importedProjectId: string
+      exportDigest: string
+      sourceAggregateDigest: string
+      projectId: string
+      goalId: string
+      workItemId: string
+      runId: string
+      artifactId: string
+      evidenceId: string
+      acceptanceId: string
+      format: 'caogen.project-aggregate.v1'
+    }
+  | {
+      kind: 'project_permanent_deletion'
+      deletionOperationId: string
+      deletedProjectId: string
+      expectedWorkspaceRevision: number
+      projectId: string
+      goalId: string
+      workItemId: string
+      runId: string
+      artifactId: string
+      evidenceId: string
+      acceptanceId: string
+    }
+  | {
+      kind: 'migration_operation'
+      operation: 'apply' | 'rollback'
+      /** Stable portable identity; the absolute private Store path stays in the main process. */
+      backupRef?: 'caogen-private:migration-backups'
+      /** Legacy compatibility for Effects written before private-reference binding. */
+      backupRoot?: string
+      backupId: string
+      assetCount: number
+      kindCounts: {
+        rules: number
+        mcp: number
+        config: number
+        skill: number
+        prompt: number
+        usage: number
+        hook: number
+        memory: number
+        routine: number
+        channel: number
+      }
+      selectionDigest: string
+      expectedState: 'committed' | 'rolled_back'
+    }
+  | {
+      kind: 'provider_profile_operation'
+      operation: 'profile_import' | 'backup_restore' | 'backup_delete' | 'sync_publish' | 'sync_apply'
+      transport: 'local' | 'folder' | 'webdav' | 's3'
+      projectId: string
+      goalId: string
+      workItemId: string
+      runId: string
+      artifactId: string
+      evidenceId: string
+      acceptanceId: string
+      /** Present only for backup_delete; the raw local backup id never enters the Effect ledger. */
+      backupIdDigest?: string
+    }
+  | {
+      kind: 'media_job_operation'
+      operation: 'submit' | 'poll' | 'download' | 'cancel' | 'asset_import' | 'compose' | 'continuity_check'
+      mediaJobId: string
+      externalJobId: string
+      idempotencyKeyDigest: string
+      projectId: string
+      goalId: string
+      workItemId: string
+      runId: string
+      expectedStatus: 'submitting' | 'running' | 'downloading' | 'succeeded' | 'failed' | 'cancelled' | 'waiting_reconciliation'
+      artifactId?: string
+      evidenceId?: string
+      acceptanceId?: string
     }
   | {
       kind: 'unsupported'

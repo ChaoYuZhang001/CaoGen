@@ -229,11 +229,21 @@ function validateRecord(value: unknown, project: string, filePath: string): void
   if (!isRecord(value) || value.schemaVersion !== 1 || value.project !== project) {
     throw new Error(`Learning record identity is invalid: ${filePath}`)
   }
+  validateRecordFields(value, filePath)
+  validateRecordNamespace(value, filePath)
+  validateRecordNumbers(value, filePath)
+  validateRecordObjects(value, filePath)
+}
+
+function validateRecordFields(value: Record<string, unknown>, filePath: string): void {
   for (const key of ['id', 'logicalId', 'kind', 'scope', 'source', 'digest', 'status', 'createdAt', 'updatedAt']) {
     if (typeof value[key] !== 'string' || !(value[key] as string).trim()) {
       throw new Error(`Learning record field ${key} is invalid: ${filePath}`)
     }
   }
+}
+
+function validateRecordNamespace(value: Record<string, unknown>, filePath: string): void {
   if (value.scope !== 'project' && value.scope !== 'worker') {
     throw new Error(`Learning record scope is invalid: ${filePath}`)
   }
@@ -245,12 +255,18 @@ function validateRecord(value: unknown, project: string, filePath: string): void
   } else if (value.workerId !== undefined || value.memoryNamespace !== undefined) {
     throw new Error(`Project learning cannot carry a Worker namespace: ${filePath}`)
   }
+}
+
+function validateRecordNumbers(value: Record<string, unknown>, filePath: string): void {
   if (!Number.isInteger(value.version) || (value.version as number) < 1) {
     throw new Error(`Learning record version is invalid: ${filePath}`)
   }
   if (typeof value.confidence !== 'number' || value.confidence < 0 || value.confidence > 1) {
     throw new Error(`Learning record confidence is invalid: ${filePath}`)
   }
+}
+
+function validateRecordObjects(value: Record<string, unknown>, filePath: string): void {
   if (!isRecord(value.actor) || !isRecord(value.diff) || !isRecord(value.payload)) {
     throw new Error(`Learning record structured fields are invalid: ${filePath}`)
   }

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
-const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-private-provider-report-'))
+const tempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'caogen-private-provider-report-')))
 const privateDir = path.join(tempRoot, '.caogen-private')
 const providerFile = path.join(privateDir, 'provider-parity.json')
 const reportRoot = path.join(tempRoot, 'reports')
@@ -65,7 +65,7 @@ try {
   })
   assert.equal(result.signal, null)
   assert.equal(result.status, 0, safeDiagnostic(result))
-  assert.equal(requests.length, 24)
+  assert.equal(requests.length, 24, safeDiagnostic(result))
 
   const reportText = readFileSync(path.join(reportRoot, 'latest.json'), 'utf8')
   const report = JSON.parse(reportText)

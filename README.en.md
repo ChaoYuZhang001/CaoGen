@@ -6,11 +6,13 @@
 
 # CaoGen
 
-## A multi-vendor AI work desktop. Bring your own keys, run the models you choose, and fail over by policy when a service becomes unavailable.
+## Use your own keys to get real work done locally. Fail over by policy when a service is unavailable, and review every change.
 
-<img src="https://img.shields.io/badge/version-v0.1.7-blue" alt="version">
+<img src="https://img.shields.io/badge/release-v0.1.7-blue" alt="latest public release v0.1.7">
+<img src="https://img.shields.io/badge/source-v0.1.8--dev-orange" alt="current source line v0.1.8 development">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
-<img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
+<img src="https://img.shields.io/badge/macOS-Intel%20x64%20signed-success" alt="macOS Intel x64 signed and notarized">
+<img src="https://img.shields.io/badge/Windows-x64%20unsigned%20preview-yellow" alt="Windows x64 unsigned preview">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
@@ -20,46 +22,48 @@
 
 </div>
 
-## What is CaoGen?
+## What CaoGen helps you do
 
-CaoGen is an open-source, vendor-neutral, local-first AI work desktop that brings multi-provider models, your local projects, and the tools needed to complete work into one Electron app. You use your own API keys and treat providers as replaceable compute while project directories, worktrees, tools, and review stay in your desktop workflow.
+CaoGen is an open-source, vendor-neutral, local-first multi-vendor AI work desktop. Users connect configured model providers with their own API keys and manage multiple models, projects, files, tasks, and tools in one place. When a service fails, CaoGen can try another configured key or compatible provider while keeping the project, records, and review flow under CaoGen's control.
 
-It gives users one reviewable local workspace for multiple models, projects, files, tasks, and tools.
+It is built for two groups:
 
-> “The models you choose” means models reachable through CaoGen's OpenAI-compatible or native Anthropic Messages HTTP runtimes. Availability still depends on protocol compatibility, account access, network conditions, and quota. The base distribution embeds no external Agent SDK or CLI.
+- **People who want AI to finish everyday work**: organize research, write documents, work with tables, and inspect final outputs without first learning routing, Git, or task graphs.
+- **Professional users managing several projects and keys**: inspect sessions, terminal, files, browser, diffs, Git, worktrees, cost, and approvals in one workbench.
 
-| Capability | CaoGen today | Evidence boundary |
-|---|---|---|
-| Providers and models | Multiple providers, BYOK, and custom compatible services | Only configured, protocol-compatible targets are in scope |
-| Failure recovery | Controlled failover across backup keys and configured providers | External accounts, networks, and quota can still block requests |
-| Local workflow | Local projects, Git worktrees, Diff, terminal, and file tools | High-risk actions remain subject to permission and acceptance gates |
-| Openness | AGPL-3.0-only with separate commercial licensing | The v0.1.7 macOS Intel x64 installer is Developer ID signed and Apple-notarized |
+The current public release can:
 
-This table describes the current product structure. It does not claim that every model, provider, or external network condition has been validated; see [STATUS.md](./STATUS.md) for exact boundaries.
+- Configure multiple model providers, API keys, custom endpoints, and local compatible services.
+- Select execution paths by task, cost, speed, quality, and health while recording route changes.
+- Run changes in isolated Git worktrees and inspect diffs, conflicts, tests, and patches before merge.
+- Use terminal, files, browser, Git, and previews for PDFs, images, and Office documents in the app.
+- Inspect real session, approval, failure, cost, and workspace state in the 3D office.
 
 ## Current progress
 
-As of 2026-08-07, the current structural projection is: PRD has 64 P0s: 21 verified, 30 partially complete, 12 project targets, and 1 foundation only. This is not a version-completion percentage or release binding. The published `v0.1.7` is a signed macOS Intel wedge release, not 1.0 stable, and the formal cross-platform Release Gate remains blocked. See the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md) and [STATUS.md](./STATUS.md) for exact boundaries.
+<!-- caogen-public-status:start -->
+As of 2026-08-14, the public projection of 64 PRD P0 requirements is 26 strictly verified, 34 partially complete or qualified, 3 project targets, and 1 foundation-only; 38 remain open.
+<!-- caogen-public-status:end -->
+
+This is not a version-completion percentage or release promise. The published `v0.1.7` is not 1.0 stable. Detailed evidence and boundaries live in [STATUS.md](./STATUS.md) and the [1.0 acceptance matrix](./docs/1.0-ACCEPTANCE-MATRIX.md). The public numbers are generated by `npm run update:public-status` from PRD status rows and the STATUS date; do not edit them by hand.
 
 > **First-time-user acceptance remains open**: the target is a private, 30-minute install of a supported release asset, Provider setup, and read-only task drill. Eligibility, privacy boundaries, and the volunteer format are in [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9). Never post keys, Provider URLs, or project paths.
-
-## Core capabilities available today
-
-- **Connect multiple providers with BYOK**: configure multiple providers and API keys, custom base URLs, gateways, or local OpenAI-compatible services for common compatible model sources such as DeepSeek, Kimi, and GLM.
-- **Route work and fail over automatically**: choose targets by capability, cost, speed, budget, and health; for recoverable quota, rate-limit, server, or network failures, try a backup key first and then a configured healthy provider.
-- **Isolate task changes**: create a dedicated Git worktree for a session, inspect diffs and conflicts before merging, export or apply patches, and discard the isolated workspace when needed.
-- **Finish work inside one workbench**: use an integrated terminal, file browser, text editor, browser, Diff and Git tools, plus previews for HTML, Markdown, JSON, CSV, images, PDF, and Office documents.
-- **Inspect a live 3D office**: visualize real session state including running, approval, completed, failed, provider, cost, subtask, and worktree/Git signals. The current release uses robot office assets; the ink-animation character direction remains roadmap work.
 
 ![CaoGen 3D office](./docs/screenshot-office.jpg)
 
 ## Quick Start
 
-1. **Download**: for macOS Intel x64, use the signed and notarized [v0.1.7 release](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7). Windows x64 remains on v0.1.5. There are no current macOS Apple Silicon arm64 or Linux release assets.
+| Platform | Current entry | Trust state |
+|---|---|---|
+| macOS Intel x64 | [v0.1.7 DMG / ZIP](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | Developer ID signed and Apple-notarized |
+| Windows x64 | [v0.1.7 unsigned preview](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | Unsigned; Windows shows an unknown publisher |
+| macOS Apple Silicon / Linux | No current installer | Build from source |
+
+1. **Download and verify the source**: use only this repository's GitHub Releases and verify SHA-256 values in the Release Notes.
 2. **Add a provider and key**: open Settings, select a provider template or enter the base URL of a compatible service, then add your own API key. Keys are never committed to this repository.
 3. **Run your first task**: create a session, select a local project directory or use an unassigned session, then try: `Read this project and tell me how it starts, which files matter most, and the three highest-value issues. Do not change anything yet.`
 
-> The v0.1.7 macOS Intel x64 installer is Developer ID signed, Apple-notarized, and Gatekeeper-verified, but the current public Release asset set and body have drifted from the repository's approved contract, so its integrity audit is failing. Windows x64 v0.1.5 is a retained older release. Any future Windows asset must pass native validation and be labeled `unsigned preview` in both its filename and public copy; it cannot satisfy the formal cross-platform gate. Download only from this repository's Releases and verify the corresponding release notes. Current evidence is tracked in [STATUS.md](./STATUS.md).
+> macOS and Windows have different signing states. Platform exceptions, release audits, and later candidate status are centralized in [STATUS.md](./STATUS.md) instead of expanding internal release workflow in Quick Start.
 
 Run from source:
 

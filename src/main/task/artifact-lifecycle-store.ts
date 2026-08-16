@@ -7,6 +7,9 @@ import type {
   ArtifactProjectOwnership,
   ArtifactPurgeDisposition,
   ArtifactPurgeRecord,
+  ArtifactRetentionRevisionInput,
+  ArtifactRetentionRevisionRecord,
+  ArtifactEffectiveRetention,
   ArtifactRetentionPolicy,
   PreparedArtifactContent
 } from './artifact-lifecycle-types'
@@ -73,6 +76,16 @@ export function setupArtifactLifecycleSchema(db: WorkflowLedgerDatabase): void {
       disposition TEXT NOT NULL,
       payload TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS workflow_artifact_retention_revisions (
+      artifact_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      retention_mode TEXT NOT NULL,
+      retain_until INTEGER,
+      created_at INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY(artifact_id, revision)
+    );
     CREATE INDEX IF NOT EXISTS idx_workflow_artifact_lifecycle_project
       ON workflow_artifact_lifecycles(project_id, created_at, artifact_id);
     CREATE INDEX IF NOT EXISTS idx_workflow_artifact_lifecycle_lineage
@@ -81,6 +94,8 @@ export function setupArtifactLifecycleSchema(db: WorkflowLedgerDatabase): void {
       ON workflow_artifact_lifecycles(blob_ref, artifact_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_artifact_lifecycle_successor
       ON workflow_artifact_lifecycles(supersedes_id) WHERE supersedes_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_workflow_artifact_retention_project
+      ON workflow_artifact_retention_revisions(project_id, created_at, artifact_id, revision);
   `)
 }
 
@@ -91,8 +106,8 @@ export function registerArtifactLifecycle(
   ownership: ArtifactProjectOwnership
 ): ArtifactLifecycleRegistrationResult {
   setupArtifactLifecycleSchema(db)
-  const normalized = normalizeRegistration(db, input, content, ownership)
-  const existing = findArtifactLifecycle(db, normalized.lifecycle.artifactId)
+  const existing = findArtifactLifecycle(db, requiredId(input.id, 'artifact id'))
+  const normalized = normalizeRegistration(db, input, content, ownership, existing)
   if (existing) return resolveIdempotentRegistration(db, normalized, existing)
   assertLineageTransition(db, normalized.lifecycle)
   const artifact = registerWorkflowArtifact(db, normalized.artifact)
@@ -122,7 +137,7 @@ export function planArtifactPurge(
     return { lifecycle, existing, disposition: existing.disposition, deleteBlob: false }
   }
   const purgedAt = finiteTimestamp(input.purgedAt ?? Date.now(), 'artifact purgedAt')
-  assertRetentionExpired(lifecycle.retention, purgedAt)
+  assertRetentionExpired(readEffectiveArtifactRetention(db, lifecycle).policy, purgedAt)
   const sharedBlob = lifecycle.blobRef ? hasOtherLiveBlobReference(db, lifecycle) : false
   const disposition: ArtifactPurgeDisposition = lifecycle.storageKind === 'source_ref'
     ? 'source_detached'
@@ -148,7 +163,7 @@ export function recordArtifactPurge(
     reason: requiredText(input.reason, 'artifact purge reason'),
     disposition: plan.disposition
   }
-  assertRetentionExpired(plan.lifecycle.retention, purge.purgedAt)
+  assertRetentionExpired(readEffectiveArtifactRetention(db, plan.lifecycle).policy, purge.purgedAt)
   const tombstone = recordPurgeTombstone(db, plan.lifecycle, purge.purgedAt)
   insertPurge(db, purge)
   appendPurgeEvent(db, plan.lifecycle, purge)
@@ -181,11 +196,150 @@ export function readArtifactPurges(db: WorkflowLedgerDatabase): ArtifactPurgeRec
   return selectMany(db, 'SELECT payload FROM workflow_artifact_purges ORDER BY purged_at, artifact_id', decodePurge)
 }
 
+export function readArtifactRetentionRevisions(
+  db: WorkflowLedgerDatabase,
+  artifactId?: string
+): ArtifactRetentionRevisionRecord[] {
+  setupArtifactLifecycleSchema(db)
+  return artifactId
+    ? selectMany(db, 'SELECT payload FROM workflow_artifact_retention_revisions WHERE artifact_id = ? ORDER BY revision', decodeRetentionRevision, artifactId)
+    : selectMany(db, 'SELECT payload FROM workflow_artifact_retention_revisions ORDER BY created_at, artifact_id, revision', decodeRetentionRevision)
+}
+
+export function readEffectiveArtifactRetention(
+  db: WorkflowLedgerDatabase,
+  lifecycleOrId: ArtifactLifecycleRecord | string
+): ArtifactEffectiveRetention {
+  const lifecycle = typeof lifecycleOrId === 'string'
+    ? findArtifactLifecycle(db, lifecycleOrId)
+    : lifecycleOrId
+  if (!lifecycle) throw new WorkflowLedgerCorruptionError(`artifact lifecycle not found: ${lifecycleOrId}`)
+  const latest = readArtifactRetentionRevisions(db, lifecycle.artifactId).at(-1)
+  return latest
+    ? { policy: latest.policy, revision: latest.revision, revisedAt: latest.createdAt }
+    : { policy: lifecycle.retention, revision: 0 }
+}
+
+export function appendArtifactRetentionRevision(
+  db: WorkflowLedgerDatabase,
+  input: ArtifactRetentionRevisionInput
+): ArtifactRetentionRevisionRecord {
+  setupArtifactLifecycleSchema(db)
+  const artifactId = requiredId(input.artifactId, 'artifact retention artifactId')
+  const projectId = requiredId(input.projectId, 'artifact retention projectId')
+  const lifecycle = findArtifactLifecycle(db, artifactId)
+  if (!lifecycle || lifecycle.projectId !== projectId) {
+    throw new WorkflowLedgerCorruptionError(`artifact ${artifactId} retention crosses project boundary`)
+  }
+  if (findArtifactPurge(db, artifactId)) throw new WorkflowLedgerCorruptionError('purged Artifact retention cannot be revised')
+  const policy = normalizeRetention(input.policy)
+  const reason = requiredText(input.reason, 'artifact retention reason')
+  const revisions = readArtifactRetentionRevisions(db, artifactId)
+  const latest = revisions.at(-1)
+  if (latest && canonicalJson(latest.policy) === canonicalJson(policy) && latest.reason === reason) return latest
+  const record: ArtifactRetentionRevisionRecord = {
+    schemaVersion: 1,
+    artifactId,
+    projectId,
+    revision: (latest?.revision ?? 0) + 1,
+    policy,
+    reason,
+    createdAt: finiteTimestamp(input.createdAt ?? Date.now(), 'artifact retention createdAt')
+  }
+  db.run(
+    `INSERT INTO workflow_artifact_retention_revisions(
+       artifact_id, project_id, revision, retention_mode, retain_until, created_at, payload
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [record.artifactId, record.projectId, record.revision, record.policy.mode,
+      record.policy.mode === 'expire' ? record.policy.retainUntil : null,
+      record.createdAt, canonicalJson(record)]
+  )
+  appendWorkflowEvent(db, {
+    eventId: `workflow:artifact-retention:${artifactId}:revision:${record.revision}`,
+    streamId: `artifact:${artifactId}`,
+    entityType: 'artifact',
+    entityId: artifactId,
+    kind: 'workflow.artifact.retention.revised',
+    payload: record as unknown as Record<string, unknown>,
+    occurredAt: record.createdAt,
+    correlationId: lifecycle.runId
+  }, { projectId, goalId: lifecycle.goalId, workItemId: lifecycle.workItemId, runId: lifecycle.runId })
+  return record
+}
+
+export function importArtifactLifecycleSlice(
+  db: WorkflowLedgerDatabase,
+  lifecycleValues: readonly unknown[],
+  purgeValues: readonly unknown[] = [],
+  retentionRevisionValues: readonly unknown[] = []
+): { lifecycles: ArtifactLifecycleRecord[]; purges: ArtifactPurgeRecord[]; retentionRevisions: ArtifactRetentionRevisionRecord[] } {
+  setupArtifactLifecycleSchema(db)
+  const lifecycles = lifecycleValues
+    .map((value) => decodeLifecycle(canonicalJson(value)))
+    .sort((left, right) => left.createdAt - right.createdAt || left.version - right.version ||
+      left.artifactId.localeCompare(right.artifactId))
+  for (const record of lifecycles) {
+    const existing = findArtifactLifecycle(db, record.artifactId)
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new WorkflowLedgerCorruptionError(`artifact lifecycle import conflicts with ${record.artifactId}`)
+      }
+      continue
+    }
+    if (!findWorkflowRun(db, record.runId) || !findWorkflowArtifact(db, record.artifactId) ||
+        !findWorkflowArtifactLocation(db, record.locationId)) {
+      throw new WorkflowLedgerCorruptionError(`artifact lifecycle import is not closed over ${record.artifactId}`)
+    }
+    assertLineageTransition(db, record)
+    insertLifecycle(db, record)
+  }
+  const retentionRevisions = retentionRevisionValues
+    .map((value) => decodeRetentionRevision(canonicalJson(value)))
+    .sort((left, right) => left.createdAt - right.createdAt || left.artifactId.localeCompare(right.artifactId) || left.revision - right.revision)
+  for (const record of retentionRevisions) {
+    const lifecycle = findArtifactLifecycle(db, record.artifactId)
+    if (!lifecycle || lifecycle.projectId !== record.projectId) {
+      throw new WorkflowLedgerCorruptionError(`artifact retention import is missing lifecycle ${record.artifactId}`)
+    }
+    const existing = readArtifactRetentionRevisions(db, record.artifactId).find((candidate) => candidate.revision === record.revision)
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) throw new WorkflowLedgerCorruptionError(`artifact retention import conflicts with ${record.artifactId}`)
+      continue
+    }
+    db.run(
+      `INSERT INTO workflow_artifact_retention_revisions(
+         artifact_id, project_id, revision, retention_mode, retain_until, created_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [record.artifactId, record.projectId, record.revision, record.policy.mode,
+        record.policy.mode === 'expire' ? record.policy.retainUntil : null, record.createdAt, canonicalJson(record)]
+    )
+  }
+  const purges = purgeValues
+    .map((value) => decodePurge(canonicalJson(value)))
+    .sort((left, right) => left.purgedAt - right.purgedAt || left.artifactId.localeCompare(right.artifactId))
+  for (const record of purges) {
+    const existing = findArtifactPurge(db, record.artifactId)
+    if (existing) {
+      if (canonicalJson(existing) !== canonicalJson(record)) {
+        throw new WorkflowLedgerCorruptionError(`artifact purge import conflicts with ${record.artifactId}`)
+      }
+      continue
+    }
+    const lifecycle = findArtifactLifecycle(db, record.artifactId)
+    if (!lifecycle || lifecycle.projectId !== record.projectId) {
+      throw new WorkflowLedgerCorruptionError(`artifact purge import is missing lifecycle ${record.artifactId}`)
+    }
+    insertPurge(db, record)
+  }
+  return { lifecycles, purges, retentionRevisions }
+}
+
 function normalizeRegistration(
   db: WorkflowLedgerDatabase,
   input: ArtifactLifecycleRegistrationInput,
   content: PreparedArtifactContent,
-  ownership: ArtifactProjectOwnership
+  ownership: ArtifactProjectOwnership,
+  existing: ArtifactLifecycleRecord | null
 ) {
   const id = requiredId(input.id, 'artifact id')
   const projectId = requiredId(input.projectId, 'artifact projectId')
@@ -197,15 +351,18 @@ function normalizeRegistration(
   const lineageId = requiredId(input.lineageId, 'artifact lineageId')
   if (!PROVENANCE.has(input.provenance)) throw new WorkflowLedgerCorruptionError('artifact provenance is required')
   const retention = normalizeRetention(input.retention)
-  const createdAt = finiteTimestamp(input.createdAt ?? Date.now(), 'artifact createdAt')
+  const createdAt = existing?.createdAt ?? finiteTimestamp(input.createdAt ?? Date.now(), 'artifact createdAt')
   const locationId = `artifact-content:${id}`
+  const storageReference = content.storageKind === 'source_ref'
+    ? { sourceRef: content.sourceRef }
+    : { blobRef: content.blobRef }
   const lifecycle: ArtifactLifecycleRecord = {
-    schemaVersion: 1, artifactId: id, projectId, projectRevision: ownership.projectRevision,
+    schemaVersion: 1, artifactId: id, projectId,
+    projectRevision: existing?.projectRevision ?? ownership.projectRevision,
     ...(run.goalId ? { goalId: run.goalId } : {}), workItemId: run.workItemId, runId,
-    runRevision: run.revision, lineageId, kind: input.kind, version,
+    runRevision: existing?.runRevision ?? run.revision, lineageId, kind: input.kind, version,
     provenance: input.provenance, ...(input.supersedesId ? { supersedesId: requiredId(input.supersedesId, 'supersedesId') } : {}),
-    storageKind: content.storageKind, ...(content.sourceRef ? { sourceRef: content.sourceRef } : {}),
-    ...(content.blobRef ? { blobRef: content.blobRef } : {}), digest: assertSha256Digest(content.digest),
+    storageKind: content.storageKind, ...storageReference, digest: assertSha256Digest(content.digest),
     sizeBytes: content.sizeBytes, locationId, retention, createdAt
   }
   return buildRegistrationRecords(input, content, lifecycle)
@@ -269,13 +426,19 @@ function assertLineageTransition(db: WorkflowLedgerDatabase, lifecycle: Artifact
   const previous = findArtifactLifecycle(db, lifecycle.supersedesId)
   if (!previous) throw new WorkflowLedgerCorruptionError(`superseded Artifact lacks lifecycle: ${lifecycle.supersedesId}`)
   if (previous.projectId !== lifecycle.projectId || previous.lineageId !== lifecycle.lineageId ||
-      previous.kind !== lifecycle.kind || previous.workItemId !== lifecycle.workItemId ||
-      previous.goalId !== lifecycle.goalId || previous.version + 1 !== lifecycle.version) {
+      previous.kind !== lifecycle.kind || previous.version + 1 !== lifecycle.version ||
+      (!isProjectPortableExportLineage(lifecycle) &&
+        (previous.workItemId !== lifecycle.workItemId || previous.goalId !== lifecycle.goalId))) {
     throw new WorkflowLedgerCorruptionError(`artifact ${lifecycle.artifactId} supersession lineage is incompatible`)
   }
   if (findSuccessor(db, previous.artifactId)) {
     throw new WorkflowLedgerCorruptionError(`artifact ${previous.artifactId} already has a successor`)
   }
+}
+
+function isProjectPortableExportLineage(lifecycle: ArtifactLifecycleRecord): boolean {
+  return lifecycle.kind === 'custom' &&
+    lifecycle.lineageId === `lineage:project-portable-export:${lifecycle.projectId}`
 }
 
 function resolveIdempotentRegistration(
@@ -431,6 +594,18 @@ function decodePurge(payload: unknown): ArtifactPurgeRecord {
   return record
 }
 
+function decodeRetentionRevision(payload: unknown): ArtifactRetentionRevisionRecord {
+  const record = parseCanonicalPayload(payload, 'artifact retention revision') as unknown as ArtifactRetentionRevisionRecord
+  if (record.schemaVersion !== 1) throw new WorkflowLedgerCorruptionError('artifact retention revision schema is invalid')
+  requiredId(record.artifactId, 'artifact retention artifactId')
+  requiredId(record.projectId, 'artifact retention projectId')
+  if (!Number.isSafeInteger(record.revision) || record.revision < 1) throw new WorkflowLedgerCorruptionError('artifact retention revision is invalid')
+  normalizeRetention(record.policy)
+  requiredText(record.reason, 'artifact retention reason')
+  finiteTimestamp(record.createdAt, 'artifact retention createdAt')
+  return record
+}
+
 function parseCanonicalPayload(payload: unknown, label: string): Record<string, unknown> {
   if (typeof payload !== 'string') throw new WorkflowLedgerCorruptionError(`${label} payload is not text`)
   const value: unknown = JSON.parse(payload)
@@ -458,11 +633,13 @@ function selectOne<T>(
 function selectMany<T>(
   db: WorkflowLedgerDatabase,
   sql: string,
-  decode: (payload: unknown) => T
+  decode: (payload: unknown) => T,
+  parameter?: string
 ): T[] {
   const stmt = db.prepare(sql)
   const records: T[] = []
   try {
+    if (parameter !== undefined) stmt.bind([parameter])
     while (stmt.step()) records.push(decode(stmt.getAsObject().payload))
     return records
   } finally {

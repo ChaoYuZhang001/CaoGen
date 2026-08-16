@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
@@ -58,6 +58,7 @@ interface MigrationBackupManifest {
 
 export interface MigrationApplyOptions {
   backupRoot?: string
+  backupId?: string
   faultAfterWrites?: number
 }
 
@@ -82,7 +83,13 @@ export function applyMigration(input: MigrationApplyInput, options: MigrationApp
     preflightSelectedAssets(selected)
     const changes = buildTargetChanges(selected)
     const backupRoot = resolve(options.backupRoot ?? defaultMigrationBackupRoot())
-    const manifest = createBackup([...changes.files.keys(), ...changes.directories.keys()], backupRoot, 'apply')
+    const manifest = createBackup(
+      [...changes.files.keys(), ...changes.directories.keys()],
+      backupRoot,
+      'apply',
+      options.backupId
+    )
+    assertBackupMatchesSelection(manifest, selected)
     const contract = createMigrationContract(backupRoot, {
       migrationId: manifest.backupId,
       kind: 'external-agent-assets',
@@ -204,6 +211,7 @@ function applyChanges(
     assertMigrationContractPreflight(contract)
     contract = transitionMigrationContract(backupRoot, contract, 'backup_verified')
     contract = transitionMigrationContract(backupRoot, contract, 'applying')
+    assertAllTargetsStillMatchBackup(manifest)
     for (const [targetPath, bytes] of changes.files) {
       assertNoSymlinkWithin(requiredTargetRoot(changes, targetPath), targetPath)
       writeFileAtomic(targetPath, bytes)
@@ -230,7 +238,7 @@ function applyChanges(
       ? transitionMigrationContract(backupRoot, contract, 'rollback_pending', { writesCompleted: writes })
       : contract
     try {
-      restoreManifest(manifest, backupRoot, false)
+      if (writes > 0) restoreManifest(manifest, backupRoot, false)
       if (rollbackPending.state === 'rollback_pending') transitionMigrationContract(backupRoot, rollbackPending, 'rolled_back')
     } catch {
       // Keep rollback_pending durable when recovery itself cannot be completed.
@@ -335,7 +343,8 @@ function buildTargetChanges(selected: Array<{ internal: InternalMigrationAsset; 
     targetRoots.set(targetPath, targetRoot)
     if (asset.kind === 'rules') addRuleChange(files, internal, action)
     else if (asset.kind === 'mcp') addMcpChange(files, internal, action)
-    else if (asset.kind === 'usage') addVirtualFileChange(files, internal)
+    else if (asset.kind === 'usage' || asset.kind === 'memory' || asset.kind === 'channel') addVirtualFileChange(files, internal)
+    else if (asset.kind === 'routine') addRoutineChange(files, internal, action)
     else if (asset.kind === 'skill' || asset.kind === 'prompt') addSkillChange(directories, internal)
     else throw new Error('migration_asset_not_importable')
   }
@@ -347,6 +356,60 @@ function addVirtualFileChange(files: Map<string, Buffer>, internal: InternalMigr
   const text = internal.targetBytes.toString('utf8')
   if (containsSensitiveText(text)) throw new Error('migration_source_contains_secret')
   files.set(internal.targetPath, internal.targetBytes)
+}
+
+function addRoutineChange(
+  files: Map<string, Buffer>,
+  internal: InternalMigrationAsset,
+  action: MigrationDecisionAction
+): void {
+  if (!internal.targetPath || !internal.routineEntryId || !internal.routineEntry) {
+    throw new Error('migration_routine_invalid')
+  }
+  const currentBytes = files.get(internal.targetPath)
+  const current = currentBytes
+    ? parseTargetJson(currentBytes.toString('utf8'))
+    : readRoutineTargetJson(internal.targetPath)
+  const routines = Array.isArray(current.routines) ? [...current.routines] : []
+  const index = routines.findIndex((candidate) => isObject(candidate) && candidate.id === internal.routineEntryId)
+  if (index >= 0 && action !== 'replace') throw new Error('migration_replace_confirmation_required')
+  if (index >= 0) routines[index] = internal.routineEntry
+  else routines.push(internal.routineEntry)
+  const next = { ...current, version: 1, routines }
+  const bytes = Buffer.from(`${JSON.stringify(next, null, 2)}\n`, 'utf8')
+  if (containsSensitiveText(bytes.toString('utf8'))) throw new Error('migration_source_contains_secret')
+  files.set(internal.targetPath, bytes)
+}
+
+function readRoutineTargetJson(targetPath: string): JsonObject {
+  if (targetFingerprint(targetPath) === 'missing') return { version: 1, routines: [] }
+  const parsed = JSON.parse(readSafeFile(targetPath, MAX_TARGET_FILE_BYTES).bytes.toString('utf8')) as unknown
+  if (Array.isArray(parsed)) return { version: 1, routines: parsed }
+  if (!isObject(parsed) || (parsed.routines !== undefined && !Array.isArray(parsed.routines))) {
+    throw new Error('migration_target_routine_invalid')
+  }
+  return parsed
+}
+
+function assertBackupMatchesSelection(
+  manifest: MigrationBackupManifest,
+  selected: Array<{ internal: InternalMigrationAsset; action: MigrationDecisionAction }>
+): void {
+  const expected = new Map<string, string>()
+  for (const { internal } of selected) {
+    if (internal.targetPath && internal.targetFingerprint !== undefined) {
+      expected.set(internal.targetPath, internal.targetFingerprint)
+    }
+  }
+  for (const target of manifest.targets) {
+    if (target.beforeFingerprint !== expected.get(target.targetPath)) throw new Error('migration_target_changed')
+  }
+}
+
+function assertAllTargetsStillMatchBackup(manifest: MigrationBackupManifest): void {
+  if (manifest.targets.some((target) => targetFingerprint(target.targetPath) !== target.beforeFingerprint)) {
+    throw new Error('migration_target_changed')
+  }
 }
 
 function addRuleChange(
@@ -412,12 +475,15 @@ function upsertRuleBlock(existing: string, asset: MigrationAsset, body: string, 
 function createBackup(
   targets: string[],
   backupRoot: string,
-  reason: MigrationBackupManifest['reason']
+  reason: MigrationBackupManifest['reason'],
+  requestedBackupId?: string
 ): MigrationBackupManifest {
   ensurePrivateDirectory(dirname(backupRoot))
   ensurePrivateDirectory(backupRoot)
-  const backupId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
+  const backupId = requestedBackupId ?? `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
+  if (!BACKUP_ID_PATTERN.test(backupId)) throw new Error('migration_backup_id_invalid')
   const backupDirectory = join(backupRoot, backupId)
+  if (existsSync(backupDirectory)) throw new Error('migration_backup_exists')
   ensurePrivateDirectory(backupDirectory)
   const records = [...new Set(targets)].map((targetPath, index) => backupTarget(backupDirectory, targetPath, index))
   const manifest: MigrationBackupManifest = {

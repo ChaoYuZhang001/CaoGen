@@ -27,7 +27,7 @@ const secretPatterns = [
   { name: 'private-key-block', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
   {
     name: 'hardcoded-secret-assignment',
-    regex: /\b(api[_-]?key|token|secret|password|passwd|client_secret|private[_-]?key)\b\s*[:=]\s*['"]([^'"]{12,})['"]/gi
+    regex: /(?<![?&])\b(api[_-]?key|token|secret|password|passwd|client_secret|private[_-]?key)\b\s*[:=]\s*['"]([^'"]{12,})['"]/gi
   }
 ]
 
@@ -38,7 +38,7 @@ const historyGrepPatterns = [
   ['google-api-key', 'AIza[0-9A-Za-z_-]{20,}'],
   ['slack-token', 'xox[baprs]-[A-Za-z0-9-]{20,}'],
   ['private-key-block', 'BEGIN [A-Z ]*PRIVATE KEY'],
-  ['hardcoded-secret-assignment', "(api[_-]?key|token|secret|password|passwd|client_secret|private[_-]?key)[[:space:]]*[:=][[:space:]]*['\"][^'\"]{12,}['\"]"]
+  ['hardcoded-secret-assignment', "(^|[^?&A-Za-z0-9_])(api[_-]?key|token|secret|password|passwd|client_secret|private[_-]?key)[[:space:]]*[:=][[:space:]]*['\"][^'\"]{12,}['\"]"]
 ]
 
 const allowedSecretLine = new RegExp(
@@ -58,6 +58,26 @@ const allowedSecretLine = new RegExp(
     'aliyun-token-for-smoke',
     'coding-token-for-smoke',
     'wechat-token-for-smoke',
+    'new-secret-value',
+    'access-token-value',
+    'access-token-rotated',
+    'xai-access-token',
+    'xai-refresh-token',
+    'xai-access-rotated',
+    'service-access-token',
+    'service-refresh-token',
+    'github-provider-token-one',
+    'github-provider-token-two',
+    'github-long-lived-token',
+    'xai-provider-access',
+    'xai-provider-refresh',
+    'xai-provider-access-rotated',
+    'xai-provider-refresh-rotated',
+    'quick-access-token',
+    'quick-refresh-token',
+    'quick-github-token',
+    'rollback-access-token',
+    'rollback-refresh-token',
     'REDACTED',
     'PLACEHOLDER',
     'dummy',

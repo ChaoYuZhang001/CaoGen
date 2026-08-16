@@ -88,6 +88,8 @@ export interface TaskPlanApprovalEvent {
   version: number
   digest: string
   actor: 'local-user' | 'system'
+  /** Stable host-assigned principal. Older records omit this field. */
+  actorId?: string
   reason?: string
   projection?: TaskPlanProjectionReceipt
   occurredAt: number
@@ -110,6 +112,17 @@ export interface TaskPlanApprovalInput {
   reason?: string
 }
 
+export interface TaskPlanGenerateInput {
+  objective: string
+}
+
+export interface TaskPlanDispatchResult {
+  executionId: string
+  status: 'waiting' | 'running' | 'success' | 'failed'
+  taskCount: number
+  reused: boolean
+}
+
 export interface TaskPlanExecutionAuthorization {
   required: boolean
   approved: boolean
@@ -121,7 +134,9 @@ export interface TaskPlanExecutionAuthorization {
 export interface TaskPlanApi {
   setTaskStrategy(sessionId: string, strategy: TaskStrategy): Promise<void>
   getTaskPlan(sessionId: string): Promise<TaskPlanStateView>
+  generateTaskPlan(sessionId: string, input: TaskPlanGenerateInput): Promise<TaskPlanStateView>
   createTaskPlanVersion(sessionId: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView>
   approveTaskPlan(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView>
+  dispatchApprovedTaskPlan(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanDispatchResult>
   revokeTaskPlanApproval(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView>
 }

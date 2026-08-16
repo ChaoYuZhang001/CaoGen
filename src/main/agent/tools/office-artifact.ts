@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, open, readFile, rm } from 'node:fs/promises'
-import { statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, extname, join } from 'node:path'
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx'
@@ -635,6 +635,8 @@ function requiredOfficeOutputIdentity(
 }
 
 function pdfFontPath(): string {
+  const packagedFont = join(process.resourcesPath ?? '', 'office-font', 'NotoSansSC-Regular.woff')
+  if (existsSync(packagedFont)) return packagedFont
   const nodeRequire = createRequire(__filename)
   const packageRoot = dirname(nodeRequire.resolve('@fontsource/noto-sans-sc/package.json'))
   return join(packageRoot, 'files', 'noto-sans-sc-chinese-simplified-400-normal.woff')

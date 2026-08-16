@@ -250,6 +250,11 @@ try {
     assert(linked.artifact.runId === runRecordId, 'Artifact Run ownership mismatch')
     assert(linked.workItem.runRefs.includes(runRecordId), 'Project WorkItem omitted canonical Run ref')
     assert(linked.workItem.artifactRefs.includes(ids.artifactId), 'Project WorkItem omitted Artifact ref')
+    await dismissRecoveryCenterIfOpen(page)
+    await page.waitForFunction(() => {
+      const refresh = document.querySelector('[data-studio-action="refresh"]')
+      return refresh instanceof HTMLButtonElement && !refresh.disabled
+    }, { timeout: 10_000 })
     await page.click('[data-studio-action="refresh"]')
     await waitForStudioRecords(page, linked.workItem.revision)
     await screenshot(page, '01-studio-canonical-records')
@@ -473,18 +478,47 @@ function assertSnapshotEqual(expected, actual, label) {
 }
 
 async function waitForStudioRecords(targetPage, workItemRevision) {
-  await targetPage.waitForFunction(({ projectId, goalId, workItemId, revision }) => {
-    const project = document.querySelector('[data-project-workspace-select]')
-    const goal = document.querySelector(`[data-goal-id="${goalId}"]`)
-    const workItem = document.querySelector(`[data-work-item-id="${workItemId}"]`)
-    return project?.value === projectId && Boolean(goal) && Boolean(workItem) &&
-      (revision === undefined || Number(workItem.getAttribute('data-work-item-revision')) === revision)
-  }, { timeout: 15_000 }, {
+  const expected = {
     projectId: ids.projectId,
     goalId: ids.goalId,
     workItemId: ids.workItemId,
     revision: workItemRevision
-  })
+  }
+  try {
+    await targetPage.waitForFunction(({ projectId, goalId, workItemId, revision }) => {
+      const project = document.querySelector('[data-project-workspace-select]')
+      const goal = document.querySelector(`[data-goal-id="${goalId}"]`)
+      const workItem = document.querySelector(`[data-work-item-id="${workItemId}"]`)
+      const root = document.querySelector('[data-project-workspace-studio]')
+      return root?.getAttribute('aria-busy') === 'false' && project?.value === projectId &&
+        Boolean(goal) && Boolean(workItem) &&
+        (revision === undefined || Number(workItem.getAttribute('data-work-item-revision')) === revision)
+    }, { timeout: 15_000 }, expected)
+  } catch (error) {
+    const actual = await targetPage.evaluate(({ goalId, workItemId }) => {
+      const root = document.querySelector('[data-project-workspace-studio]')
+      const project = document.querySelector('[data-project-workspace-select]')
+      const goal = document.querySelector(`[data-goal-id="${goalId}"]`)
+      const workItem = document.querySelector(`[data-work-item-id="${workItemId}"]`)
+      return {
+        projectId: project?.value ?? null,
+        goalPresent: Boolean(goal),
+        workItemPresent: Boolean(workItem),
+        workItemRevision: workItem?.getAttribute('data-work-item-revision') ?? null,
+        busy: root?.getAttribute('aria-busy') ?? null
+      }
+    }, expected)
+    throw new Error(`Studio records did not converge: expected=${JSON.stringify(expected)} actual=${JSON.stringify(actual)}`, {
+      cause: error
+    })
+  }
+}
+
+async function dismissRecoveryCenterIfOpen(targetPage) {
+  const close = await targetPage.$('.task-recovery-drawer-close')
+  if (!close) return
+  await close.click()
+  await targetPage.waitForSelector('.task-recovery-drawer', { hidden: true, timeout: 10_000 })
 }
 
 async function clickMode(targetPage, mode) {

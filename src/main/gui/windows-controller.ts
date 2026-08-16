@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 type WindowsBridgeAction = 'listWindows' | 'activateWindow' | 'click' | 'typeText' | 'scroll' | 'hotkey'
 type MouseButton = 'left' | 'right' | 'middle'
@@ -167,6 +168,7 @@ function runWindowsBridge<T extends WindowsBaseResult>(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', bridgePath, payload],
       {
+        env: buildMinimalSubprocessEnv(),
         timeout: WINDOWS_BRIDGE_TIMEOUT_MS,
         maxBuffer: WINDOWS_BRIDGE_MAX_BUFFER,
         windowsHide: true
@@ -389,7 +391,7 @@ foreach ($Process in Get-Process) {
     execFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-      { timeout: 8_000, maxBuffer: WINDOWS_BRIDGE_MAX_BUFFER, windowsHide: true },
+      { env: buildMinimalSubprocessEnv(), timeout: 8_000, maxBuffer: WINDOWS_BRIDGE_MAX_BUFFER, windowsHide: true },
       (err, stdout, stderr) => {
         const parsed = parseBridgeJson(stdout)
         const rawWindows = isRecord(parsed) && Array.isArray(parsed.windows) ? parsed.windows : []

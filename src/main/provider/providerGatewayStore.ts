@@ -195,20 +195,40 @@ function isUsageDocument(value: unknown): value is ProviderGatewayUsageDocument 
 function isUsageRecord(value: unknown): value is ProviderGatewayUsageRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return row.schemaVersion === 1
-    && typeof row.id === 'string'
-    && (row.requestId === undefined || typeof row.requestId === 'string')
-    && (row.ordinal === undefined || (Number.isSafeInteger(row.ordinal) && Number(row.ordinal) >= 0))
-    && (row.failoverFromAttemptId === undefined || typeof row.failoverFromAttemptId === 'string')
-    && (row.routeReason === undefined || typeof row.routeReason === 'string')
-    && typeof row.providerId === 'string'
-    && typeof row.model === 'string'
-    && (row.protocol === 'gateway.openai.chat-completions'
-      || row.protocol === 'gateway.openai.responses'
-      || row.protocol === 'gateway.anthropic.messages'
-      || row.protocol === 'gateway.google.generative-language')
-    && (row.status === 'succeeded' || row.status === 'failed' || row.status === 'cancelled')
-    && Number.isFinite(row.startedAt)
-    && Number.isFinite(row.completedAt)
-    && Number.isFinite(row.latencyMs)
+  return [
+    row.schemaVersion === 1,
+    typeof row.id === 'string',
+    optionalString(row.requestId),
+    optionalOrdinal(row.ordinal),
+    optionalString(row.failoverFromAttemptId),
+    optionalString(row.routeReason),
+    typeof row.providerId === 'string',
+    typeof row.model === 'string',
+    isGatewayProtocol(row.protocol),
+    isGatewayStatus(row.status),
+    Number.isFinite(row.startedAt),
+    Number.isFinite(row.completedAt),
+    Number.isFinite(row.latencyMs)
+  ].every(Boolean)
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function optionalOrdinal(value: unknown): boolean {
+  return value === undefined || (Number.isSafeInteger(value) && Number(value) >= 0)
+}
+
+function isGatewayProtocol(value: unknown): boolean {
+  return [
+    'gateway.openai.chat-completions',
+    'gateway.openai.responses',
+    'gateway.anthropic.messages',
+    'gateway.google.generative-language'
+  ].includes(String(value))
+}
+
+function isGatewayStatus(value: unknown): boolean {
+  return ['succeeded', 'failed', 'cancelled'].includes(String(value))
 }

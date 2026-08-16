@@ -87,12 +87,16 @@ async function runNotificationEffectGate() {
   const snapshotApi = await importCompiled('main/task/task-snapshot.js')
   const runtimeRegistry = await importCompiled('main/task/task-runtime-registry.js')
   const idempotencyApi = await importCompiled('main/task/tool-idempotency.js')
+  const workspaceApi = await importCompiled('main/project-workspace/index.js')
+  const workspaceCommands = await importCompiled('main/project-workspace/command-service.js')
 
   const connectors = createConnectorFixtures(connectorApi)
   verifyConnectorStore(connectorApi, connectors)
+  const projectFixture = await seedProject(workspaceApi, workspaceCommands)
 
   const cases = notificationCases(connectors)
   const run = await seedRun(snapshotApi, runtimeRegistry, idempotencyApi, cases)
+  await attachRunToWorkItem(projectFixture, run.id)
   runtimeRegistry.taskRuntimeRegistry.set(run.sessionId, run)
 
   const fetchHarness = installFetchHarness()
@@ -372,6 +376,9 @@ async function seedRun(snapshotApi, runtimeRegistry, idempotencyApi, cases) {
       id: run.sessionId,
       title: 'Notification Effect required gate',
       cwd: workspaceRoot,
+      projectId: 'project-notification-required',
+      workspaceId: 'project-notification-required',
+      workItemId: 'work-item-notification-required',
       childTaskId: run.taskId,
       model: 'synthetic-notification-model',
       providerId: 'synthetic-notification-provider',
@@ -395,6 +402,36 @@ async function seedRun(snapshotApi, runtimeRegistry, idempotencyApi, cases) {
   runtimeRegistry.taskRuntimeRegistry.set(run.sessionId, persistedRun)
   check('canonical TaskSnapshot and Run persist before notification Effect execution')
   return persistedRun
+}
+
+async function seedProject(workspaceApi, workspaceCommands) {
+  const store = new workspaceApi.ProjectWorkspaceStore(userData)
+  await store.open()
+  await store.createWorkspace({
+    id: 'project-notification-required',
+    name: 'Notification Effect Project',
+    kind: 'software',
+    resources: []
+  })
+  const commands = workspaceCommands.createProjectWorkspaceCommandService(store, { rootDir: userData })
+  await commands.reconcileShadowProjection()
+  const workItem = await commands.createWorkItem({
+    id: 'work-item-notification-required',
+    projectId: 'project-notification-required',
+    title: 'Deliver verified notification receipts',
+    type: 'delivery',
+    status: 'verifying'
+  })
+  return { store, commands, workItemId: workItem.id }
+}
+
+async function attachRunToWorkItem(fixture, runId) {
+  const current = await fixture.store.getWorkItem(fixture.workItemId)
+  if (!current) throw new Error(`Notification WorkItem disappeared:${fixture.workItemId}`)
+  if (current.runRefs.includes(runId)) return
+  await fixture.commands.updateWorkItem(current.id, {
+    runRefs: [...current.runRefs, runId]
+  }, { expectedRevision: current.revision })
 }
 
 function installFetchHarness() {

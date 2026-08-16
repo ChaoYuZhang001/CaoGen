@@ -5,6 +5,7 @@ import { link, lstat, mkdir, open, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import type { CommandTermination, SandboxMode } from '../../shared/types'
 import { resolveWritableProjectPath } from '../utils/safe-project-path'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 export interface LocalCommandOptions {
   command: string
@@ -506,8 +507,8 @@ export function buildChinaMirrorEnv(options: {
   return env
 }
 
-function mergeProcessEnv(env: Record<string, string>): NodeJS.ProcessEnv | undefined {
-  return Object.keys(env).length > 0 ? { ...process.env, ...env } : undefined
+function mergeProcessEnv(env: Record<string, string>): NodeJS.ProcessEnv {
+  return buildMinimalSubprocessEnv(env)
 }
 
 function execFilePromise(
@@ -662,7 +663,9 @@ function terminateProcessTree(child: ChildProcess): NodeJS.Timeout | undefined {
   const pid = child.pid
   if (!pid) return undefined
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/pid', String(pid), '/t', '/f'], () => undefined)
+    execFile('taskkill', ['/pid', String(pid), '/t', '/f'], {
+      env: buildMinimalSubprocessEnv()
+    }, () => undefined)
     return undefined
   }
   try {

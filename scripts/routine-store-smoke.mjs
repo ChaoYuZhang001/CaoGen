@@ -262,18 +262,37 @@ try {
   await assertRejects(() => routineStore.listRoutines(''), 'empty rootDir should fail validation')
 
   mkdirSync(badRoot, { recursive: true })
-  writeFileSync(path.join(badRoot, 'routines.json'), '{ bad json', 'utf8')
-  assertDeepEqual(await routineStore.listRoutines(badRoot), [], 'bad JSON should list as empty without throwing')
+  const badStorePath = path.join(badRoot, 'routines.json')
+  const corruptStoreBytes = '{ bad json'
+  writeFileSync(badStorePath, corruptStoreBytes, 'utf8')
+  const unreadableError = await assertRejects(
+    () => routineStore.listRoutines(badRoot),
+    'bad JSON should fail closed instead of appearing empty'
+  )
+  assertEqual(unreadableError.name, 'RoutineStoreValidationError')
+  assertEqual(
+    readFileSync(badStorePath, 'utf8'),
+    corruptStoreBytes,
+    'failed read should preserve corrupt store bytes for recovery'
+  )
 
-  const badCreated = await routineStore.createRoutine(badRoot, {
-    name: 'Recovered',
-    prompt: 'Recover after corrupt file.',
-    projectCwd: projectRoot,
-    schedule: '@daily'
-  })
-  assertEqual(badCreated.name, 'Recovered')
-  const recoveredRaw = readFileSync(path.join(badRoot, 'routines.json'), 'utf8')
-  assert(JSON.parse(recoveredRaw).routines.length === 1, 'createRoutine should overwrite corrupt JSON safely')
+  const createOnCorruptError = await assertRejects(
+    () =>
+      routineStore.createRoutine(badRoot, {
+        name: 'Must not overwrite',
+        prompt: 'Preserve the corrupt store.',
+        projectCwd: projectRoot,
+        schedule: '@daily'
+      }),
+    'createRoutine should reject an unreadable store'
+  )
+  assertEqual(createOnCorruptError.name, 'RoutineStoreValidationError')
+  assertEqual(
+    readFileSync(badStorePath, 'utf8'),
+    corruptStoreBytes,
+    'failed create should not overwrite corrupt store bytes'
+  )
+  assertNoTempFiles(badRoot)
 
   mkdirSync(legacyRoot, { recursive: true })
   writeFileSync(
@@ -366,13 +385,12 @@ function hasOwn(value, key) {
 }
 
 async function assertRejects(fn, message) {
-  let rejected = false
   try {
     await fn()
-  } catch {
-    rejected = true
+  } catch (error) {
+    return error
   }
-  assert(rejected, message)
+  throw new Error(message)
 }
 
 function assert(condition, message = 'assertion failed') {

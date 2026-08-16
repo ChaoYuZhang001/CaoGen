@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
 import { writeSync } from 'node:fs'
-import { runVerifiedDeliveryAction } from './verified-delivery-flow-actions.mjs'
+
+// Fresh workers are a JSON-line protocol. Keep incidental module/runtime logs
+// off stdout so a parent process can always parse the final response.
+for (const method of ['debug', 'info', 'log', 'warn', 'error']) {
+  console[method] = (...args) => process.stderr.write(`${args.map(String).join(' ')}\n`)
+}
 
 const rawPayload = process.argv[2]
 
 try {
   if (!rawPayload) throw new Error('worker payload is required')
   const payload = JSON.parse(Buffer.from(rawPayload, 'base64url').toString('utf8'))
+  const { runVerifiedDeliveryAction } = await import('./verified-delivery-flow-actions.mjs')
   const result = await runVerifiedDeliveryAction(payload)
   if (payload.crashAfterCommit === true) {
     writeSync(1, JSON.stringify({ ok: true, checkpoint: 'after_commit' }))

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
+const require = createRequire(path.join(repoRoot, 'package.json'))
+const electronBin = require('electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
 if (!existsSync(mainEntry)) throw new Error('Built Electron main entry not found. Run npm.cmd run build first.')
 
@@ -17,7 +20,7 @@ const screenshotPath = path.join(reportDir, 'provider-gateway-settings.png')
 
 try {
   mkdirSync(reportDir, { recursive: true })
-  execFileSync(path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe'), [
+  execFileSync(electronBin, [
     path.join(repoRoot, 'scripts', 'provider-gateway-runner.cjs')
   ], {
     cwd: repoRoot,
@@ -33,7 +36,7 @@ try {
   if (!report.ok || report.pass !== report.total || report.total < 20 || !/^[a-f0-9]{64}$/.test(report.tokenDigest)) {
     throw new Error(`provider gateway E2E incomplete: ${JSON.stringify({ pass: report.pass, total: report.total })}`)
   }
-  execFileSync(path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe'), [
+  execFileSync(electronBin, [
     path.join(repoRoot, 'scripts', 'provider-gateway-restart-runner.cjs')
   ], {
     cwd: repoRoot,

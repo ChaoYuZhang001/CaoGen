@@ -6,6 +6,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { seedUnknownEffectRecoverySnapshot } from './lib/assistant-studio-live-switch-fixture.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -21,15 +22,25 @@ const projectDir = path.join(tempRoot, 'project')
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
+const electronEntry = path.join(repoRoot, 'scripts', 'lib', 'assistant-studio-live-switch-electron-entry.cjs')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const firstDelta = 'live-switch-alpha '
 const finalDelta = 'live-switch-omega'
+const approvalPrompt = 'exp003 approval continuity'
+const approvalResult = 'EXP003 approval completed'
+const failurePrompt = 'exp003 failure continuity'
+const failureDelta = 'exp003 failure before switch '
+const failureMessage = 'EXP003 controlled terminal failure'
 const duplicateSendError = '上一轮仍在运行,请等待完成或中断后再发送。'
 const runningComposerDraft = 'keep this draft while the current task is running'
+const recoverySessionId = 'exp003-unknown-effect-session'
+const notificationReceiptPrefix = '[caogen] desktop notification requested:'
+const effectConfirmationReceiptPrefix = '[caogen-e2e] effect resolution dialog requested:'
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
+assert(existsSync(electronEntry), 'Assistant/Studio live-switch Electron entry is missing.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
   assert(existsSync(path.join(sourceOutDir, entry)), `Built app entry missing: out/${entry}. Run npm run build first.`)
 }
@@ -39,13 +50,14 @@ mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Assistant Studio live switch E2E\n', 'utf8')
+seedUnknownEffectRecoverySnapshot({ projectDir, recoverySessionId, userDataDir })
 
 const report = {
   schemaVersion: 1,
   runId,
   runDir,
   requirement: 'required',
-  requirementIds: ['EXP-003A'],
+  requirementIds: ['EXP-003'],
   packageVersion: packageJson.version,
   gitCommit: '',
   worktreeClean: false,
@@ -69,12 +81,14 @@ const report = {
       'duplicate sends remain nonfatal and cannot open a model-switch policy bypass',
       'running sessions reject model changes through the sessions:setModel IPC policy',
       'running model selector is disabled in Studio',
-      'stream deltas remain ordered and are applied exactly once'
+      'stream deltas remain ordered and are applied exactly once',
+      'unknown Effect recovery remains visible across Assistant/Studio switches and is manually resolvable',
+      'permission approval remains reachable across Assistant/Studio switches',
+      'desktop notification requests are dispatched while Studio is active',
+      'terminal failure remains visible with a reachable retry Composer across projection switches'
     ],
     explicitlyNotVerified: [
-      'cross-provider or cross-protocol hot switching',
-      'approval and notification continuity',
-      'failure and crash recovery continuity'
+      'cross-provider or cross-protocol hot switching'
     ]
   }
 }
@@ -91,11 +105,13 @@ copyBuiltApp()
 
 const mock = await startControlledResponsesMock()
 const remotePort = await findFreePort(9960)
-const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, electronEntry], {
   cwd: repoRoot,
   detached: process.platform !== 'win32',
   env: {
     ...process.env,
+    CAOGEN_E2E_EFFECT_RESOLUTION_TOKEN: 'assistant-studio-live-switch-v1',
+    CAOGEN_E2E_MAIN_ENTRY: mainEntry,
     CAOGEN_USER_DATA_DIR: userDataDir,
     CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
     OPENAI_API_KEY: '',
@@ -135,6 +151,52 @@ try {
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page, false)
+
+  await check('unknown Effect recovery survives projection switches and remains actionable', async () => {
+    await page.waitForSelector('.task-recovery-drawer', { visible: true, timeout: 15_000 })
+    const before = await waitForStableUnknownEffectSnapshot(page)
+    assert(before?.effect?.status === 'waiting_reconciliation', 'unknown Effect was not waiting for reconciliation')
+    assert(before.effect.reconcilability === 'opaque', 'unknown Effect fixture is not opaque')
+    await screenshot(page, '00-unknown-effect-recovery')
+    await page.click('.task-recovery-drawer-close')
+    await page.waitForSelector('.task-recovery-drawer', { hidden: true, timeout: 5_000 })
+
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'workspace')
+    await clickMode(page, 'assistant')
+    await openRecoveryCenter(page)
+    const after = await readUnknownEffectSnapshot(page)
+    assert(JSON.stringify(after) === JSON.stringify(before), 'unknown Effect identity changed during projection switches')
+
+    await clickRecoveryButton(page, '确认未执行')
+    const confirmation = await waitForValue(
+      () => structuredReceipts(stdout, effectConfirmationReceiptPrefix)[0],
+      Boolean,
+      10_000,
+      'waiting for the trusted unknown Effect confirmation dialog'
+    )
+    const resolved = await waitForValue(
+      () => readUnknownEffectSnapshot(page),
+      (snapshot) => snapshot?.effect?.status === 'abandoned',
+      10_000,
+      'waiting for manual unknown Effect resolution'
+    )
+    assert(resolved.effect.revision === before.effect.revision + 1, 'unknown Effect resolution did not advance revision')
+    await clickRecoveryButton(page, '删除')
+    await waitForValue(
+      () => readUnknownEffectSnapshot(page),
+      (snapshot) => snapshot === null,
+      10_000,
+      'waiting for resolved recovery snapshot deletion'
+    )
+    report.unknownEffectRecovery = {
+      effectId: before.effect.id,
+      initialRevision: before.effect.revision,
+      resolvedRevision: resolved.effect.revision,
+      resolution: 'confirmed_not_applied',
+      confirmation
+    }
+  })
 
   await check('seed one fixed runtime session without sending a request', async () => {
     const session = await page.evaluate(async ({ cwd, baseUrl }) => {
@@ -348,6 +410,132 @@ try {
     assert(draft === runningComposerDraft, `task completion cleared the unsent Composer draft: ${draft}`)
     await screenshot(page, '03-completed-assistant')
   })
+
+  await check('Studio-triggered approval and notification survive projection switches', async () => {
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'workspace')
+    const before = await readRuntimeSnapshot(page, sessionId)
+    const accepted = await page.evaluate(({ id, prompt }) => window.agentDesk.sendMessage(id, {
+      text: prompt,
+      messageId: 'exp003-approval-message'
+    }), { id: sessionId, prompt: approvalPrompt })
+    assert(accepted === true, 'approval turn was not accepted from Studio projection')
+    const pending = await waitForValue(
+      () => readRuntimeSnapshot(page, sessionId),
+      (snapshot) => snapshot.pendingPermissionIds.length === 1,
+      15_000,
+      'waiting for Studio-triggered permission request'
+    )
+    assert(pending.meta.status === 'running', `approval turn changed status to ${pending.meta.status}`)
+    const permissionId = pending.pendingPermissionIds[0]
+    const permissionNotification = await waitForNotificationReceipt(
+      () => stdout,
+      sessionId,
+      'CaoGen: 等待权限'
+    )
+
+    await openRecoveryCenter(page)
+    const attention = await page.$eval('.task-recovery-attention', (element) => element.textContent || '')
+    assert(attention.includes('待审批') && attention.includes('Live switch session'),
+      `Recovery Center lost the pending approval: ${attention}`)
+    await page.click('.task-recovery-drawer-close')
+
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await clickMode(page, 'assistant')
+      await page.waitForSelector('.permission-card', { visible: true, timeout: 10_000 })
+      const assistant = await readRuntimeSnapshot(page, sessionId)
+      assert(JSON.stringify(assistant.pendingPermissionIds) === JSON.stringify([permissionId]),
+        `approval identity changed in Assistant cycle ${cycle + 1}`)
+      await clickMode(page, 'studio')
+      await clickStudioSurface(page, cycle % 2 === 0 ? 'session' : 'workspace')
+      const studio = await readRuntimeSnapshot(page, sessionId)
+      assert(JSON.stringify(studio.pendingPermissionIds) === JSON.stringify([permissionId]),
+        `approval identity changed in Studio cycle ${cycle + 1}`)
+    }
+
+    await clickMode(page, 'assistant')
+    await clickPermissionAction(page, 'bash', 'allow')
+    const completed = await waitForValue(
+      () => readRuntimeSnapshot(page, sessionId),
+      (snapshot) => snapshot.meta.status === 'idle' &&
+        snapshot.pendingPermissionIds.length === 0 &&
+        snapshot.turnResultCount === before.turnResultCount + 1,
+      15_000,
+      'waiting for approved tool turn completion'
+    )
+    assert(completed.errorTurnResultCount === before.errorTurnResultCount, 'approved tool turn failed')
+    await page.waitForFunction((text) => document.body.innerText.includes(text), { timeout: 10_000 }, approvalResult)
+    report.approvalContinuity = {
+      permissionId,
+      projectionRoundtrips: 6,
+      notification: permissionNotification,
+      finalStatus: completed.meta.status
+    }
+    await screenshot(page, '04-approved-after-switches')
+  })
+
+  await check('terminal failure stays visible with retry state across projection switches', async () => {
+    await page.evaluate(() => window.agentDesk.updateSettings({ failoverEnabled: false }))
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'workspace')
+    const before = await readRuntimeSnapshot(page, sessionId)
+    const accepted = await page.evaluate(({ id, prompt }) => window.agentDesk.sendMessage(id, {
+      text: prompt,
+      messageId: 'exp003-failure-message'
+    }), { id: sessionId, prompt: failurePrompt })
+    assert(accepted === true, 'failure turn was not accepted from Studio projection')
+    await mock.failureStarted
+    const runningFailure = await waitForValue(
+      () => readRuntimeSnapshot(page, sessionId),
+      (snapshot) => snapshot.meta.status === 'running' && snapshot.deltaText.endsWith(failureDelta),
+      10_000,
+      'waiting for controlled partial failure stream'
+    )
+    await clickMode(page, 'assistant')
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'session')
+    assertRuntimeSnapshotStable(runningFailure, await readRuntimeSnapshot(page, sessionId), 'failure before terminal event')
+
+    mock.fail(failureMessage)
+    const failed = await waitForValue(
+      () => readRuntimeSnapshot(page, sessionId),
+      (snapshot) => snapshot.meta.status === 'error' &&
+        snapshot.errorTurnResultCount === before.errorTurnResultCount + 1,
+      15_000,
+      'waiting for terminal failure projection'
+    )
+    assert(failed.lastTurnResult?.isError === true, 'terminal failure did not retain an error turn result')
+    assert(failed.lastTurnResult?.resultText?.includes(failureMessage), 'terminal failure text was not retained')
+    const failureNotification = await waitForNotificationReceipt(
+      () => stdout,
+      sessionId,
+      'CaoGen: 任务失败'
+    )
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      await clickMode(page, 'assistant')
+      await page.waitForFunction((message) =>
+        Array.from(document.querySelectorAll('.notice-error')).some((element) => element.textContent?.includes(message)),
+      { timeout: 10_000 }, failureMessage)
+      const composer = await page.$eval('.composer-input', (input) => ({ disabled: input.disabled, placeholder: input.placeholder }))
+      assert(composer.disabled === false, `failure recovery Composer disabled in cycle ${cycle + 1}`)
+      await clickMode(page, 'studio')
+      await clickStudioSurface(page, cycle % 2 === 0 ? 'workspace' : 'session')
+      const current = await readRuntimeSnapshot(page, sessionId)
+      assertIdentityEqual(failed, current, `failure cycle ${cycle + 1}`)
+      assert(current.meta.status === 'error', `failure status changed in cycle ${cycle + 1}`)
+      assert(current.errorTurnResultCount === failed.errorTurnResultCount,
+        `failure result count changed in cycle ${cycle + 1}`)
+    }
+    await clickMode(page, 'assistant')
+    report.failureContinuity = {
+      projectionRoundtrips: 4,
+      notification: failureNotification,
+      status: failed.meta.status,
+      retryComposerEnabled: true
+    }
+    await screenshot(page, '05-failure-recovery-assistant')
+  })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   process.exitCode = 1
@@ -441,8 +629,10 @@ async function readRuntimeSnapshot(targetPage, id) {
   return targetPage.evaluate(async ({ sessionIdValue, duplicateSendErrorValue }) => {
     const sessions = await window.agentDesk.listSessions()
     const transcript = await window.agentDesk.getTranscript(sessionIdValue)
+    const pendingPermissions = await window.agentDesk.listPendingPermissions(sessionIdValue)
     const meta = sessions.find((item) => item.id === sessionIdValue)
     const events = transcript.map((entry) => entry.event)
+    const turnResults = events.filter((event) => event.kind === 'turn-result')
     const liveEntries = Array.isArray(window.__assistantStudioLiveSwitchEvents)
       ? window.__assistantStudioLiveSwitchEvents
       : []
@@ -472,8 +662,11 @@ async function readRuntimeSnapshot(targetPage, id) {
       duplicateSendRejectionCount: liveEvents.filter((event) =>
         event.kind === 'status' && event.status === 'running' && event.error === duplicateSendErrorValue
       ).length,
+      pendingPermissionIds: pendingPermissions.map((request) => request.requestId).sort(),
       userMessageCount: events.filter((event) => event.kind === 'user-message').length,
-      turnResultCount: events.filter((event) => event.kind === 'turn-result').length,
+      turnResultCount: turnResults.length,
+      errorTurnResultCount: turnResults.filter((event) => event.isError === true).length,
+      lastTurnResult: turnResults.length > 0 ? turnResults[turnResults.length - 1] : null,
       deltaText: deltaEntries.map((entry) => entry.event.text).join(''),
       deltaParts: deltaEntries.map((entry) => entry.event.text),
       deltaSeqs: deltaEntries.map((entry) => entry.seq),
@@ -531,35 +724,172 @@ async function waitForApp(targetPage, expectSession) {
   })
 }
 
+async function openRecoveryCenter(targetPage) {
+  const visible = await targetPage.$('.task-recovery-drawer')
+  if (visible && await visible.isIntersectingViewport()) return
+  await targetPage.waitForSelector('[data-sidebar-action="recovery-center"]', { visible: true, timeout: 10_000 })
+  await targetPage.click('[data-sidebar-action="recovery-center"]')
+  await targetPage.waitForSelector('.task-recovery-drawer', { visible: true, timeout: 10_000 })
+}
+
+async function clickRecoveryButton(targetPage, label) {
+  await waitForValue(
+    () => targetPage.evaluate((text) => {
+      const button = Array.from(document.querySelectorAll('.task-recovery-drawer button'))
+        .find((candidate) => candidate.textContent?.trim() === text)
+      return { present: Boolean(button), disabled: button?.disabled ?? true }
+    }, label),
+    (state) => state.present && !state.disabled,
+    10_000,
+    `waiting for enabled Recovery Center action: ${label}`
+  )
+  const clicked = await targetPage.evaluate((text) => {
+    const button = Array.from(document.querySelectorAll('.task-recovery-drawer button'))
+      .find((candidate) => candidate.textContent?.trim() === text)
+    if (!button || button.disabled) return false
+    button.click()
+    return true
+  }, label)
+  assert(clicked, `Recovery Center action is not reachable: ${label}`)
+}
+
+async function readUnknownEffectSnapshot(targetPage) {
+  return targetPage.evaluate(async (id) => {
+    const snapshot = (await window.agentDesk.listTaskSnapshots()).find((candidate) => candidate.id === id)
+    if (!snapshot) return null
+    const effect = snapshot.run?.effects?.[0]
+    return {
+      id: snapshot.id,
+      runId: snapshot.run?.id,
+      runStatus: snapshot.run?.status,
+      effect: effect ? {
+        id: effect.id,
+        reconcilability: effect.reconcilability,
+        revision: effect.revision,
+        status: effect.status,
+        target: effect.target
+      } : null
+    }
+  }, recoverySessionId)
+}
+
+async function waitForStableUnknownEffectSnapshot(targetPage) {
+  let previous = ''
+  let stableSamples = 0
+  const result = await waitForValue(async () => {
+    const snapshot = await readUnknownEffectSnapshot(targetPage)
+    const fingerprint = JSON.stringify(snapshot)
+    stableSamples = snapshot?.effect?.revision >= 4 && fingerprint === previous
+      ? stableSamples + 1
+      : 0
+    previous = fingerprint
+    return { snapshot, stableSamples }
+  }, (value) => value.stableSamples >= 2, 10_000, 'waiting for startup Effect reconciliation to settle')
+  return result.snapshot
+}
+
+async function clickPermissionAction(targetPage, toolName, action) {
+  const clicked = await targetPage.evaluate(({ expectedTool, expectedAction }) => {
+    const card = Array.from(document.querySelectorAll('.permission-card'))
+      .find((candidate) => candidate.textContent?.includes(expectedTool))
+    if (!card) return false
+    const buttons = Array.from(card.querySelectorAll('button'))
+    const button = expectedAction === 'allow'
+      ? buttons.find((candidate) => candidate.classList.contains('btn-primary'))
+      : buttons[buttons.length - 1]
+    if (!button || button.disabled) return false
+    button.click()
+    return true
+  }, { expectedTool: toolName, expectedAction: action })
+  assert(clicked, `permission ${action} action is not reachable for ${toolName}`)
+}
+
+async function waitForNotificationReceipt(readOutput, expectedSessionId, expectedTitle) {
+  return waitForValue(
+    () => notificationReceipts(readOutput()).find((receipt) =>
+      receipt.sessionId === expectedSessionId && receipt.title === expectedTitle
+    ),
+    Boolean,
+    10_000,
+    `waiting for desktop notification ${expectedTitle}`
+  )
+}
+
+function notificationReceipts(output) {
+  return structuredReceipts(output, notificationReceiptPrefix)
+}
+
+function structuredReceipts(output, prefix) {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const offset = line.indexOf(prefix)
+    if (offset < 0) return []
+    try {
+      return [JSON.parse(line.slice(offset + prefix.length).trim())]
+    } catch {
+      return []
+    }
+  })
+}
+
 async function startControlledResponsesMock() {
   const requests = []
   let activeResponse
+  let activeKind
   let startedResolve
+  let failureStartedResolve
   const started = new Promise((resolve) => { startedResolve = resolve })
+  const failureStarted = new Promise((resolve) => { failureStartedResolve = resolve })
   const server = http.createServer(async (request, response) => {
     if (request.url !== '/v1/responses' || request.method !== 'POST') {
       response.writeHead(404).end('not found')
       return
     }
     const body = await readJson(request)
+    const rawBody = JSON.stringify(body)
+    const kind = rawBody.includes('call_exp003_approval')
+      ? 'approval-output'
+      : rawBody.includes(approvalPrompt)
+        ? 'approval-call'
+        : rawBody.includes(failurePrompt)
+          ? 'terminal-failure'
+          : 'live-stream'
     requests.push({
       url: request.url,
       method: request.method,
       authorization: request.headers.authorization || '',
-      body
+      body,
+      kind
     })
+    if (kind === 'approval-call') {
+      writeFunctionCallResponse(response, {
+        responseId: 'resp_exp003_approval_call',
+        callId: 'call_exp003_approval',
+        command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("process.stdout.write('approved')")}`
+      })
+      return
+    }
+    if (kind === 'approval-output') {
+      writeTextResponse(response, approvalResult, 'resp_exp003_approval_result')
+      return
+    }
     if (activeResponse) {
       response.writeHead(409).end('only one live request is expected')
       return
     }
     activeResponse = response
+    activeKind = kind
     response.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
       connection: 'keep-alive'
     })
-    writeSse(response, { type: 'response.output_text.delta', delta: firstDelta })
-    startedResolve()
+    if (kind === 'terminal-failure') {
+      writeSse(response, { type: 'response.output_text.delta', delta: failureDelta })
+      failureStartedResolve()
+    } else {
+      writeSse(response, { type: 'response.output_text.delta', delta: firstDelta })
+      startedResolve()
+    }
   })
   const port = await findFreePort(9060)
   await new Promise((resolve, reject) => {
@@ -570,13 +900,14 @@ async function startControlledResponsesMock() {
     server,
     requests,
     started,
+    failureStarted,
     baseUrl: `http://127.0.0.1:${port}`,
     pushDelta(text) {
-      assert(activeResponse, 'live response is not active')
+      assert(activeResponse && activeKind === 'live-stream', 'live response is not active')
       writeSse(activeResponse, { type: 'response.output_text.delta', delta: text })
     },
     finish() {
-      assert(activeResponse, 'live response is not active')
+      assert(activeResponse && activeKind === 'live-stream', 'live response is not active')
       writeSse(activeResponse, {
         type: 'response.completed',
         response: {
@@ -587,12 +918,59 @@ async function startControlledResponsesMock() {
       })
       activeResponse.end('data: [DONE]\n\n')
       activeResponse = undefined
+      activeKind = undefined
+    },
+    fail(message) {
+      assert(activeResponse && activeKind === 'terminal-failure', 'failure response is not active')
+      writeSse(activeResponse, {
+        type: 'response.failed',
+        response: { error: { message } }
+      })
+      activeResponse.end('data: [DONE]\n\n')
+      activeResponse = undefined
+      activeKind = undefined
     },
     abort() {
       activeResponse?.destroy()
       activeResponse = undefined
+      activeKind = undefined
     }
   }
+}
+
+function writeFunctionCallResponse(response, { responseId, callId, command }) {
+  const item = {
+    type: 'function_call',
+    call_id: callId,
+    name: 'bash',
+    arguments: JSON.stringify({ command })
+  }
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  writeSse(response, { type: 'response.output_item.added', output_index: 0, item })
+  writeSse(response, { type: 'response.output_item.done', output_index: 0, item })
+  writeSse(response, {
+    type: 'response.completed',
+    response: { id: responseId, usage: { input_tokens: 12, output_tokens: 4 } }
+  })
+  response.end('data: [DONE]\n\n')
+}
+
+function writeTextResponse(response, text, responseId) {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  writeSse(response, { type: 'response.output_text.delta', delta: text })
+  writeSse(response, {
+    type: 'response.completed',
+    response: { id: responseId, output_text: text, usage: { input_tokens: 9, output_tokens: 5 } }
+  })
+  response.end('data: [DONE]\n\n')
 }
 
 function writeSse(response, event) {

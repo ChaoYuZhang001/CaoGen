@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { parseRequirements } from './lib/product-acceptance-map.mjs'
+import ts from 'typescript'
+import {
+  derivePublicStatus,
+  publicStatusParagraph
+} from './lib/public-status-projection.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required') || process.env.CAOGEN_PRODUCT_POSITIONING_REQUIRED === '1'
@@ -20,19 +24,20 @@ const publicFiles = [
   'src/renderer/src/components/WelcomeView.tsx'
 ]
 
-const i18nPublicKeys = [
-  'welcomeSub',
-  'welcomeAsk',
-  'welcomeInputPlaceholder',
-  'welcomeToolRequiresSession',
-  'welcomePickProject',
-  'deskToolDrawer',
-  'deskReview',
-  'deskTerminal',
-  'deskBrowser',
-  'deskFiles',
-  'deskSideChat'
-]
+const i18nPublicKeySources = {
+  welcomeSub: 'src/renderer/src/i18n.ts',
+  welcomeAsk: 'src/renderer/src/i18n.ts',
+  welcomeInputPlaceholder: 'src/renderer/src/i18n.ts',
+  welcomeToolRequiresSession: 'src/renderer/src/i18n.ts',
+  welcomePickProject: 'src/renderer/src/i18n.ts',
+  deskToolDrawer: 'src/renderer/src/i18n/chatTranslations.ts',
+  deskReview: 'src/renderer/src/i18n/chatTranslations.ts',
+  deskTerminal: 'src/renderer/src/i18n/chatTranslations.ts',
+  deskBrowser: 'src/renderer/src/i18n/chatTranslations.ts',
+  deskFiles: 'src/renderer/src/i18n/chatTranslations.ts',
+  deskSideChat: 'src/renderer/src/i18n/chatTranslations.ts'
+}
+const i18nPublicKeys = Object.keys(i18nPublicKeySources)
 
 const previouslyForcedVersion = ['0', '2', '0'].join('.')
 const escapedPreviouslyForcedVersion = escapeRegExp(previouslyForcedVersion)
@@ -89,6 +94,7 @@ const report = {
   reportDir,
   scannedFiles,
   i18nPublicKeys,
+  i18nPublicKeySources,
   policy: {
     version: 'Public positioning must not force a fixed future version target; release version is chosen by the owner.',
     externalProducts: 'Public product copy must describe CaoGen-owned capabilities without external product names or comparison framing.',
@@ -110,16 +116,30 @@ if (required && report.status !== 'passed') process.exitCode = 1
 if (!required && report.status !== 'passed') process.exitCode = 1
 
 function scanWelcomeI18n() {
-  const relativePath = 'src/renderer/src/i18n.ts'
-  const absolutePath = path.join(repoRoot, relativePath)
-  if (!existsSync(absolutePath)) {
-    failures.push(`i18n file is missing: ${relativePath}`)
-    return
-  }
-  const source = readFileSync(absolutePath, 'utf8')
-  scannedFiles.push(`${relativePath}#welcome`)
-  for (const key of i18nPublicKeys) {
-    const snippet = extractI18nEntry(source, key)
+  const sourceCache = new Map()
+  for (const [key, relativePath] of Object.entries(i18nPublicKeySources)) {
+    let entry = sourceCache.get(relativePath)
+    if (entry === undefined) {
+      const absolutePath = path.join(repoRoot, relativePath)
+      if (!existsSync(absolutePath)) {
+        failures.push(`i18n file is missing: ${relativePath}`)
+        sourceCache.set(relativePath, null)
+        continue
+      }
+      const source = readFileSync(absolutePath, 'utf8')
+      const sourceFile = ts.createSourceFile(
+        relativePath,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.TS
+      )
+      entry = { source, sourceFile }
+      sourceCache.set(relativePath, entry)
+      scannedFiles.push(`${relativePath}#public-positioning`)
+    }
+    if (!entry) continue
+    const snippet = extractI18nEntry(entry.sourceFile, entry.source, key)
     if (!snippet) {
       failures.push(`missing public welcome i18n key: ${key}`)
       continue
@@ -140,30 +160,32 @@ function validateCorePositioning() {
 
 function validateFormalStatusConsistency() {
   const prdPath = path.join(repoRoot, 'docs', 'PRODUCT-REQUIREMENTS.md')
-  if (!existsSync(prdPath)) {
-    failures.push('cannot derive public status: docs/PRODUCT-REQUIREMENTS.md is missing')
+  const statusPath = path.join(repoRoot, 'STATUS.md')
+  const publicStatusPath = path.join(repoRoot, 'docs', 'public-status.json')
+  if (!existsSync(prdPath) || !existsSync(statusPath) || !existsSync(publicStatusPath)) {
+    failures.push('cannot derive public status: PRD, STATUS.md, or docs/public-status.json is missing')
     return null
   }
 
-  const p0 = parseRequirements(readFileSync(prdPath, 'utf8'))
-    .filter((requirement) => requirement.priority === 'P0')
-  const snapshot = {
-    total: p0.length,
-    verified: p0.filter((requirement) => requirement.status === '当前已验证').length,
-    partial: p0.filter((requirement) => requirement.status.startsWith('部分完成')).length,
-    targets: p0.filter((requirement) => requirement.status === '立项目标').length,
-    foundation: p0.filter((requirement) => requirement.status === '当前已验证（基础）').length
-  }
-  const classified = snapshot.verified + snapshot.partial + snapshot.targets + snapshot.foundation
-  if (classified !== snapshot.total) {
-    failures.push(`public status classifier covers ${classified}/${snapshot.total} P0 requirements`)
+  let snapshot
+  let recorded
+  try {
+    snapshot = derivePublicStatus({
+      productRequirements: readFileSync(prdPath, 'utf8'),
+      statusDocument: readFileSync(statusPath, 'utf8')
+    })
+    recorded = JSON.parse(readFileSync(publicStatusPath, 'utf8'))
+  } catch (error) {
+    failures.push(`cannot derive public status: ${error.message}`)
+    return null
   }
 
-  const chineseSnapshot = `PRD ${snapshot.total} 个 P0 = ${snapshot.verified} 个已验证 + ${snapshot.partial} 个部分完成 + ${snapshot.targets} 个立项目标 + ${snapshot.foundation} 个仅达到基础`
-  const englishSnapshot = `PRD has ${snapshot.total} P0s: ${snapshot.verified} verified, ${snapshot.partial} partially complete, ${snapshot.targets} project targets, and ${snapshot.foundation} foundation only`
-  requireText('README.md', chineseSnapshot, 'README must match the PRD-derived four-state P0 snapshot')
-  requireText('STATUS.md', chineseSnapshot, 'STATUS must match the PRD-derived four-state P0 snapshot')
-  requireText('README.en.md', englishSnapshot, 'English README must match the PRD-derived four-state P0 snapshot')
+  if (JSON.stringify(recorded) !== JSON.stringify(snapshot)) {
+    failures.push('docs/public-status.json is stale; run npm run update:public-status')
+  }
+
+  requireText('README.md', publicStatusParagraph(snapshot, 'zh-CN'), 'README must match docs/public-status.json')
+  requireText('README.en.md', publicStatusParagraph(snapshot, 'en'), 'English README must match docs/public-status.json')
   return snapshot
 }
 
@@ -239,11 +261,22 @@ function rejectBrandPlaceholder(relativePath, text) {
   if (placeholderPattern.test(text)) failures.push(`${relativePath}: old diamond brand placeholder must not return`)
 }
 
-function extractI18nEntry(source, key) {
-  const pattern = new RegExp(`\\n\\s*${escapeRegExp(key)}:\\s*\\{[^\\n]*\\}`, 'm')
-  const match = source.match(pattern)
-  if (match) return match[0]
-  warnings.push(`i18n key ${key} is not a single-line entry; public positioning audit did not scan it`)
+function extractI18nEntry(sourceFile, source, key) {
+  let snippet = ''
+  const visit = (node) => {
+    if (snippet) return
+    if (ts.isPropertyAssignment(node) && propertyName(node.name) === key) {
+      snippet = source.slice(node.getStart(sourceFile), node.getEnd())
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return snippet
+}
+
+function propertyName(node) {
+  if (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) return node.text
   return ''
 }
 

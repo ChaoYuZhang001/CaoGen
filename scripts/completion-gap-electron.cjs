@@ -136,7 +136,7 @@ async function phaseWrite() {
       'session sdkSessionId not initialized'
     )
     await invoke('files:write', meta.id, 'marker.txt', marker)
-    const readBack = await invoke('files:read', meta.id, 'marker.txt')
+    const readBack = await invoke('files:intelligence', 'read', meta.id, 'marker.txt')
     check('CG-WF-010B file IPC works before restart', readBack.ok && readBack.content.includes(marker))
     await invoke('sessions:send', meta.id, { text: marker })
     await waitFor(
@@ -174,7 +174,7 @@ async function phaseRestore() {
   check('CG-WF-010A restored transcript contains marker', JSON.stringify(transcript).includes(marker))
   check('CG-WF-010A restored history contains marker', sessionsJsonText().includes(marker))
 
-  const readBack = await invoke('files:read', state.sessionId, 'marker.txt')
+  const readBack = await invoke('files:intelligence', 'read', state.sessionId, 'marker.txt')
   check('CG-WF-010B file IPC reads after restart', readBack.ok && readBack.content.includes(marker))
   const writeBack = await invoke('files:write', state.sessionId, 'restored.txt', 'after restart')
   check('CG-WF-010B file IPC writes after restart', writeBack.ok && fs.existsSync(path.join(projectDir, 'restored.txt')))

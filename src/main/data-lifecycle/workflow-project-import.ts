@@ -8,6 +8,10 @@ import type {
   WorkflowEvidenceRecord
 } from '../../shared/workflow-types'
 import { buildProjectWorkspaceProjection, parentFirst } from '../project-workspace/ledger-migration-source'
+import {
+  buildProjectWorkspaceImportAuthorityEvent,
+  isLocalProjectWorkspaceAuthorityEvent
+} from '../project-workspace/ledger-import-authority'
 import { mutateTaskSnapshotDatabase, readTaskSnapshotDatabase, type TaskSnapshotDatabase } from '../task/task-snapshot'
 import { setupTaskSnapshotSchema } from '../task/task-snapshot-schema'
 import {
@@ -161,6 +165,18 @@ function importIntoDatabase(
       sessionId: event.sessionId
     })
   }
+  const importAuthority = buildProjectWorkspaceImportAuthorityEvent({
+    projectId: aggregate.projectId,
+    aggregateDigest: aggregate.aggregateDigest,
+    workspaceRevision: aggregate.workspace.revision,
+    occurredAt: aggregate.workspace.updatedAt,
+    workItems: projection.workItems.map((item) => ({
+      id: item.record.id,
+      revision: item.record.revision,
+      digest: item.descriptor.ledgerDigest
+    }))
+  })
+  appendWorkflowEvent(db, importAuthority.event, importAuthority.scope)
 
   verifyWorkflowLedger(db)
   verifyTaskEvidence(db)
@@ -181,9 +197,12 @@ async function workflowProjectImportAlreadyApplied(
   rootDir: string
 ): Promise<boolean> {
   const target = await exportPersistedWorkflowLedger({ scope: { projectId: aggregate.projectId } }, rootDir)
+  const targetEvents = target.ledger.events.items.filter((event) =>
+    !isLocalProjectWorkspaceAuthorityEvent(event)
+  )
   const targetCount = target.ledger.goals.total + target.ledger.workItems.total + target.ledger.runs.total +
     target.ledger.artifacts.total + target.ledger.acceptances.total + target.ledger.evidenceLinks.total +
-    target.ledger.events.total + target.ledger.artifactEdges.total + target.ledger.artifactLocations.total +
+    targetEvents.length + target.ledger.artifactEdges.total + target.ledger.artifactLocations.total +
     target.ledger.taskEvidence.total + target.ledger.workflowEvidence.total
   if (targetCount === 0) return false
   const projection = buildProjectWorkspaceProjection({
@@ -218,7 +237,7 @@ async function workflowProjectImportAlreadyApplied(
     artifactLocations: target.ledger.artifactLocations.items.slice().sort(byId),
     taskEvidence: target.ledger.taskEvidence.items.map(stripChain).sort(byEvidenceId),
     workflowEvidence: target.ledger.workflowEvidence.items.map(stripChain).sort(byEvidenceId),
-    events: target.ledger.events.items.map(normalizeEventChain).sort(byEventId)
+    events: targetEvents.map(normalizeEventChain).sort(byEventId)
   }
   if (projectAggregateCanonicalJson(expected) === projectAggregateCanonicalJson(actual)) return true
   throw new Error(`Project import Workflow identity conflict: ${aggregate.projectId}`)
@@ -321,6 +340,7 @@ function workflowEventsFromAudit(audit: readonly ProjectAggregateAuditRecord[]):
   return audit
     .filter((entry) => entry.source === 'workflow_ledger')
     .map((entry) => requireWorkflowEvent(entry.value))
+    .filter((event) => !isLocalProjectWorkspaceAuthorityEvent(event))
     .sort((left, right) => left.seq - right.seq)
 }
 

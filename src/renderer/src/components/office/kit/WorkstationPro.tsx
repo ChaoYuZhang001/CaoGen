@@ -20,6 +20,7 @@ import {
 } from '../../../../../shared/watercolor-character'
 import WatercolorCharacterRig from './WatercolorCharacterRig'
 import type { Group, MeshStandardMaterial } from 'three'
+import type { OfficeHairStyle, OfficeOutfitPalette } from '../../../../../shared/types'
 
 export type WorkstationActivity = OfficeSessionActivity
 export type WorkstationDetail = 'full' | 'compact'
@@ -41,6 +42,8 @@ export interface WorkstationProProps {
   liveliness?: number
   watercolorRole?: WatercolorCharacterRole
   watercolorState?: WatercolorCharacterState
+  outfitPalette?: OfficeOutfitPalette
+  hairStyle?: OfficeHairStyle
   operatorAway?: boolean
   currentTask?: OfficeTask
   taskStats?: OfficeTaskStats
@@ -690,6 +693,8 @@ export default function WorkstationPro({
   liveliness = 1,
   watercolorRole,
   watercolorState,
+  outfitPalette = 'role-default',
+  hairStyle = 'role-default',
   operatorAway = false,
   currentTask,
   taskStats,
@@ -769,6 +774,8 @@ export default function WorkstationPro({
             compact
             scale={0.9}
             liveliness={liveliness}
+            outfitPalette={outfitPalette}
+            hairStyle={hairStyle}
           />
         )}
 
@@ -919,6 +926,8 @@ export default function WorkstationPro({
             role={watercolorOperator.role}
             state={watercolorOperator.state}
             liveliness={liveliness}
+            outfitPalette={outfitPalette}
+            hairStyle={hairStyle}
           />
           <OperatorContactLinks accent={stationAccent} activity={activity} />
           <OperatorFocusLinks accent={stationAccent} activity={activity} />

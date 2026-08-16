@@ -10,6 +10,7 @@ import {
   type WorkflowLedgerDatabase
 } from './workflow-ledger-store'
 import { readAndVerifyEvents } from './workflow-ledger-query'
+import { projectWorkspaceAuthorityOwnsWorkItem } from '../project-workspace/ledger-import-authority'
 
 export function workflowContextForSnapshot(snapshot: TaskSnapshotRecord): WorkflowProjectionContext {
   const meta = snapshot.meta
@@ -144,14 +145,9 @@ function canonicalProjectWorkspaceOwnsWorkItem(
   workItemId: string | undefined
 ): boolean {
   if (!projectId || !workItemId) return false
-  return readAndVerifyEvents(db).some((event) => {
-    if (event.kind !== 'workflow.project-workspace.migrated' || event.entityId !== projectId) return false
-    const workItems = event.payload.workItems
-    return Array.isArray(workItems) && workItems.some((item) =>
-      Boolean(item && typeof item === 'object' && !Array.isArray(item) &&
-        (item as Record<string, unknown>).id === workItemId)
-    )
-  })
+  return readAndVerifyEvents(db).some((event) =>
+    projectWorkspaceAuthorityOwnsWorkItem(event, projectId, workItemId)
+  )
 }
 
 interface ProjectClaim {

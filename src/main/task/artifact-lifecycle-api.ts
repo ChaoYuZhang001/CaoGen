@@ -7,6 +7,7 @@ import { resolveProjectWorkspaceRoot } from '../project-workspace/persistence'
 import {
   artifactBlobPath,
   assertRegularContent,
+  isArtifactSourceProjectPath,
   materializeArtifactBlob,
   pathExists,
   prepareArtifactContent
@@ -19,21 +20,26 @@ import {
 } from './artifact-lifecycle-ownership'
 import {
   findArtifactLifecycle,
+  appendArtifactRetentionRevision,
   planArtifactPurge,
   readArtifactLifecycles,
   recordArtifactPurge,
   registerArtifactLifecycle
 } from './artifact-lifecycle-store'
 import type {
+  ArtifactLifecycleRecord,
   ArtifactLifecyclePurgeInput,
   ArtifactLifecyclePurgeResult,
   ArtifactLifecycleRegistrationInput,
   ArtifactLifecycleRegistrationResult,
   ArtifactLifecycleRootInput,
   ArtifactLifecycleVerification,
+  ArtifactRetentionRevisionInput,
+  ArtifactRetentionRevisionRecord,
   ArtifactProjectOwnership,
   PreparedArtifactContent
 } from './artifact-lifecycle-types'
+import type { WorkflowLedgerDatabase } from './workflow-ledger-db'
 import { verifyArtifactLifecycle } from './artifact-lifecycle-verification'
 import {
   mutateTaskSnapshotDatabase,
@@ -47,6 +53,26 @@ export async function registerPersistedArtifactLifecycle(
   input: ArtifactLifecycleRegistrationInput,
   rootInput?: ArtifactLifecycleRootInput
 ): Promise<ArtifactLifecycleRegistrationResult> {
+  return registerPersistedArtifactLifecycleAtomically(
+    input,
+    (_db, registered) => registered,
+    rootInput
+  )
+}
+
+/**
+ * Persist an Artifact lifecycle and its dependent Workflow records in one
+ * snapshot-database commit. Blob materialization is rolled back when any
+ * dependent projection fails before the database is published.
+ */
+export async function registerPersistedArtifactLifecycleAtomically<T>(
+  input: ArtifactLifecycleRegistrationInput,
+  transaction: (
+    db: WorkflowLedgerDatabase,
+    registered: ArtifactLifecycleRegistrationResult
+  ) => T | Promise<T>,
+  rootInput?: ArtifactLifecycleRootInput
+): Promise<T> {
   const roots = resolveLifecycleRoots(rootInput)
   const ownership = await loadRegistrationOwnership(input, roots)
   const content = await prepareArtifactContent(input.content, roots.workflowRoot)
@@ -54,7 +80,8 @@ export async function registerPersistedArtifactLifecycle(
   try {
     return await mutateTaskSnapshotDatabase(roots.workflowRoot, async (db) => {
       createdBlob = await materializeArtifactBlob(content)
-      return registerArtifactLifecycle(db, input, content, ownership)
+      const registered = registerArtifactLifecycle(db, input, content, ownership)
+      return transaction(db, registered)
     })
   } catch (error) {
     if (createdBlob) await removeOrphanedBlob(roots.workflowRoot, content)
@@ -78,6 +105,12 @@ export async function purgePersistedArtifactContent(
         const temporary = `${source}.purge.${process.pid}.${randomUUID()}`
         await rename(source, temporary)
         quarantine = { source, temporary }
+      } else if (plan.lifecycle.storageKind === 'source_ref' && plan.lifecycle.sourceRef &&
+          isArtifactSourceProjectPath(roots.workflowRoot, plan.lifecycle.projectId, plan.lifecycle.sourceRef)) {
+        await assertRegularContent(plan.lifecycle.sourceRef, plan.lifecycle.digest, plan.lifecycle.sizeBytes)
+        const temporary = `${plan.lifecycle.sourceRef}.purge.${process.pid}.${randomUUID()}`
+        await rename(plan.lifecycle.sourceRef, temporary)
+        quarantine = { source: plan.lifecycle.sourceRef, temporary }
       }
       return recordArtifactPurge(db, input, plan)
     })
@@ -87,6 +120,15 @@ export async function purgePersistedArtifactContent(
     await restoreQuarantine(quarantine)
     throw error
   }
+}
+
+export async function revisePersistedArtifactRetention(
+  input: ArtifactRetentionRevisionInput,
+  rootInput?: ArtifactLifecycleRootInput
+): Promise<ArtifactRetentionRevisionRecord> {
+  const roots = resolveLifecycleRoots(rootInput)
+  await assertPurgeProjectOwnership(input, roots)
+  return mutateTaskSnapshotDatabase(roots.workflowRoot, (db) => appendArtifactRetentionRevision(db, input))
 }
 
 export async function verifyPersistedArtifactLifecycle(
@@ -119,6 +161,28 @@ export async function getPersistedArtifactLifecycle(
 ) {
   const roots = resolveLifecycleRoots(rootInput)
   return readTaskSnapshotDatabase(roots.workflowRoot, (db) => findArtifactLifecycle(db, artifactId))
+}
+
+export async function getLatestPersistedArtifactLifecycleByLineage(
+  input: {
+    projectId: string
+    workItemId?: string
+    lineageId: string
+    kind: WorkflowArtifactKind
+  },
+  rootInput?: ArtifactLifecycleRootInput
+): Promise<ArtifactLifecycleRecord | null> {
+  const roots = resolveLifecycleRoots(rootInput)
+  return readTaskSnapshotDatabase(roots.workflowRoot, (db) => {
+    const matches = readArtifactLifecycles(db).filter((record) =>
+      record.projectId === input.projectId &&
+      (input.workItemId === undefined || record.workItemId === input.workItemId) &&
+      record.lineageId === input.lineageId &&
+      record.kind === input.kind
+    )
+    return matches.sort((left, right) => right.version - left.version ||
+      right.createdAt - left.createdAt || right.artifactId.localeCompare(left.artifactId))[0] ?? null
+  })
 }
 
 async function loadRegistrationOwnership(

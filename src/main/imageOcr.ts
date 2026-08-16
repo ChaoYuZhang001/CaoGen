@@ -3,6 +3,7 @@ import { writeFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 /**
  * 图片 OCR(P4.2 补全):按可用引擎逐级降级,绝不伪造结果。
@@ -64,7 +65,7 @@ end run`
       execFile(
         'osascript',
         [scriptPath, imagePath],
-        { timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+        { env: buildMinimalSubprocessEnv(), timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
         (err, stdout) => (err ? reject(err) : resolve(String(stdout ?? '')))
       )
     })
@@ -83,7 +84,10 @@ end run`
 
 async function tryTesseract(imagePath: string): Promise<OcrResult> {
   const exists = await new Promise<boolean>((resolve) => {
-    execFile(process.platform === 'win32' ? 'where' : 'which', ['tesseract'], { timeout: 3000 }, (err) =>
+    execFile(process.platform === 'win32' ? 'where' : 'which', ['tesseract'], {
+      env: buildMinimalSubprocessEnv(),
+      timeout: 3000
+    }, (err) =>
       resolve(!err)
     )
   })
@@ -93,14 +97,14 @@ async function tryTesseract(imagePath: string): Promise<OcrResult> {
       execFile(
         'tesseract',
         [imagePath, 'stdout', '-l', 'chi_sim+eng'],
-        { timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+        { env: buildMinimalSubprocessEnv(), timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
         (err, stdout) => {
           if (err) {
             // 中文语言包缺失时退回英文
             execFile(
               'tesseract',
               [imagePath, 'stdout'],
-              { timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+              { env: buildMinimalSubprocessEnv(), timeout: OCR_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
               (err2, stdout2) => (err2 ? reject(err2) : resolve(String(stdout2 ?? '')))
             )
           } else {

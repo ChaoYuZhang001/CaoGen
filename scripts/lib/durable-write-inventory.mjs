@@ -242,30 +242,33 @@ function collectFilesystemBindings(sourceFile) {
   const bindings = { direct: new Map(), durable: new Map(), namespaces: new Set(), importsOpen: false }
 
   for (const statement of sourceFile.statements) {
-    if (ts.isImportDeclaration(statement) && filesystemModule(statement.moduleSpecifier)) {
-      const namedBindings = statement.importClause?.namedBindings
-      if (statement.importClause?.name) bindings.namespaces.add(statement.importClause.name.text)
-      if (namedBindings && ts.isNamespaceImport(namedBindings)) bindings.namespaces.add(namedBindings.name.text)
-      if (namedBindings && ts.isNamedImports(namedBindings)) {
-        for (const element of namedBindings.elements) {
-          const imported = (element.propertyName ?? element.name).text
-          if (FILESYSTEM_OPERATIONS.has(imported)) bindings.direct.set(element.name.text, imported)
-          if (imported === 'open' || imported === 'openSync') bindings.importsOpen = true
-        }
-      }
-    }
-    if (ts.isImportDeclaration(statement) && durableFileModule(statement.moduleSpecifier)) {
-      const namedBindings = statement.importClause?.namedBindings
-      if (namedBindings && ts.isNamedImports(namedBindings)) {
-        for (const element of namedBindings.elements) {
-          const imported = (element.propertyName ?? element.name).text
-          if (DURABLE_FILE_OPERATIONS.has(imported)) bindings.durable.set(element.name.text, imported)
-        }
-      }
-    }
+    if (!ts.isImportDeclaration(statement)) continue
+    if (filesystemModule(statement.moduleSpecifier)) collectFilesystemImport(statement, bindings)
+    if (durableFileModule(statement.moduleSpecifier)) collectDurableFileImport(statement, bindings)
   }
   visit(sourceFile, (node) => collectRequireBindings(node, bindings))
   return bindings
+}
+
+function collectFilesystemImport(statement, bindings) {
+  const namedBindings = statement.importClause?.namedBindings
+  if (statement.importClause?.name) bindings.namespaces.add(statement.importClause.name.text)
+  if (namedBindings && ts.isNamespaceImport(namedBindings)) bindings.namespaces.add(namedBindings.name.text)
+  if (!namedBindings || !ts.isNamedImports(namedBindings)) return
+  for (const element of namedBindings.elements) {
+    const imported = (element.propertyName ?? element.name).text
+    if (FILESYSTEM_OPERATIONS.has(imported)) bindings.direct.set(element.name.text, imported)
+    if (imported === 'open' || imported === 'openSync') bindings.importsOpen = true
+  }
+}
+
+function collectDurableFileImport(statement, bindings) {
+  const namedBindings = statement.importClause?.namedBindings
+  if (!namedBindings || !ts.isNamedImports(namedBindings)) return
+  for (const element of namedBindings.elements) {
+    const imported = (element.propertyName ?? element.name).text
+    if (DURABLE_FILE_OPERATIONS.has(imported)) bindings.durable.set(element.name.text, imported)
+  }
 }
 
 function collectRequireBindings(node, bindings) {

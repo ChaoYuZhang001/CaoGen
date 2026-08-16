@@ -14,8 +14,10 @@ import StudioProjectionTabs, {
   type StudioProjectionSurface
 } from './experience/StudioProjectionTabs'
 import { loadStudioView, preloadStudioView } from './studio/loadStudioView'
+import { loadVideoStudioView, preloadVideoStudioView } from './studio/loadVideoStudioView'
 
 const StudioView = lazy(loadStudioView)
+const VideoStudioView = lazy(loadVideoStudioView)
 
 interface AppListViewProps {
   activeId: string | null
@@ -25,6 +27,7 @@ interface AppListViewProps {
   mobileSidebarOpen: boolean
   showNewSession: boolean
   studioVisited: boolean
+  videoVisited: boolean
   onCloseMobileSidebar: () => void
   onExperienceModeChange: (mode: ExperienceMode) => void
   onToggleMobileSidebar: () => void
@@ -136,9 +139,25 @@ function ResultSurface({ activeId, hidden, onOpenSession }: ResultSurfaceProps):
   )
 }
 
+function VideoSurface({ hidden }: { hidden: boolean }): React.JSX.Element {
+  return (
+    <section
+      className="experience-surface experience-video"
+      hidden={hidden}
+      aria-hidden={hidden}
+      {...(hidden ? { inert: '' } : {})}
+    >
+      <Suspense fallback={<div className="studio-loading">加载视频工作室...</div>}>
+        <VideoStudioView active={!hidden} />
+      </Suspense>
+    </section>
+  )
+}
+
 function useStudioSurface(
   workspaceNonce: number,
-  sessionNonce: number
+  sessionNonce: number,
+  hasResult: boolean
 ): [StudioProjectionSurface, (surface: StudioProjectionSurface) => void] {
   const surface = useStore((state) => state.studioSurface)
   const setSurface = useStore((state) => state.setStudioSurface)
@@ -148,6 +167,9 @@ function useStudioSurface(
   useEffect(() => {
     if (sessionNonce > 0) setSurface('session')
   }, [sessionNonce])
+  useEffect(() => {
+    if (!hasResult && surface === 'result') setSurface('workspace')
+  }, [hasResult, surface])
   return [surface, setSurface]
 }
 
@@ -161,21 +183,32 @@ export default function AppListView({
   onExperienceModeChange,
   onToggleMobileSidebar,
   showNewSession,
-  studioVisited
+  studioVisited,
+  videoVisited
 }: AppListViewProps): React.JSX.Element {
   const t = useT()
   useFirstTaskOnboardingLifecycle()
   const studioNavigationNonce = useStore((state) => state.studioNavigationNonce)
   const studioSessionNavigationNonce = useStore((state) => state.studioSessionNavigationNonce)
-  const [studioSurface, setStudioSurface] = useStudioSurface(studioNavigationNonce, studioSessionNavigationNonce)
+  const activeSession = useStore((state) => activeId ? state.sessions[activeId]?.meta : undefined)
+  const hasProjectTask = Boolean(
+    hasActive &&
+    !showNewSession &&
+    activeSession &&
+    (activeSession.workspaceId || activeSession.projectId || activeSession.goalId || activeSession.workItemId)
+  )
+  const [studioSurface, setStudioSurface] = useStudioSurface(
+    studioNavigationNonce,
+    studioSessionNavigationNonce,
+    hasProjectTask
+  )
   useEffect(() => preloadStudioView(), [])
-  useEffect(() => {
-    if (showNewSession) setStudioSurface('session')
-  }, [setStudioSurface, showNewSession])
+  useEffect(() => preloadVideoStudioView(), [])
   const sessionProjection = experienceMode === 'studio' && studioSurface === 'session' ? 'studio' : 'assistant'
-  const sessionHidden = experienceMode === 'studio' && studioSurface !== 'session'
+  const sessionHidden = experienceMode === 'video' || (experienceMode === 'studio' && studioSurface !== 'session')
   const workspaceHidden = experienceMode !== 'studio' || studioSurface !== 'workspace'
   const resultHidden = experienceMode !== 'studio' || studioSurface !== 'result'
+  const videoHidden = experienceMode !== 'video'
   return (
     <>
       <MobileSidebarControls
@@ -195,6 +228,7 @@ export default function AppListView({
       <ExperienceProjectionProvider mode={sessionProjection}>
         <main className="main">
           <StudioProjectionTabs
+            hasResult={hasProjectTask}
             hidden={experienceMode !== 'studio'}
             language={language}
             surface={studioSurface}
@@ -220,6 +254,7 @@ export default function AppListView({
                 onOpenSession={() => setStudioSurface('session')}
               />
             )}
+            {videoVisited && <VideoSurface hidden={videoHidden} />}
           </div>
         </main>
       </ExperienceProjectionProvider>

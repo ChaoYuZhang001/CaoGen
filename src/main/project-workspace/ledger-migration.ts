@@ -14,7 +14,9 @@ import {
   type WorkflowLedgerMigrationCheckpoint,
   type WorkflowLedgerMigrationSource
 } from '../task/workflow-ledger-migration'
-import { clearWorkflowLedgerMigrationSingleFlightForDatabase } from '../task/workflow-ledger-migration-readiness-flight'
+import {
+  cacheWorkflowLedgerTaskStoreReadinessForDatabase
+} from '../task/workflow-ledger-migration-readiness-flight'
 import {
   openWorkflowLedgerDatabase,
   readWorkflowLedgerStoreVersionStrict
@@ -112,6 +114,11 @@ interface BridgeJournal {
   metadata: ProjectWorkspaceMigrationMetadata
 }
 
+interface BridgeJournalState {
+  committed: BridgeJournal[]
+  inProgress: BridgeJournal[]
+}
+
 /**
  * JSON remains the write source. The bridge projects one aggregate into the
  * Workflow Ledger without flipping read mode or making JSON read-only.
@@ -140,10 +147,10 @@ export async function commitProjectWorkspaceStateToWorkflowLedger(
   const id = requiredId(workspaceId, 'workspace id')
   const root = resolve(resolveProjectWorkspaceRoot(rootDir))
   const databasePath = taskSnapshotsDbFile(root)
-  const inProgress = await findBridgeJournals(databasePath, id, false)
+  const journals = await readBridgeJournalState(databasePath, id)
 
-  await assertCommittedBridgeTargetPresent(databasePath, id)
-  if (inProgress.length === 0) {
+  await assertCommittedBridgeTargetPresent(databasePath, journals.committed)
+  if (journals.inProgress.length === 0) {
     await readTaskSnapshotDatabase(root, () => undefined)
   }
 
@@ -165,10 +172,10 @@ async function migrateProjectWorkspaceToWorkflowLedgerWithValidation(
   const id = requiredId(workspaceId, 'workspace id')
   const root = resolve(resolveProjectWorkspaceRoot(rootDir))
   const databasePath = taskSnapshotsDbFile(root)
-  const inProgress = await findBridgeJournals(databasePath, id, false)
+  const journals = await readBridgeJournalState(databasePath, id)
 
-  await assertCommittedBridgeTargetPresent(databasePath, id)
-  if (inProgress.length === 0) {
+  await assertCommittedBridgeTargetPresent(databasePath, journals.committed)
+  if (journals.inProgress.length === 0) {
     // Bootstrap outside the mutation queue; doing this inside would deadlock.
     await readTaskSnapshotDatabase(root, () => undefined)
   }
@@ -229,7 +236,11 @@ async function migrateUnderBarrier(
       now: options.now,
       readMode: 'legacy'
     })
-    clearWorkflowLedgerMigrationSingleFlightForDatabase(databasePath)
+    cacheWorkflowLedgerTaskStoreReadinessForDatabase(databasePath, {
+      disposition: 'migrated',
+      report: committed.journal.readiness ?? report,
+      migration: committed
+    })
     return {
       ...migrationResult('migrated', source, projection),
       migrationId: committed.migrationId,
@@ -403,26 +414,26 @@ async function readRequiredTarget(databasePath: string): Promise<Buffer> {
   return bytes
 }
 
-async function findBridgeJournals(
+async function readBridgeJournalState(
   databasePath: string,
-  workspaceId: string,
-  committed: boolean
-): Promise<BridgeJournal[]> {
+  workspaceId: string
+): Promise<BridgeJournalState> {
   const root = join(dirname(resolve(databasePath)), 'backups', 'workflow-ledger')
   const journals = await listMigrationJournals(root)
-  const matches: BridgeJournal[] = []
+  const result: BridgeJournalState = { committed: [], inProgress: [] }
   for (const entry of journals) {
-    const terminalMismatch = committed
-      ? entry.journal.state !== 'committed'
-      : entry.journal.state === 'committed' || entry.journal.state === 'rolled_back'
-    if (entry.journal.targetPath !== resolve(databasePath) || terminalMismatch) continue
+    if (entry.journal.targetPath !== resolve(databasePath) || entry.journal.state === 'rolled_back') continue
     const metadataBytes = await readFileIfExists(join(dirname(entry.path), METADATA_SIDECAR))
     if (!metadataBytes) continue
     const metadata = parseMigrationMetadata(metadataBytes)
     if (metadata.workspaceId !== workspaceId) continue
-    matches.push({ prepared: toPrepared(entry.path, entry.journal), metadata })
+    const bridge = { prepared: toPrepared(entry.path, entry.journal), metadata }
+    result[entry.journal.state === 'committed' ? 'committed' : 'inProgress'].push(bridge)
   }
-  return matches.sort((left, right) => right.prepared.journal.updatedAt - left.prepared.journal.updatedAt)
+  for (const matches of [result.committed, result.inProgress]) {
+    matches.sort((left, right) => right.prepared.journal.updatedAt - left.prepared.journal.updatedAt)
+  }
+  return result
 }
 
 function toPrepared(
@@ -453,8 +464,11 @@ function parseMigrationMetadata(bytes: Uint8Array): ProjectWorkspaceMigrationMet
   return value as unknown as ProjectWorkspaceMigrationMetadata
 }
 
-async function assertCommittedBridgeTargetPresent(databasePath: string, workspaceId: string): Promise<void> {
-  if ((await findBridgeJournals(databasePath, workspaceId, true)).length === 0) return
+async function assertCommittedBridgeTargetPresent(
+  databasePath: string,
+  committed: readonly BridgeJournal[]
+): Promise<void> {
+  if (committed.length === 0) return
   if (!(await readFileIfExists(databasePath))) {
     throw migrationError('COMMITTED_TARGET_MISSING', 'Committed ProjectWorkspace Ledger target is missing')
   }
@@ -466,7 +480,7 @@ async function resumeRenamedBridgeCandidate(
   targetBytes: Uint8Array,
   options: ProjectWorkspaceLedgerMigrationOptions
 ): Promise<void> {
-  const inProgress = await findBridgeJournals(databasePath, workspaceId, false)
+  const { inProgress } = await readBridgeJournalState(databasePath, workspaceId)
   if (inProgress.length > 1) {
     throw migrationError('MIGRATION_JOURNAL_CONFLICT', `Workspace ${workspaceId} has multiple in-progress Ledger migrations`)
   }
@@ -474,13 +488,17 @@ async function resumeRenamedBridgeCandidate(
   if (!bridge || bridge.prepared.journal.state !== 'migrated_verified') return
   const journal = await readWorkflowLedgerCanonicalMigrationJournal(bridge.prepared.journalPath)
   if (!journal.migrated || !journal.readiness || sha256(targetBytes) !== journal.migrated.sha256) return
-  await persistPreparedWorkflowLedgerMigration(
+  const committed = await persistPreparedWorkflowLedgerMigration(
     { ...bridge.prepared, journal },
     targetBytes,
     journal.readiness,
     { now: options.now, readMode: 'legacy' }
   )
-  clearWorkflowLedgerMigrationSingleFlightForDatabase(databasePath)
+  cacheWorkflowLedgerTaskStoreReadinessForDatabase(databasePath, {
+    disposition: 'migrated',
+    report: committed.journal.readiness ?? journal.readiness,
+    migration: committed
+  })
 }
 
 function migrationResult(

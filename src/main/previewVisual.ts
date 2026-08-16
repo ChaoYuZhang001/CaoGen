@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { OfficeVisualPreview } from '../shared/types'
 import { resolvePreviewFileTarget } from './previewOps'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 const QUICK_LOOK_BIN = '/usr/bin/qlmanage'
 const PLUTIL_BIN = '/usr/bin/plutil'
@@ -527,7 +528,10 @@ async function runProcess(
   label: string
 ): Promise<ProcessResult> {
   return new Promise<ProcessResult>((resolve, reject) => {
-    const child = spawn(executable, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(executable, args, {
+      env: buildMinimalSubprocessEnv(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
     activeChildren.add(child)
     let stdout = ''
     let stderr = ''

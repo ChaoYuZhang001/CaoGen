@@ -167,25 +167,68 @@ function contractPath(root: string, migrationId: string): string {
 }
 
 function assertContract(value: unknown): asserts value is MigrationContractJournal {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('migration_contract_invalid')
+  if (!isRecord(value)) invalidContract()
   const item = value as Partial<MigrationContractJournal>
-  if (item.schemaVersion !== 1 || item.format !== MIGRATION_CONTRACT_FORMAT || typeof item.migrationId !== 'string' ||
-      typeof item.kind !== 'string' || !Number.isSafeInteger(item.fromVersion) || !Number.isSafeInteger(item.toVersion) ||
-      typeof item.backupId !== 'string' || !item.source || !Array.isArray(item.targets) ||
-      !isState(item.state) || !Number.isSafeInteger(item.writesCompleted) || !Array.isArray(item.transitions)) {
-    throw new Error('migration_contract_invalid')
-  }
-  if (!/^[A-Za-z0-9._-]{1,200}$/.test(item.migrationId) || !item.kind.trim() || (item.fromVersion ?? -1) < 0 ||
-      (item.toVersion ?? -1) < (item.fromVersion ?? 0) || (item.writesCompleted ?? -1) < 0 || !item.backupId.trim()) {
-    throw new Error('migration_contract_invalid')
-  }
-  if (!item.source.path || !/^[a-f0-9]{64}$/.test(item.source.sha256) || !Number.isSafeInteger(item.source.sizeBytes) || item.source.sizeBytes < 0) {
-    throw new Error('migration_contract_invalid')
-  }
-  if (item.targets.some((target) => !target || typeof target.path !== 'string' || !target.path ||
-      typeof target.beforeFingerprint !== 'string' || (target.afterFingerprint !== undefined && typeof target.afterFingerprint !== 'string'))) {
-    throw new Error('migration_contract_invalid')
-  }
+  if (!hasContractShape(item)) invalidContract()
+  if (!hasContractIdentity(item)) invalidContract()
+  if (!isMigrationSource(item.source)) invalidContract()
+  if (!item.targets.every(isMigrationTarget)) invalidContract()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hasContractShape(item: Partial<MigrationContractJournal>): item is MigrationContractJournal {
+  return [
+    item.schemaVersion === 1,
+    item.format === MIGRATION_CONTRACT_FORMAT,
+    typeof item.migrationId === 'string',
+    typeof item.kind === 'string',
+    Number.isSafeInteger(item.fromVersion),
+    Number.isSafeInteger(item.toVersion),
+    typeof item.backupId === 'string',
+    Boolean(item.source),
+    Array.isArray(item.targets),
+    isState(item.state),
+    Number.isSafeInteger(item.writesCompleted),
+    Array.isArray(item.transitions)
+  ].every(Boolean)
+}
+
+function hasContractIdentity(item: MigrationContractJournal): boolean {
+  return [
+    /^[A-Za-z0-9._-]{1,200}$/.test(item.migrationId),
+    Boolean(item.kind.trim()),
+    item.fromVersion >= 0,
+    item.toVersion >= item.fromVersion,
+    item.writesCompleted >= 0,
+    Boolean(item.backupId.trim())
+  ].every(Boolean)
+}
+
+function isMigrationSource(source: MigrationContractJournal['source'] | undefined): boolean {
+  if (!source) return false
+  return [
+    Boolean(source.path),
+    /^[a-f0-9]{64}$/.test(source.sha256),
+    Number.isSafeInteger(source.sizeBytes),
+    source.sizeBytes >= 0
+  ].every(Boolean)
+}
+
+function isMigrationTarget(target: MigrationContractTarget): boolean {
+  if (!target) return false
+  return [
+    typeof target.path === 'string',
+    Boolean(target.path),
+    typeof target.beforeFingerprint === 'string',
+    target.afterFingerprint === undefined || typeof target.afterFingerprint === 'string'
+  ].every(Boolean)
+}
+
+function invalidContract(): never {
+  throw new Error('migration_contract_invalid')
 }
 
 function isState(value: unknown): value is MigrationContractState {

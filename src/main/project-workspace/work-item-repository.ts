@@ -42,6 +42,7 @@ import {
   workItemFrom,
   workspaceFrom
 } from './state-access'
+import { assertProjectAuthorized, projectMutationActor } from './project-authorization'
 
 const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, ReadonlySet<WorkItemStatus>> = {
   backlog: new Set(['ready', 'cancelled']),
@@ -64,7 +65,8 @@ export class WorkItemRepository {
     return this.persistence.mutate(options, ({ state, now }) => {
       this.persistence.assertCreateRevision(state, options)
       const projectId = requiredId(input.projectId, 'work item projectId')
-      activeWorkspaceFrom(state, projectId)
+      const project = activeWorkspaceFrom(state, projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       const id = optionalId(input.id, 'work item id') ?? randomUUID()
       assertUniqueWorkItem(state, id)
       const goal = resolveGoal(state, input.goalId, projectId)
@@ -97,7 +99,8 @@ export class WorkItemRepository {
   async update(id: string, patch: WorkItemPatch, options?: MutationOptions | number): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
-      assertProject(state, item.projectId)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       assertWorkItemEditable(item)
       applyWorkItemPatch(state, item, patch)
@@ -117,6 +120,8 @@ export class WorkItemRepository {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
       const target = workItemFrom(state, requiredId(targetId, 'work item reorder targetId'))
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       assertSameProject(target.projectId, item.projectId, 'reorder target')
       if (item.id === target.id) throw new ProjectWorkspaceError('invalid_input', 'work item cannot be reordered relative to itself')
@@ -153,6 +158,8 @@ export class WorkItemRepository {
   async setAcceptance(id: string, result: AcceptanceResult, options?: MutationOptions | number): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'approve')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       item.acceptance = normalizeAcceptanceResult(result)
       if (!item.acceptance) throw new ProjectWorkspaceError('invalid_input', 'work item acceptance result is required')
@@ -166,6 +173,8 @@ export class WorkItemRepository {
   async transition(id: string, status: WorkItemStatus, options?: MutationOptions | number): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       validateWorkItemTransition(state, item, status, now)
       if (item.status === status) return item
@@ -181,6 +190,8 @@ export class WorkItemRepository {
   async acquireLease(id: string, options: LeaseOptions = {}): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'execute')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       const ownerId = validateLeaseAcquisition(item, options, now)
       item.lease = buildLease(item.lease, ownerId, options, now)
@@ -194,6 +205,8 @@ export class WorkItemRepository {
   async renewLease(id: string, options: LeaseOptions = {}): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'execute')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       validateCurrentLease(item, options, now)
       const durationMs = leaseDuration(options.durationMs)
@@ -209,6 +222,8 @@ export class WorkItemRepository {
   async releaseLease(id: string, options: LeaseOptions = {}): Promise<WorkItem> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const item = workItemFrom(state, id)
+      const project = assertProject(state, item.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'execute')
       this.persistence.assertEntityRevision(item.revision, options, 'work item')
       validateLeaseIdentity(item.lease, options)
       item.lease = undefined

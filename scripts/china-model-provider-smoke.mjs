@@ -19,6 +19,7 @@ try {
 
   const adapter = await import(pathToFileURL(findCompiled(outDir, 'china-provider-adapter.js')).href)
   const localExecution = await import(pathToFileURL(findCompiled(outDir, 'local-execution.js')).href)
+  const subprocessEnvironment = await import(pathToFileURL(findCompiled(outDir, 'subprocess-environment.js')).href)
 
   const providerCases = [
     ['deepseek', { id: 'deepseek-chat', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com' }, 'deepseek-chat'],
@@ -171,6 +172,16 @@ try {
   })
   assertEqual(mirrorEnv.NPM_CONFIG_REGISTRY, 'https://registry.npmmirror.com')
   assertEqual(mirrorEnv.PIP_INDEX_URL, 'https://pypi.tuna.tsinghua.edu.cn/simple')
+  const minimalMirrorEnv = subprocessEnvironment.buildMinimalSubprocessEnv({
+    ...mirrorEnv,
+    NPM_TOKEN: 'npm-token-canary',
+    OPENAI_API_KEY: 'openai-key-canary',
+    NODE_OPTIONS: '--require=/tmp/injected.cjs'
+  }, { source: {} })
+  assertEqual(minimalMirrorEnv.NPM_CONFIG_REGISTRY, 'https://registry.npmmirror.com')
+  assertEqual(minimalMirrorEnv.PIP_INDEX_URL, 'https://pypi.tuna.tsinghua.edu.cn/simple')
+  assert(!minimalMirrorEnv.NPM_TOKEN && !minimalMirrorEnv.OPENAI_API_KEY && !minimalMirrorEnv.NODE_OPTIONS,
+    'mirror allowlist must not admit credentials or execution-injection variables')
   console.log('china model provider smoke ok')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })

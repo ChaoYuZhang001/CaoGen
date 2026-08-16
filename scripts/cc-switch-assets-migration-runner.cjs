@@ -70,7 +70,13 @@ async function applyAssets(win) {
   })()`)
   check('Four importable assets can be selected', selected === 4, JSON.stringify({ selected }))
   await rendererValue(win, `document.querySelector('[data-migration-apply]')?.click()`)
-  await waitForRenderer(win, `Boolean(document.querySelector('[data-migration-rollback]'))`)
+  await waitForRenderer(win, `Boolean(document.querySelector('[data-migration-rollback]'))
+    || Boolean(document.querySelector('[data-migration-result]')?.textContent?.trim())`, 60_000)
+  const applyState = await rendererValue(win, `({
+    rollbackReady: Boolean(document.querySelector('[data-migration-rollback]')),
+    message: document.querySelector('[data-migration-result]')?.textContent?.trim() || ''
+  })`)
+  check('Migration apply returns a rollback handle', applyState.rollbackReady, applyState.message)
 
   const settingsPath = path.join(home, '.claude', 'settings.json')
   const skillsRoot = path.join(home, '.caogen', 'skills')

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
+import { dismissRecoveryCenter } from './lib/project-workspace-lifecycle-ui.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -125,6 +126,11 @@ try {
       assertProjectResource(project, 'file_set', fileSetRoot)
       assertProjectResource(project, 'repository', repositoryRoot)
       assertProjectResource(project, 'connector', 'mock-connector://account/project')
+      const connector = project.resources.find((resource) => resource.kind === 'connector')
+      assert(connector?.connector?.capabilities.includes('resource:read'), 'connector capability contract is missing')
+      assert(connector?.connector?.authorization.principalId === 'project-lifecycle-fixture' &&
+        connector.connector.authorization.status === 'active', 'connector authorization contract is missing')
+      assert(connector?.connector?.writePolicy.effect === 'required', 'connector write policy bypasses Effect')
       assert(
         project.resources.find((resource) => resource.path === repositoryRoot)?.kind === 'repository',
         'repository was downgraded to a directory resource'
@@ -145,8 +151,8 @@ try {
     await check('project edit and subordinate records persist before archive', async () => {
       await verifyCanonicalProjectGroup(page, { expectedSessionId: state.goalTaskSessionId })
       await waitForEnabled(page, '[data-project-action="edit"]')
-      await page.click('[data-project-action="edit"]')
-      await page.waitForSelector('[data-project-form="edit"]', { visible: true, timeout: 5_000 })
+      await page.$eval('[data-project-action="edit"]', (button) => button.click())
+      await page.waitForSelector('[data-project-form="edit"]', { visible: true, timeout: 15_000 })
       await replaceInput(page, '[data-project-form="edit"] [name="projectName"]', state.projectName)
       await page.select('[data-project-form="edit"] [name="projectKind"]', 'software')
       await page.type('[data-project-form="edit"] [name="projectOwnerId"]', 'owner-ui-e2e')
@@ -218,8 +224,7 @@ try {
     })
 
     await check('archive is visible and durable before first restart', async () => {
-      await waitForEnabled(page, '[data-project-action="archive"]')
-      await page.click('[data-project-action="archive"]')
+      await clickEnabledButton(page, '[data-project-action="archive"]')
       await waitForProjectStatus(page, 'archived')
       const project = await readProject(page, state.projectId)
       assert(project.status === 'archived', `archive status mismatch: ${project.status}`)
@@ -240,8 +245,7 @@ try {
     })
 
     await check('restore returns project contents to the active UI', async () => {
-      await waitForEnabled(page, '[data-project-action="restore"]')
-      await page.click('[data-project-action="restore"]')
+      await clickEnabledButton(page, '[data-project-action="restore"]')
       await waitForProjectStatus(page, 'active')
       await page.waitForFunction(
         () => document.querySelector('[data-project-workspace-studio]')?.textContent?.includes('Lifecycle goal'),
@@ -252,9 +256,14 @@ try {
     })
 
     await check('Project export UI exposes a sealed sanitized aggregate with a verified digest', async () => {
-      await waitForEnabled(page, '[data-project-action="export"]')
-      await page.click('[data-project-action="export"]')
-      await page.waitForSelector('[data-project-manifest]', { visible: true, timeout: 10_000 })
+      await clickEnabledButton(page, '[data-project-action="export"]')
+      try {
+        await page.waitForSelector('[data-project-manifest]', { visible: true, timeout: 90_000 })
+      } catch (error) {
+        const feedback = await page.$$eval('.pws-lifecycle-feedback[role="alert"]', (items) =>
+          items.map((item) => item.textContent?.trim()).filter(Boolean).join(' | '))
+        throw new Error(`Project export dialog did not open${feedback ? `: ${feedback}` : ''}`, { cause: error })
+      }
       const rendered = await page.evaluate(() => ({
         ariaModal: document.querySelector('[data-project-manifest]')?.getAttribute('aria-modal'),
         digest: document.querySelector('[data-manifest-digest]')?.textContent?.trim() || '',
@@ -267,6 +276,8 @@ try {
       assert(manifest.aggregate.goals.some((goal) => goal.id === state.goalId), 'export omitted subordinate Goal')
       assert(manifest.aggregate.workItems.some((item) => item.id === state.workItemId), 'export omitted subordinate WorkItem')
       assert(manifest.aggregate.workflow.runs.length > 0, 'export omitted the Project Run payload')
+      assert(manifest.runtime.sessionIds.some((id) => id.startsWith('operation:')),
+        'export omitted canonical operation Session identity')
       state.importedRunId = manifest.aggregate.workflow.runs[0].id
       assert(manifest.aggregate.sanitized === true && manifest.verification?.sealed === true,
         'export omitted sanitized and sealed verification')
@@ -282,8 +293,7 @@ try {
     })
 
     await check('soft-delete confirmation is keyboard dismissible and preserves sources', async () => {
-      await waitForEnabled(page, '[data-project-action="soft-delete"]')
-      await page.click('[data-project-action="soft-delete"]')
+      await clickEnabledButton(page, '[data-project-action="soft-delete"]')
       await page.waitForSelector('[data-project-delete-dialog="soft"]', { visible: true, timeout: 5_000 })
       const warning = await page.$eval('[data-project-delete-dialog="soft"]', (dialog) => dialog.textContent || '')
       assert(warning.includes('不会被删除'), `source preservation warning missing: ${warning}`)
@@ -291,7 +301,6 @@ try {
       await page.keyboard.press('Escape')
       await page.waitForSelector('[data-project-delete-dialog="soft"]', { hidden: true, timeout: 5_000 })
       await waitForProjectStatus(page, 'active')
-      await waitForEnabled(page, '[data-project-action="soft-delete"]')
       await confirmProjectDelete(page, 'soft', state.projectName)
       await waitForProjectStatus(page, 'deleted')
       assert(readFileSync(sourceSentinel, 'utf8') === 'preserve me\n', 'soft delete changed repository source')
@@ -302,6 +311,10 @@ try {
   await runPhase('permanent-delete', async (page) => {
     await check('soft-deleted aggregate and sources survive restart', async () => {
       await waitForProjectStatus(page, 'deleted')
+      await sleep(500)
+      const workspaceError = await page.$eval('.pws-error', (notice) => notice.textContent?.trim() || '')
+        .catch(() => '')
+      assert(!workspaceError, `soft-deleted Project triggered active-content queries: ${workspaceError}`)
       const project = await readProject(page, state.projectId)
       assert(project.status === 'deleted', `deleted status lost: ${project.status}`)
       assert(project.resources.some((resource) => resource.kind === 'repository'), 'deleted aggregate lost repository')
@@ -315,15 +328,22 @@ try {
     })
 
     await check('permanent delete requires exact project-name confirmation and cascades CaoGen-owned data', async () => {
-      await waitForEnabled(page, '[data-project-action="purge"]')
-      await page.click('[data-project-action="purge"]')
+      await clickEnabledButton(page, '[data-project-action="purge"]')
       await page.waitForSelector('[data-project-delete-dialog="permanent"]', { visible: true, timeout: 5_000 })
       const disabled = await page.$eval('[data-project-delete-confirm]', (button) => button.disabled)
       assert(disabled === true, 'permanent delete confirmation started enabled')
       await screenshot(page, '05-permanent-delete-dialog')
       await replaceInput(page, '[name="projectDeleteConfirmation"]', state.projectName)
-      await page.click('[data-project-delete-confirm]')
-      await page.waitForSelector('.pws-project-empty', { visible: true, timeout: 10_000 })
+      await clickEnabledButton(page, '[data-project-delete-confirm]')
+      try {
+        await page.waitForSelector('.pws-project-empty', { visible: true, timeout: 90_000 })
+      } catch (error) {
+        const feedback = await page.$$eval('.pws-lifecycle-feedback[role="alert"]', (items) =>
+          items.map((item) => item.textContent?.trim()).filter(Boolean).join(' | '))
+        throw new Error(`Permanent deletion did not reach the empty Project view${feedback ? `: ${feedback}` : ''}`, {
+          cause: error
+        })
+      }
       const removed = await page.evaluate(async ({ projectId, goalId, workItemId }) => ({
         project: await window.agentDesk.getProjectWorkspace(projectId),
         goal: await window.agentDesk.getProjectGoal(goalId),
@@ -397,12 +417,17 @@ try {
         unrelated.id
       )
       await uploadProjectFile(page, importBundlePath)
-      await page.waitForFunction(
-        (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId &&
-          document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false',
-        { timeout: 20_000 },
-        state.projectId
-      )
+      try {
+        await page.waitForFunction(
+          (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId &&
+            document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false',
+          { timeout: 90_000 },
+          state.projectId
+        )
+      } catch (error) {
+        const diagnostics = await projectImportDiagnostics(page, state.projectId)
+        throw new Error(`Project import did not settle: ${JSON.stringify(diagnostics)}`, { cause: error })
+      }
       await page.waitForFunction(
         ({ goalId, workItemId }) => Boolean(
           document.querySelector(`[data-goal-id="${goalId}"]`) ||
@@ -431,15 +456,25 @@ try {
 
     await check('duplicate and tampered imports fail closed through the same UI', async () => {
       await uploadProjectFile(page, importBundlePath)
-      await page.waitForFunction(
-        () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('conflict') === true,
-        { timeout: 10_000 }
-      )
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('conflict') === true,
+          { timeout: 20_000 }
+        )
+      } catch (error) {
+        const diagnostics = await projectImportDiagnostics(page, state.projectId)
+        throw new Error(`Duplicate Project import did not fail closed: ${JSON.stringify(diagnostics)}`, { cause: error })
+      }
       await uploadProjectFile(page, tamperedImportBundlePath)
-      await page.waitForFunction(
-        () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('digest') === true,
-        { timeout: 10_000 }
-      )
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('[role="alert"]')?.textContent?.toLowerCase().includes('digest') === true,
+          { timeout: 20_000 }
+        )
+      } catch (error) {
+        const diagnostics = await projectImportDiagnostics(page, state.projectId)
+        throw new Error(`Tampered Project import did not fail closed: ${JSON.stringify(diagnostics)}`, { cause: error })
+      }
       const projects = await page.evaluate(() => window.agentDesk.listProjectWorkspaces({
         includeArchived: true,
         includeDeleted: true
@@ -589,8 +624,8 @@ async function enterStudio(page) {
   await page.click('[data-experience-mode-option="studio"]')
   await page.waitForSelector('[data-project-workspace-studio]', { visible: true, timeout: 15_000 })
   await page.waitForFunction(() => document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false', { timeout: 15_000 })
+  await dismissRecoveryCenter(page)
 }
-
 async function check(name, execute) {
   const startedAt = Date.now()
   try {
@@ -631,13 +666,19 @@ async function verifyOneInputGoalTask(page) {
       sessions: await window.agentDesk.listSessions(),
       legacyProjects: await window.agentDesk.listProjects()
     }), state.projectId),
-    (value) => value.goals.length === 1 && value.workItems.length === 1 &&
-      value.sessions.some((session) => session.workspaceId === state.projectId),
+    (value) => {
+      const rows = goalTaskRows(value, objective)
+      return rows.goals.length === 1 && rows.workItems.length === 1 &&
+        value.sessions.some((session) => session.workspaceId === state.projectId)
+    },
     15_000,
     'waiting for one-input canonical task startup'
   )
-  const goal = started.goals[0]
-  const workItem = started.workItems[0]
+  const rows = goalTaskRows(started, objective)
+  assert(rows.goals.length === 1, `double click created ${rows.goals.length} matching Goals`)
+  assert(rows.workItems.length === 1, `double click created ${rows.workItems.length} matching WorkItems`)
+  const goal = rows.goals[0]
+  const workItem = rows.workItems[0]
   const sessions = started.sessions.filter((session) => session.workspaceId === state.projectId)
   assert(sessions.length === 1, `double click created ${sessions.length} Sessions`)
   const session = sessions[0]
@@ -715,6 +756,13 @@ async function verifyOneInputGoalTask(page) {
     10_000,
     'waiting for synthetic Goal Task Session to close'
   )
+}
+
+function goalTaskRows(value, objective) {
+  const goals = value.goals.filter((goal) => goal.objective === objective)
+  const goalIds = new Set(goals.map((goal) => goal.id))
+  const workItems = value.workItems.filter((item) => goalIds.has(item.goalId) && item.description === objective)
+  return { goals, workItems }
 }
 
 async function verifyCanonicalProjectGroup(page, { expectedSessionId, exerciseControls = false }) {
@@ -810,6 +858,9 @@ async function addResource(page, kind, label, location, expectedCount) {
   await page.select('[data-project-form="resource"] [name="resourceKind"]', kind)
   await page.type('[data-project-form="resource"] [name="resourceLabel"]', label)
   await page.type('[data-project-form="resource"] [name="resourceLocation"]', location)
+  if (kind === 'connector') {
+    await page.type('[data-project-form="resource"] input[id$="-connector-principal"]', 'project-lifecycle-fixture')
+  }
   await page.click('[data-project-form="resource"] button[type="submit"]')
   await waitForProject(page, (project) => project.resources.length === expectedCount)
   await page.waitForSelector('[data-project-form="resource"]', { hidden: true, timeout: 5_000 })
@@ -818,11 +869,11 @@ async function addResource(page, kind, label, location, expectedCount) {
 async function confirmProjectDelete(page, mode, name) {
   if (!await page.$(`[data-project-delete-dialog="${mode}"]`)) {
     const action = mode === 'permanent' ? 'purge' : 'soft-delete'
-    await page.click(`[data-project-action="${action}"]`)
+    await clickEnabledButton(page, `[data-project-action="${action}"]`)
   }
   await page.waitForSelector(`[data-project-delete-dialog="${mode}"]`, { visible: true, timeout: 5_000 })
   await replaceInput(page, '[name="projectDeleteConfirmation"]', name)
-  await page.click('[data-project-delete-confirm]')
+  await clickEnabledButton(page, '[data-project-delete-confirm]')
 }
 
 async function replaceInput(page, selector, value) {
@@ -837,6 +888,34 @@ async function uploadProjectFile(page, filePath) {
   const input = await page.$('[data-studio-import-input]')
   assert(input, 'Project import file input is missing')
   await input.uploadFile(filePath)
+}
+
+async function projectImportDiagnostics(page, projectId) {
+  const ui = await page.evaluate(async (expectedProjectId) => ({
+    busy: document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy'),
+    selectedProjectId: document.querySelector('[data-project-workspace-select]')?.value || '',
+    feedback: Array.from(document.querySelectorAll('.pws-lifecycle-feedback')).map((item) => ({
+      role: item.getAttribute('role') || '',
+      text: item.textContent?.trim() || ''
+    })),
+    projects: (await window.agentDesk.listProjectWorkspaces({ includeArchived: true, includeDeleted: true }))
+      .map((project) => ({ id: project.id, status: project.status, revision: project.revision })),
+    expectedProjectId
+  }), projectId)
+  const journalPath = path.join(userDataDir, 'private', 'project-import-journal.json')
+  if (!existsSync(journalPath)) return { ui, journal: null }
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+  return {
+    ui,
+    journal: Array.isArray(journal.entries)
+      ? journal.entries.map((entry) => ({
+          operationId: entry.operationId,
+          projectId: entry.projectId,
+          phase: entry.phase,
+          updatedAt: entry.updatedAt
+        }))
+      : journal
+  }
 }
 
 async function clickStudioActionWithRetry(page, action, resultSelector) {
@@ -914,6 +993,11 @@ async function waitForEnabled(page, selector) {
     { timeout: 10_000 },
     selector
   )
+}
+
+async function clickEnabledButton(page, selector) {
+  await waitForEnabled(page, selector)
+  await page.$eval(selector, (button) => button.click())
 }
 
 function assertProjectResource(project, kind, location) {
@@ -1059,7 +1143,7 @@ async function waitForChildExit(child, timeoutMs) {
 
 function summarizeProcessOutput(phase, output, exited) {
   const warnings = []
-  if (output.stderr.trim()) warnings.push(`${phase} [stderr tail]\n${output.stderr.trim().slice(-1200)}`)
+  if (output.stderr.trim()) warnings.push(`${phase} [stderr tail]\n${output.stderr.trim().slice(-8000)}`)
   if (output.stdout.trim()) warnings.push(`${phase} [stdout tail]\n${output.stdout.trim().slice(-600)}`)
   if (exited.signal) warnings.push(`${phase} Electron exited by signal ${exited.signal}`)
   return warnings

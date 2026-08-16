@@ -250,8 +250,19 @@ function verifySessionRecoverySourceContracts() {
   assert(!transcript.includes('this.append({ seq: ++this.seq, event: entry.event })'), 'bind must not renumber emitted events')
 
   const taskSnapshot = readFileSync(path.join(repoRoot, 'src/main/task/task-snapshot.ts'), 'utf8')
+  const taskSnapshotMerge = readFileSync(path.join(repoRoot, 'src/main/task/task-snapshot-merge.ts'), 'utf8')
   verifyTaskSnapshotFinalizerContract(taskSnapshot)
-  assert(taskSnapshot.includes('compareSnapshotFreshness'), 'stale snapshots must not overwrite newer cursors')
+  assert(
+    taskSnapshot.includes("import { mergeTaskSnapshots } from './task-snapshot-merge'") &&
+      taskSnapshot.includes('mergeTaskSnapshots(previous, snapshot)'),
+    'TaskSnapshot persistence must delegate stale-write protection to its merge boundary'
+  )
+  assert(
+    taskSnapshotMerge.includes('compareSnapshotFreshness') &&
+      taskSnapshotMerge.includes('left.execution.cursor?.seq ?? left.execution.lastSeq') &&
+      taskSnapshotMerge.includes('right.execution.cursor?.seq ?? right.execution.lastSeq'),
+    'stale snapshots must not overwrite newer cursors'
+  )
 }
 
 function verifyProviderAndRendererSourceContracts() {
@@ -304,8 +315,9 @@ function verifyTaskSnapshotFinalizerContract(source) {
 function verifyProviderSchedulerWiring(source) {
   const sourceFile = ts.createSourceFile('providers.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   assertNamedImports(sourceFile, './scheduler', ['recordProbeFailure', 'recordProbeSuccess'])
-  assertNamedImports(sourceFile, './provider/modelDiscovery', ['discoverProviderModels'])
-  assertNamedImports(sourceFile, './provider/modelDiscoveryBinding', ['bindProviderModelDiscoveryInput'])
+  assertNamedImports(sourceFile, './provider/providerDiagnostics', [
+    'fetchProviderModels', 'probeProviderGenerationTarget'
+  ])
 
   const fetchModels = sourceFile.statements.find((statement) =>
     ts.isFunctionDeclaration(statement) && statement.name?.text === 'fetchModels'
@@ -318,11 +330,42 @@ function verifyProviderSchedulerWiring(source) {
   )
 
   const delegation = returnedCall(fetchModels.body)
-  assertIdentifierCall(delegation, 'discoverProviderModels', 3, 'providers:fetchModels must delegate to model discovery with injected dependencies')
-  assertBoundDiscoveryInput(fetchModels.body)
-  assertResolverCallback(delegation.arguments[1])
-  assertSchedulerCallback(delegation.arguments[2], 'success', 'recordProbeSuccess', ['providerId', 'latencyMs'])
-  assertSchedulerCallback(delegation.arguments[2], 'failure', 'recordProbeFailure', ['providerId', 'message'])
+  assertIdentifierCall(delegation, 'fetchProviderModels', 2, 'providers:fetchModels must delegate to Provider diagnostics')
+  assertIdentifier(delegation.arguments[1], 'providerDiagnosticsDependencies', 'model discovery must receive scoped diagnostics dependencies')
+
+  const probe = sourceFile.statements.find((statement) =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === 'probeProviderGeneration'
+  )
+  assert(probe?.body, 'providers must define probeProviderGeneration with an implementation')
+  const probeDelegation = returnedCall(probe.body)
+  assertIdentifierCall(probeDelegation, 'probeProviderGenerationTarget', 2, 'generation probe must delegate to Provider diagnostics')
+  assertIdentifier(probeDelegation.arguments[1], 'providerDiagnosticsDependencies', 'generation probe must receive scoped diagnostics dependencies')
+
+  const dependencies = variableInitializer(sourceFile, 'providerDiagnosticsDependencies')
+  assert(dependencies && ts.isObjectLiteralExpression(dependencies), 'providers must define Provider diagnostics dependencies as an object')
+  assertObjectProperties(dependencies, [
+    'getProvider', 'providerAuthMode', 'decryptProviderToken', 'selectedKey',
+    'recordProbeSuccess', 'recordProbeFailure'
+  ], 'Provider diagnostics dependencies')
+
+  const diagnostics = readFileSync(path.join(repoRoot, 'src/main/provider/providerDiagnostics.ts'), 'utf8')
+  verifyProviderDiagnosticsBoundary(diagnostics)
+}
+
+function verifyProviderDiagnosticsBoundary(source) {
+  const sourceFile = ts.createSourceFile('providerDiagnostics.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  assertNamedImports(sourceFile, './modelDiscovery', ['discoverProviderModels'])
+  assertNamedImports(sourceFile, './modelDiscoveryBinding', ['bindProviderModelDiscoveryInput'])
+  const fetchModels = sourceFile.statements.find((statement) =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === 'fetchProviderModels'
+  )
+  assert(fetchModels?.body, 'Provider diagnostics must define fetchProviderModels')
+  const delegation = returnedCall(fetchModels.body)
+  assertIdentifierCall(delegation, 'discoverProviderModels', 3, 'Provider diagnostics must delegate to model discovery')
+  const callbacks = delegation.arguments[2]
+  assert(ts.isObjectLiteralExpression(callbacks), 'Provider diagnostics must provide model discovery health callbacks')
+  assertPropertyAccess(callbacks, 'success', 'dependencies', 'recordProbeSuccess')
+  assertPropertyAccess(callbacks, 'failure', 'dependencies', 'recordProbeFailure')
 }
 
 function assertStringUnionMembers(source, aliasName, expected) {
@@ -439,10 +482,43 @@ function assertNamedImports(sourceFile, moduleName, expectedNames) {
     ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === moduleName
   )
   const bindings = declaration?.importClause?.namedBindings
-  const names = ts.isNamedImports(bindings) ? bindings.elements.map((element) => element.name.text) : []
+  const names = bindings && ts.isNamedImports(bindings) ? bindings.elements.map((element) => element.name.text) : []
   for (const name of expectedNames) {
     assert(names.includes(name), `${moduleName} must import ${name}`)
   }
+}
+
+function variableInitializer(sourceFile, name) {
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    const declaration = statement.declarationList.declarations.find((candidate) =>
+      ts.isIdentifier(candidate.name) && candidate.name.text === name
+    )
+    if (declaration) return declaration.initializer
+  }
+  return undefined
+}
+
+function assertObjectProperties(object, expectedNames, label) {
+  const names = object.properties.map((property) => property.name && ts.isIdentifier(property.name) ? property.name.text : '')
+  for (const name of expectedNames) assert(names.includes(name), `${label} must provide ${name}`)
+}
+
+function assertIdentifier(node, expectedName, message) {
+  assert(node && ts.isIdentifier(node) && node.text === expectedName, message)
+}
+
+function assertPropertyAccess(object, propertyName, receiverName, memberName) {
+  const property = object.properties.find((candidate) =>
+    ts.isPropertyAssignment(candidate) && candidate.name && ts.isIdentifier(candidate.name) && candidate.name.text === propertyName
+  )
+  assert(
+    property && ts.isPropertyAssignment(property) &&
+      ts.isPropertyAccessExpression(property.initializer) &&
+      ts.isIdentifier(property.initializer.expression) && property.initializer.expression.text === receiverName &&
+      property.initializer.name.text === memberName,
+    `Provider diagnostics ${propertyName} callback must use ${receiverName}.${memberName}`
+  )
 }
 
 function returnedCall(body) {

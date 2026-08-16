@@ -350,6 +350,34 @@ export class SupervisorStateStore {
     })
   }
 
+  /** Freeze an executor before canonical WorkItem ownership moves to another assignee. */
+  async pauseRunForWorkItemTransfer(
+    runId: string,
+    options: SupervisorMutationOptions = {}
+  ): Promise<SupervisorRunRecord> {
+    return this.mutate(options, (document, now) => {
+      const run = findRun(document, requiredId(runId, 'run id'))
+      assertExpectedRevision(run, options)
+      assertNotTerminal(run)
+      if (run.status === 'waiting_reconciliation') {
+        throw new SupervisorStateError(
+          'invalid_transition',
+          `run ${run.id} requires reconciliation before WorkItem transfer`
+        )
+      }
+      const from = run.status
+      const fencingToken = run.lease?.fencingToken
+      run.status = 'paused'
+      run.approval = undefined
+      run.lease = undefined
+      touch(run, now)
+      appendEvent(document, run, 'run.paused', options.actorId ?? 'work-item-transfer', now, {
+        reason: 'work_item_transfer'
+      }, fencingToken, from, 'paused')
+      return clone(run)
+    })
+  }
+
   async resumeRun(runId: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord> {
     return this.transitionWithLease(runId, 'running', options, 'run.resumed')
   }

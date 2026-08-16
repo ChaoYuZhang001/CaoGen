@@ -16,6 +16,17 @@ type WorktreeLifecycleTarget = Extract<
 >
 
 export function effectTargetsConflict(left: EffectTarget, right: EffectTarget): boolean {
+  if (left.kind === 'migration_operation' && right.kind === 'migration_operation') {
+    if (left.backupRef && right.backupRef) return left.backupRef === right.backupRef
+    return Boolean(left.backupRoot && right.backupRoot && resolve(left.backupRoot) === resolve(right.backupRoot))
+  }
+  if (left.kind === 'project_portable_export' && right.kind === 'project_portable_export') {
+    return left.projectId === right.projectId
+  }
+  if (left.kind === 'provider_profile_operation' && right.kind === 'provider_profile_operation') return true
+  if (left.kind === 'media_job_operation' && right.kind === 'media_job_operation') {
+    return left.mediaJobId === right.mediaJobId
+  }
   if (targetsShareFile(left, right)) return true
   if (opaqueFileTargetsConflict(left, right)) return true
   if (left.kind === 'git_index_update') return gitIndexTargetConflicts(left, right)

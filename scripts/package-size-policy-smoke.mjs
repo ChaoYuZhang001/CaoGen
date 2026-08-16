@@ -18,6 +18,7 @@ const rendererOnlyDependencies = [
   '@react-three/postprocessing',
   '@types/sql.js',
   'highlight.js',
+  'lucide-react',
   'postprocessing',
   'react',
   'react-dom',
@@ -45,6 +46,17 @@ for (const dependency of rendererOnlyDependencies) {
 
 assert.deepEqual(packageJson.build?.electronLanguages, ['en', 'zh_CN', 'zh_TW'])
 
+for (const dependency of ['@fontsource/noto-sans-sc', 'ffmpeg-static', 'tsx']) {
+  assert.equal(packageJson.dependencies?.[dependency], undefined, `${dependency} must not ship as a runtime dependency`)
+  assert.equal(typeof packageJson.devDependencies?.[dependency], 'string', `${dependency} must remain available at build time`)
+  assert.equal(packageLock.packages?.['']?.dependencies?.[dependency], undefined, `${dependency} lock root must not be runtime`)
+  assert.equal(
+    typeof packageLock.packages?.['']?.devDependencies?.[dependency],
+    'string',
+    `${dependency} lock root must be development-only`
+  )
+}
+
 const requiredBaseFiles = [
   'out/**/*',
   'package.json',
@@ -57,12 +69,68 @@ for (const pattern of requiredBaseFiles) {
   assert(globalFiles.includes(pattern), `missing package filter: ${pattern}`)
 }
 
+const packagePrunePatterns = [
+  '!node_modules/ffmpeg-static/**',
+  '!node_modules/@fontsource/noto-sans-sc/**',
+  '!node_modules/lucide-react/**',
+  '!node_modules/**/*.map',
+  '!node_modules/exceljs/dist/**',
+  '!node_modules/sql.js/dist/sql-asm*',
+  '!node_modules/sql.js/dist/worker*',
+  '!node_modules/sql.js/dist/sql-wasm-browser*',
+  '!node_modules/sql.js/dist/*-debug*',
+  '!node_modules/pdfkit/.yarn/**',
+  '!node_modules/pdfkit/js/pdfkit.es.js',
+  '!node_modules/pdfkit/js/pdfkit.standalone.js',
+  '!node_modules/puppeteer-core/src/**',
+  '!node_modules/zod/src/**',
+  '!node_modules/chromium-bidi/node_modules/zod/src/**',
+  '!node_modules/docx/dist/index.iife.js',
+  '!node_modules/docx/dist/index.mjs',
+  '!node_modules/docx/dist/*.d.*',
+  '!node_modules/pptxgenjs/dist/pptxgen.bundle.js',
+  '!node_modules/pptxgenjs/dist/pptxgen.es.js',
+  '!node_modules/pptxgenjs/dist/pptxgen.min.js',
+  '!node_modules/pptxgenjs/types/**',
+  '!node_modules/tree-sitter{,-*}/prebuilds/**',
+  '!node_modules/typescript/lib/_tsc.js',
+  '!node_modules/typescript/lib/{cs,de,es,fr,it,ja,ko,pl,pt-br,ru,tr}/**',
+  '!node_modules/devtools-protocol/**',
+  '!node_modules/puppeteer-core/lib/es5-iife/**',
+  '!node_modules/puppeteer-core/**/*.d.ts',
+  '!node_modules/chromium-bidi/**/*.d.ts',
+  '!node_modules/zod/**/*.d.ts',
+  '!node_modules/**/*.d.cts',
+  '!node_modules/**/*.d.mts',
+  '!node_modules/**/*.md',
+  '!node_modules/@aws-sdk/**/*.d.ts',
+  '!node_modules/@smithy/**/*.d.ts',
+  '!node_modules/jimp/browser/**',
+  '!node_modules/fontkit/dist/browser*',
+  '!node_modules/@jimp/png/node_modules/pngjs/browser.js',
+  '!node_modules/pngjs/browser.js'
+]
+for (const pattern of packagePrunePatterns) {
+  assert(globalFiles.includes(pattern), `missing package prune filter: ${pattern}`)
+}
+assert(
+  !globalFiles.includes('!node_modules/docx/dist/index.cjs'),
+  'docx CommonJS runtime entrypoint must remain in the package'
+)
+
 const macFiles = packageJson.build?.mac?.files || []
 // A platform-level files array replaces the global array in electron-builder.
 // Keep the narrow app include set here so macOS never falls back to packaging the repository.
 for (const pattern of requiredBaseFiles) {
   assert(macFiles.includes(pattern), `missing macOS base package filter: ${pattern}`)
 }
+for (const pattern of packagePrunePatterns) {
+  assert(macFiles.includes(pattern), `missing macOS package prune filter: ${pattern}`)
+}
+assert(
+  !macFiles.includes('!node_modules/docx/dist/index.cjs'),
+  'docx CommonJS runtime entrypoint must remain in the macOS package'
+)
 for (const pattern of [
   '!node_modules/**/prebuilds/!(darwin-${arch})/**',
   '!node_modules/@nut-tree-fork/libnut-linux/**',
@@ -96,6 +164,19 @@ assert.deepEqual(
 assert.equal(packageJson.build?.afterPack, undefined)
 assert.equal(packageJson.build?.mac?.afterPack, undefined)
 assert(packageJson.scripts?.['dist:mac:release:x64']?.includes('test:macos-package-size:required'))
+
+const extraResources = packageJson.build?.extraResources || []
+for (const resource of [
+  ['node_modules/ffmpeg-static/ffmpeg', 'ffmpeg/ffmpeg'],
+  ['node_modules/ffmpeg-static/LICENSE', 'ffmpeg/LICENSE'],
+  ['node_modules/@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-400-normal.woff', 'office-font/NotoSansSC-Regular.woff'],
+  ['node_modules/@fontsource/noto-sans-sc/LICENSE', 'office-font/LICENSE']
+]) {
+  assert(
+    extraResources.some((entry) => entry?.from === resource[0] && entry?.to === resource[1]),
+    `missing build-only resource mapping: ${resource[0]}`
+  )
+}
 
 const x64Steps = workflow.jobs?.['macos-x64']?.steps || []
 const x64Upload = x64Steps.find((step) => step.name === 'Upload x64 assets and evidence')

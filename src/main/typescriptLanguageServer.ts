@@ -14,6 +14,7 @@ import type {
   SemanticHoverResult,
   TypeScriptLanguageInput
 } from '../shared/types'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 const MAX_DOCUMENT_BYTES = 512_000
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -92,7 +93,7 @@ class TypeScriptLspClient {
     const tsserverPath = path.dirname(spawnablePath(require.resolve('typescript/lib/tsserver.js')))
     this.child = spawn(process.execPath, [serverPath, '--stdio', '--log-level', '1'], {
       cwd: root,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: buildMinimalSubprocessEnv({ ELECTRON_RUN_AS_NODE: '1' }),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     })

@@ -8,6 +8,7 @@ export const PROJECT_IMPORT_PHASES = [
   'workspace_imported',
   'workforce_imported',
   'workflow_imported',
+  'runtime_imported',
   'automation_imported',
   'learning_imported',
   'sealed',

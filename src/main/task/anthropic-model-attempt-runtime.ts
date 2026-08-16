@@ -42,6 +42,7 @@ export interface AnthropicModelAttemptInput {
   body: unknown
   signal: AbortSignal
   auth: AnthropicModelAttemptAuth
+  canonicalContextDigest?: string
   requestId?: string
   failoverFromAttemptId?: string
   routeReason?: string
@@ -128,6 +129,7 @@ export class AnthropicModelAttemptTracker {
         method: input.method ?? 'POST',
         body: input.body
       },
+      contextDigest: input.canonicalContextDigest,
       routeReason: input.routeReason?.trim() ||
         `Session uses the saved Provider target with the native ${this.identity.label} adapter`,
       keyIdentity: { providerId: input.providerId, ...input.auth },

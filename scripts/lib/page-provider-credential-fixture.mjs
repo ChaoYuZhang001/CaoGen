@@ -14,7 +14,8 @@ export function assertRelayProviderPersistence({
   assert(settingsAfter.defaultProviderId === settingsBefore.defaultProviderId, 'relay template save should not set a default provider')
   assert(settingsAfter.defaultModel === settingsBefore.defaultModel, 'relay template save should not set a default model')
 
-  const relay = providers.find((provider) => provider.name === 'CaoGen Relay UI Smoke')
+  const records = providerRecords(providers)
+  const relay = records.find((provider) => provider.name === 'CaoGen Relay UI Smoke')
   assert(relay, 'saved relay provider not found')
   assert(relay.id !== 'caogen-relay', 'preset key must not be persisted as a hidden provider id')
   assert(relay.baseUrl === expectedBaseUrl, `unexpected relay baseUrl: ${relay.baseUrl}`)
@@ -43,7 +44,7 @@ export function assertRelayProviderPersistence({
   } else {
     assert(!relay.activeKeyId, 'session-only provider must not persist an active key reference')
   }
-  const legacyFixture = providers.find((provider) => provider.id === legacyProviderId)
+  const legacyFixture = records.find((provider) => provider.id === legacyProviderId)
   assert(legacyFixture, 'legacy provider fixture must remain present after startup migration')
   if (JSON.stringify(legacyFixture).includes('b64:')) {
     assert(providerListText.includes('旧密钥待迁移'), 'unmigrated legacy key must be visible as pending migration')
@@ -54,4 +55,12 @@ export function assertRelayProviderPersistence({
     const mode = statSync(path.join(userDataDir, 'providers.json')).mode & 0o777
     assert(mode === 0o600, `providers.json permissions must be 0600, got ${mode.toString(8)}`)
   }
+}
+
+export function providerRecords(document) {
+  if (Array.isArray(document)) return document
+  if (document?.schemaVersion === 1
+    && document.format === 'caogen.provider-store.v1'
+    && Array.isArray(document.entries)) return document.entries
+  throw new Error(`invalid Provider Store document: ${JSON.stringify(document)}`)
 }

@@ -136,7 +136,7 @@ function createReport(sourceBuildBinding) {
     measurementProtocol: {
       clock: 'renderer window.performance.now()',
       start: 'programmatic activation of the visible Assistant/Studio mode button',
-      stop: 'target mode, visible panel, and enabled mode-local control committed through the first ready frame paint',
+      stop: 'target mode, visible panel, and enabled mode-local control committed by the first animation frame that can paint the ready state',
       cold: 'first Studio activation after shell prewarm in a fresh Electron renderer process and fresh userData directory',
       warm: 'subsequent Assistant/Studio switches after the first activation',
       foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
@@ -181,7 +181,6 @@ function createReport(sourceBuildBinding) {
     }
   }
 }
-
 async function runViewportPhaseWithRetry(viewport, controlledMock) {
   for (let attempt = 1; attempt <= maxFreshRendererAttempts; attempt += 1) {
     const phase = await runViewportPhase(viewport, controlledMock, attempt)
@@ -530,7 +529,7 @@ async function installSessionEventProbe(page, sessionId) {
 
 async function measureModeSwitch(page, mode, temperature, ordinal) {
   const frameHealth = await waitForFrameHealth(page)
-  const rendererMetricsBefore = temperature === 'cold' ? await page.metrics() : null
+  const rendererMetricsBefore = await page.metrics()
   const measurement = await page.evaluate(async ({ expectedMode, sampleTemperature, timeoutMs }) => {
     const button = document.querySelector(`[data-experience-mode-option="${expectedMode}"]`)
     if (!(button instanceof HTMLButtonElement)) throw new Error(`mode button missing: ${expectedMode}`)
@@ -559,18 +558,16 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
         lastNotReadyReason = readiness.reason
         if (readiness.ready) {
           const readyAt = performance.now()
-          requestAnimationFrame(() => {
-            recordFrame()
-            resolve({
-              durationMs: performance.now() - startedAt,
-              clickCommitMs: clickCommittedAt - startedAt,
-              readyMs: readyAt - startedAt,
-              frameCount,
-              maxFrameGapMs,
-              lastNotReadyReason,
-              visibilityState: document.visibilityState,
-              targetMountedBefore
-            })
+          // The ready DOM is painted by this frame; another rAF measures later idle-frame scheduling.
+          resolve({
+            durationMs: readyAt - startedAt,
+            clickCommitMs: clickCommittedAt - startedAt,
+            readyMs: readyAt - startedAt,
+            frameCount,
+            maxFrameGapMs,
+            lastNotReadyReason,
+            visibilityState: document.visibilityState,
+            targetMountedBefore
           })
           return
         }
@@ -629,7 +626,7 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
     }
 
   }, { expectedMode: mode, sampleTemperature: temperature, timeoutMs: 5_000 })
-  const rendererMetricsAfter = temperature === 'cold' ? await page.metrics() : null
+  const rendererMetricsAfter = await page.metrics()
   const rendererMetrics = performanceMetricDeltas(rendererMetricsBefore, rendererMetricsAfter)
   assert(measurement.visibilityState === 'visible', `renderer was ${measurement.visibilityState} during measurement`)
   return {

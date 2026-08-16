@@ -29,6 +29,7 @@ import { ProjectWorkspaceError } from './errors'
 import { appendEvent, ProjectWorkspacePersistence } from './persistence'
 import type { ListOptions } from './repository-types'
 import { activeWorkspaceFrom, assertProject, goalFrom, workspaceFrom } from './state-access'
+import { assertProjectAuthorized, projectMutationActor } from './project-authorization'
 
 const GOAL_TRANSITIONS: Record<GoalStatus, ReadonlySet<GoalStatus>> = {
   draft: new Set(['planned', 'cancelled']),
@@ -50,7 +51,8 @@ export class GoalRepository {
     return this.persistence.mutate(options, ({ state, now }) => {
       this.persistence.assertCreateRevision(state, options)
       const projectId = requiredId(input.projectId, 'goal projectId')
-      activeWorkspaceFrom(state, projectId)
+      const project = activeWorkspaceFrom(state, projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       const id = optionalId(input.id, 'goal id') ?? randomUUID()
       if (state.goals.some((goal) => goal.id === id)) {
         throw new ProjectWorkspaceError('already_exists', `goal ${id} already exists`)
@@ -78,10 +80,11 @@ export class GoalRepository {
       .map(clone)
   }
 
-  async update(id: string, patch: GoalPatch, options?: MutationOptions | number): Promise<Goal> {
+  async update(id: string, patch: GoalPatch, options?: MutationOptions | number, capability: 'edit' | 'approve' = 'edit'): Promise<Goal> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const goal = goalFrom(state, id)
-      assertProject(state, goal.projectId)
+      const project = assertProject(state, goal.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), capability)
       this.persistence.assertEntityRevision(goal.revision, options, 'goal')
       if (goal.status === 'archived') throw new ProjectWorkspaceError('archived', `goal ${id} is archived`)
       applyGoalPatch(goal, patch, now)
@@ -92,12 +95,14 @@ export class GoalRepository {
   }
 
   async setAcceptance(id: string, result: AcceptanceResult, options?: MutationOptions | number): Promise<Goal> {
-    return this.update(id, { acceptanceResult: result }, options)
+    return this.update(id, { acceptanceResult: result }, options, 'approve')
   }
 
   async transition(id: string, status: GoalStatus, options?: MutationOptions | number): Promise<Goal> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const goal = goalFrom(state, id)
+      const project = assertProject(state, goal.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(goal.revision, options, 'goal')
       validateGoalTransition(goal, status)
       if (goal.status === status) return goal
@@ -113,6 +118,8 @@ export class GoalRepository {
   async archive(id: string, options?: MutationOptions | number): Promise<Goal> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const goal = goalFrom(state, id)
+      const project = assertProject(state, goal.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(goal.revision, options, 'goal')
       if (goal.status === 'archived') return goal
       if (!isTerminalGoal(goal.status)) {
@@ -131,6 +138,8 @@ export class GoalRepository {
   async restore(id: string, options?: MutationOptions | number): Promise<Goal> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const goal = goalFrom(state, id)
+      const project = assertProject(state, goal.projectId)
+      assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       this.persistence.assertEntityRevision(goal.revision, options, 'goal')
       if (goal.status !== 'archived') return goal
       goal.status = goal.archivedFromStatus ?? 'draft'

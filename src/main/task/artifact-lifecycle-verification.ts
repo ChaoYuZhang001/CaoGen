@@ -2,18 +2,22 @@ import type { WorkflowArtifactKind, WorkflowEventRecord } from '../../shared/wor
 import {
   artifactBlobPath,
   assertRegularContent,
+  isArtifactSourceProjectPath,
   pathExists
 } from './artifact-lifecycle-content'
 import type {
   ArtifactLifecycleRecord,
   ArtifactLifecycleVerification,
-  ArtifactPurgeRecord
+  ArtifactPurgeRecord,
+  ArtifactRetentionRevisionRecord
 } from './artifact-lifecycle-types'
 import {
   findArtifactLifecycle,
   findArtifactPurge,
+  readEffectiveArtifactRetention,
   readArtifactLifecycles,
   readArtifactPurges,
+  readArtifactRetentionRevisions,
   setupArtifactLifecycleSchema
 } from './artifact-lifecycle-store'
 import {
@@ -39,7 +43,9 @@ export async function verifyArtifactLifecycle(
   verifyWorkflowArtifactGraph(db)
   const records = readArtifactLifecycles(db)
   const purges = readArtifactPurges(db)
+  const retentionRevisions = readArtifactRetentionRevisions(db)
   for (const record of records) await verifyLifecycleRecord(db, rootDir, record)
+  verifyRetentionRevisions(db, records, retentionRevisions)
   for (const purge of purges) verifyPurgeRecord(db, purge)
   assertRequiredKinds(records, requiredKinds)
   const purgeIds = new Set(purges.map((record) => record.artifactId))
@@ -133,6 +139,33 @@ function verifyPurgeRecord(db: WorkflowLedgerDatabase, purge: ArtifactPurgeRecor
   }
   const event = findEventById(db, `workflow:artifact-purge:${purge.artifactId}`)
   assertEventMatches(event, purge, 'workflow.artifact.content.purged', purge.artifactId)
+  const effective = readEffectiveArtifactRetention(db, lifecycle)
+  if (effective.policy.mode !== 'expire' || effective.policy.retainUntil > purge.purgedAt) {
+    throw new WorkflowLedgerCorruptionError(`artifact purge ${purge.artifactId} did not use its latest effective retention policy`)
+  }
+}
+
+function verifyRetentionRevisions(
+  db: WorkflowLedgerDatabase,
+  lifecycles: readonly ArtifactLifecycleRecord[],
+  revisions: readonly ArtifactRetentionRevisionRecord[]
+): void {
+  const lifecycleById = new Map(lifecycles.map((record) => [record.artifactId, record] as const))
+  const latestById = new Map<string, number>()
+  for (const record of revisions) {
+    const lifecycle = lifecycleById.get(record.artifactId)
+    if (!lifecycle || lifecycle.projectId !== record.projectId) {
+      throw new WorkflowLedgerCorruptionError(`artifact retention ${record.artifactId} lacks lifecycle ownership`)
+    }
+    const expected = (latestById.get(record.artifactId) ?? 0) + 1
+    if (record.revision !== expected) {
+      throw new WorkflowLedgerCorruptionError(`artifact retention ${record.artifactId} revision chain is invalid`)
+    }
+    assertRetentionRevisionColumns(db, record)
+    const event = findEventById(db, `workflow:artifact-retention:${record.artifactId}:revision:${record.revision}`)
+    assertEventMatches(event, record, 'workflow.artifact.retention.revised', record.artifactId)
+    latestById.set(record.artifactId, record.revision)
+  }
 }
 
 async function verifyAvailableContent(rootDir: string, record: ArtifactLifecycleRecord): Promise<void> {
@@ -150,6 +183,10 @@ async function verifyPurgedContent(
 ): Promise<void> {
   if (purge.disposition === 'source_detached') {
     if (record.storageKind !== 'source_ref') throw new WorkflowLedgerCorruptionError('source detach disposition is invalid')
+    if (record.sourceRef && isArtifactSourceProjectPath(rootDir, record.projectId, record.sourceRef) &&
+        await pathExists(record.sourceRef)) {
+      throw new WorkflowLedgerCorruptionError(`purged portable artifact source still exists: ${record.artifactId}`)
+    }
     return
   }
   if (record.storageKind !== 'blob') throw new WorkflowLedgerCorruptionError('blob purge disposition is invalid')
@@ -209,6 +246,24 @@ function assertPurgeColumns(db: WorkflowLedgerDatabase, record: ArtifactPurgeRec
   }, `artifact purge ${record.artifactId}`)
 }
 
+function assertRetentionRevisionColumns(
+  db: WorkflowLedgerDatabase,
+  record: ArtifactRetentionRevisionRecord
+): void {
+  const row = selectRowWithParameters(
+    db,
+    'SELECT * FROM workflow_artifact_retention_revisions WHERE artifact_id = ? AND revision = ?',
+    [record.artifactId, record.revision],
+    `artifact retention ${record.artifactId}:${record.revision}`
+  )
+  assertColumns(row, {
+    artifact_id: record.artifactId, project_id: record.projectId, revision: record.revision,
+    retention_mode: record.policy.mode,
+    retain_until: record.policy.mode === 'expire' ? record.policy.retainUntil : null,
+    created_at: record.createdAt, payload: canonicalJson(record)
+  }, `artifact retention ${record.artifactId}:${record.revision}`)
+}
+
 function assertRequiredKinds(
   records: readonly ArtifactLifecycleRecord[],
   requiredKinds: readonly WorkflowArtifactKind[]
@@ -224,10 +279,19 @@ function requiredSourceRef(record: ArtifactLifecycleRecord): string {
 }
 
 function selectRow(db: WorkflowLedgerDatabase, sql: string, id: string): Record<string, unknown> {
+  return selectRowWithParameters(db, sql, [id], id)
+}
+
+function selectRowWithParameters(
+  db: WorkflowLedgerDatabase,
+  sql: string,
+  parameters: (string | number)[],
+  label: string
+): Record<string, unknown> {
   const stmt = db.prepare(sql)
   try {
-    stmt.bind([id])
-    if (!stmt.step()) throw new WorkflowLedgerCorruptionError(`artifact lifecycle row is missing: ${id}`)
+    stmt.bind(parameters)
+    if (!stmt.step()) throw new WorkflowLedgerCorruptionError(`artifact lifecycle row is missing: ${label}`)
     return stmt.getAsObject()
   } finally {
     stmt.free()

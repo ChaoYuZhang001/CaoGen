@@ -209,6 +209,12 @@ export const PROVIDER_PROFILE_TRANSLATIONS = {
   'providerProfileBackupReason_provider-create': { zh: '\u65b0\u589e Provider \u524d', en: 'Before provider creation' },
   'providerProfileBackupReason_provider-update': { zh: '\u7f16\u8f91 Provider \u524d', en: 'Before provider update' },
   'providerProfileBackupReason_provider-delete': { zh: '\u5220\u9664 Provider \u524d', en: 'Before provider deletion' },
+  providerProfileBackupDelete: { zh: '\u5220\u9664\u5907\u4efd', en: 'Delete backup' },
+  providerProfileBackupDeleteConfirm: {
+    zh: '\u6c38\u4e45\u5220\u9664 {time} \u7684 Provider \u914d\u7f6e\u5907\u4efd\uff1f\u8be5\u64cd\u4f5c\u4e0d\u4f1a\u5220\u9664\u5f53\u524d Provider\u3002',
+    en: 'Permanently delete the Provider configuration backup from {time}? This does not delete current Providers.'
+  },
+  providerProfileBackupDeleted: { zh: '\u5df2\u5220\u9664 Provider \u914d\u7f6e\u5907\u4efd\u3002', en: 'Provider configuration backup deleted.' },
   providerProfileRollbackConfirm: {
     zh: '回滚到 {time} 的 Provider 配置？当前配置会先自动备份。',
     en: 'Roll back to the provider configuration from {time}? The current configuration will be backed up first.'

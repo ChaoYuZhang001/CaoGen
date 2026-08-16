@@ -8,6 +8,7 @@ const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-skill-optimizer-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
+process.env.CAOGEN_USER_DATA_DIR = path.join(tempRoot, 'user-data')
 
 try {
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'tailwind-config'), { recursive: true })
@@ -47,9 +48,30 @@ try {
   const optimizer = await import(pathToFileURL(findCompiled(outDir, 'skill-optimizer.js')).href)
   const lifecycle = await import(pathToFileURL(findCompiled(outDir, 'learning-lifecycle.js')).href)
   const security = await import(pathToFileURL(findCompiled(outDir, 'learning-security.js')).href)
-  const learningRoot = path.join(projectRoot, '.caogen', 'learning-state')
+  const pluginRuntime = await import(pathToFileURL(findCompiled(outDir, 'plugin-runtime-authorization.js')).href)
+  const learningRoot = path.join(tempRoot, 'user-data', 'learning')
   const authority = (action) => security.createTrustedUserLearningDecision(`skill-optimizer-smoke:${action}`)
   const originalMarkdown = readFileSync(skillPath, 'utf8')
+
+  const unapproved = await optimizer.recordSkillFeedback({
+    projectRoot,
+    skillIdOrName: 'Tailwind Config Builder',
+    outcome: 'failed',
+    summary: 'Unapproved project Skills must not enter the optimizer.',
+    occurredAt: Date.UTC(2026, 6, 7, 0, 59, 0),
+    failureThreshold: 2
+  })
+  assertEqual(unapproved.status, 'not_found')
+  const legacyFeedbackPath = path.join(path.dirname(skillPath), 'skill-feedback.json')
+  writeFileSync(legacyFeedbackPath, JSON.stringify({
+    skillId: 'legacy-tailwind-config',
+    skillName: 'Tailwind Config Builder',
+    records: [],
+    appliedRecordIds: [],
+    draftedRecordIds: [],
+    learningDraftIds: {}
+  }, null, 2), 'utf8')
+  pluginRuntime.approveManagedLearningSkillRuntime(projectRoot, skillPath)
 
   const firstFailure = await optimizer.recordSkillFeedback({
     projectRoot,
@@ -112,8 +134,10 @@ try {
   assert(retriedCorrection.draftId !== correctionDraft.id, 'deleted optimization must be re-proposable as a new draft')
   assertEqual(readFileSync(skillPath, 'utf8'), originalMarkdown)
 
-  const feedbackPath = path.join(path.dirname(skillPath), 'skill-feedback.json')
-  assert(existsSync(feedbackPath), 'feedback store should be persisted next to project skill')
+  const feedbackPath = firstFailure.feedbackPath
+  assert(typeof feedbackPath === 'string' && existsSync(feedbackPath), 'feedback store should be persisted in Learning state')
+  assert(!feedbackPath.startsWith(path.dirname(skillPath)), 'new feedback writes must stay outside the approved Skill directory')
+  assert(existsSync(legacyFeedbackPath), 'legacy feedback sidecar should remain available for rollback')
   const feedback = JSON.parse(readFileSync(feedbackPath, 'utf8'))
   assert(feedback.records.length === 3, 'feedback store should keep all records')
 

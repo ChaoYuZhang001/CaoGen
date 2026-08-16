@@ -154,9 +154,9 @@ export function recommendDigitalWorkerTeam(context: TeamRecommendationContext): 
     fallbackRole = 'planner'
     selected.add(fallbackRole)
   }
-  if (selected.size >= 3) selected.add('planner')
   if (selected.has('developer')) selected.add('review-test')
   if (goal.riskLevel === 'high' || goal.riskLevel === 'critical') selected.add('review-test')
+  if (selected.size > 1) selected.add('planner')
 
   const selectedDefinitions = ROLE_DEFINITIONS.filter((definition) => selected.has(definition.role)).slice(0, 8)
   const dataScope = recommendationDataScope(context.project, goal)

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { FileScan, RotateCcw, X } from 'lucide-react'
+import { FileScan, RotateCcw, Trash2, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import CodexNativeConfigWorkspace from './CodexNativeConfigWorkspace'
@@ -15,7 +15,7 @@ import type {
   ProviderView
 } from '../../../../shared/types'
 
-type ProfileBusyState = 'import' | 'export' | 'apply' | 'backup-preview' | 'rollback' | 'native-scan' | 'native-apply' | 'native-rollback' | ''
+type ProfileBusyState = 'import' | 'export' | 'apply' | 'backup-preview' | 'backup-delete' | 'rollback' | 'native-scan' | 'native-apply' | 'native-rollback' | ''
 
 interface Props {
   providers: ProviderView[]
@@ -72,67 +72,19 @@ function useProviderProfileManager(providers: ProviderView[]) {
   const [decisions, setDecisions] = useState<Record<string, ProviderProfileImportAction>>({})
   const [backups, setBackups] = useState<ProviderProfileBackupView[]>([])
   const [backupPreview, setBackupPreview] = useState<ProviderProfileBackupPreview | null>(null)
-  const [nativePreview, setNativePreview] = useState<ProviderNativeImportPreview | null>(null)
-  const [nativeAction, setNativeAction] = useState<ProviderProfileImportAction>('skip')
-  const [nativeBackups, setNativeBackups] = useState<ProviderNativeImportBackupView[]>([])
   const [busy, setBusy] = useState<ProfileBusyState>('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const native = useNativeProviderImports({
+    providers, refreshProviders, t, setBusy, setMessage, setError,
+    clearProfilePreview: () => { setPreview(null); setDecisions({}) }
+  })
   const selectedCounts = useMemo(() => importActionCounts(preview, decisions), [preview, decisions])
 
-  useEffect(() => { void refreshBackups(); void refreshNativeBackups() }, [providers])
+  useEffect(() => { void refreshBackups() }, [providers])
 
   async function refreshBackups(): Promise<void> {
     setBackups(await window.agentDesk.listProviderProfileBackups().catch(() => []))
-  }
-
-  async function refreshNativeBackups(): Promise<void> {
-    setNativeBackups(await window.agentDesk.listProviderNativeImportBackups().catch(() => []))
-  }
-
-  async function scanCodex(): Promise<void> {
-    setBusy('native-scan'); setError(''); setMessage('')
-    try {
-      const next = await window.agentDesk.previewCodexNativeProviderImport()
-      setNativePreview(next)
-      setNativeAction(next.defaultAction)
-      setPreview(null); setDecisions({})
-    } catch (caught) {
-      setError(errorMessage(caught))
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function applyNativeImport(): Promise<void> {
-    if (!nativePreview || nativeAction === 'skip') return
-    setBusy('native-apply'); setError(''); setMessage('')
-    try {
-      const result = await window.agentDesk.applyCodexNativeProviderImport(nativePreview.previewId, nativeAction)
-      setNativePreview(null); setNativeAction('skip')
-      await refreshProviders()
-      await refreshNativeBackups()
-      setMessage(t('providerNativeCodexApplied', { name: result.provider.name }))
-    } catch (caught) {
-      setError(errorMessage(caught))
-    } finally {
-      setBusy('')
-    }
-  }
-
-  async function rollbackNativeImport(backup: ProviderNativeImportBackupView): Promise<void> {
-    if (!window.confirm(t('providerNativeCodexRollbackConfirm', { name: backup.providerName }))) return
-    setBusy('native-rollback'); setError(''); setMessage('')
-    try {
-      await window.agentDesk.rollbackProviderNativeImportBackup(backup.id)
-      await refreshProviders()
-      await refreshNativeBackups()
-      setMessage(t('providerNativeCodexRolledBack', { name: backup.providerName }))
-    } catch (caught) {
-      setError(errorMessage(caught))
-    } finally {
-      setBusy('')
-    }
   }
 
   async function exportProfile(): Promise<void> {
@@ -215,6 +167,21 @@ function useProviderProfileManager(providers: ProviderView[]) {
     }
   }
 
+  async function deleteBackup(backup: ProviderProfileBackupView): Promise<void> {
+    if (!window.confirm(t('providerProfileBackupDeleteConfirm', { time: formattedTime(backup.createdAt) }))) return
+    setBusy('backup-delete'); setError(''); setMessage('')
+    try {
+      await window.agentDesk.deleteProviderProfileBackup(backup.id)
+      setBackupPreview((current) => current?.backup.id === backup.id ? null : current)
+      setMessage(t('providerProfileBackupDeleted'))
+      await refreshBackups()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+
   function closePreview(): void {
     setPreview(null)
     setDecisions({})
@@ -224,16 +191,73 @@ function useProviderProfileManager(providers: ProviderView[]) {
     setBackupPreview(null)
   }
 
-  function closeNativePreview(): void {
-    setNativePreview(null)
-    setNativeAction('skip')
-  }
-
   return {
-    preview, decisions, backups, backupPreview, nativePreview, nativeAction, nativeBackups, busy, message, error, selectedCounts,
-    setDecisions, setNativeAction, exportProfile, chooseImport, applyImport, previewBackup, rollback, closePreview, closeBackupPreview,
-    scanCodex, applyNativeImport, rollbackNativeImport, closeNativePreview
+    preview, decisions, backups, backupPreview, busy, message, error, selectedCounts,
+    setDecisions, exportProfile, chooseImport, applyImport, previewBackup, rollback, deleteBackup, closePreview, closeBackupPreview,
+    ...native
   }
+}
+
+type NativeProfileArgs = {
+  providers: ProviderView[]
+  refreshProviders: () => Promise<void>
+  t: ReturnType<typeof useT>
+  setBusy: (value: ProfileBusyState) => void
+  setMessage: (value: string) => void
+  setError: (value: string) => void
+  clearProfilePreview: () => void
+}
+
+function useNativeProviderImports({ providers, refreshProviders, t, setBusy, setMessage, setError, clearProfilePreview }: NativeProfileArgs) {
+  const [nativePreview, setNativePreview] = useState<ProviderNativeImportPreview | null>(null)
+  const [nativeAction, setNativeAction] = useState<ProviderProfileImportAction>('skip')
+  const [nativeBackups, setNativeBackups] = useState<ProviderNativeImportBackupView[]>([])
+  const refreshNativeBackups = async (): Promise<void> => {
+    setNativeBackups(await window.agentDesk.listProviderNativeImportBackups().catch(() => []))
+  }
+  useEffect(() => { void refreshNativeBackups() }, [providers])
+  const prepare = (nextBusy: ProfileBusyState): void => { setBusy(nextBusy); setError(''); setMessage('') }
+  async function scanCodex(): Promise<void> {
+    prepare('native-scan')
+    try {
+      const next = await window.agentDesk.previewCodexNativeProviderImport()
+      setNativePreview(next); setNativeAction(next.defaultAction)
+      clearProfilePreview()
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+  async function applyNativeImport(): Promise<void> {
+    if (!nativePreview || nativeAction === 'skip') return
+    prepare('native-apply')
+    try {
+      const result = await window.agentDesk.applyCodexNativeProviderImport(nativePreview.previewId, nativeAction)
+      setNativePreview(null); setNativeAction('skip')
+      await refreshProviders(); await refreshNativeBackups()
+      setMessage(t('providerNativeCodexApplied', { name: result.provider.name }))
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+  async function rollbackNativeImport(backup: ProviderNativeImportBackupView): Promise<void> {
+    if (!window.confirm(t('providerNativeCodexRollbackConfirm', { name: backup.providerName }))) return
+    prepare('native-rollback')
+    try {
+      await window.agentDesk.rollbackProviderNativeImportBackup(backup.id)
+      await refreshProviders(); await refreshNativeBackups()
+      setMessage(t('providerNativeCodexRolledBack', { name: backup.providerName }))
+    } catch (caught) {
+      setError(errorMessage(caught))
+    } finally {
+      setBusy('')
+    }
+  }
+  const closeNativePreview = (): void => { setNativePreview(null); setNativeAction('skip') }
+  return { nativePreview, nativeAction, nativeBackups, setNativeAction, scanCodex, applyNativeImport, rollbackNativeImport, closeNativePreview }
 }
 
 type ProfileController = ReturnType<typeof useProviderProfileManager>
@@ -463,6 +487,15 @@ function ProviderProfileBackups({ profile }: { profile: ProfileController }): Re
           </div>
           <button className="btn btn-ghost btn-sm" disabled={Boolean(profile.busy)} onClick={() => void profile.previewBackup(backup)}>
             {t('providerProfilePreviewVersion')}
+          </button>
+          <button
+            className="btn btn-icon btn-sm"
+            aria-label={t('providerProfileBackupDelete')}
+            title={t('providerProfileBackupDelete')}
+            disabled={Boolean(profile.busy)}
+            onClick={() => void profile.deleteBackup(backup)}
+          >
+            <Trash2 size={14} aria-hidden="true" />
           </button>
         </div>
       ))}

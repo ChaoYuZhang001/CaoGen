@@ -87,6 +87,15 @@ export interface StudioResultArtifactLocation {
   mediaType?: string
 }
 
+export type StudioResultDeliveryCategory = 'office' | 'code' | 'media' | 'report' | 'package' | 'other'
+export type StudioResultArtifactDeliveryStatus =
+  | 'ready'
+  | 'verification_pending'
+  | 'evidence_missing'
+  | 'failed'
+  | 'unavailable'
+  | 'superseded'
+
 export interface StudioResultArtifact {
   id: string
   runId?: string
@@ -96,7 +105,12 @@ export interface StudioResultArtifact {
   version: number
   digest: string
   mediaType?: string
+  deliveryCategory: StudioResultDeliveryCategory
+  deliveryStatus: StudioResultArtifactDeliveryStatus
   supersedesId?: string
+  /** Current deliverable leaf versions for this Artifact's retained lineage. */
+  currentArtifactIds: string[]
+  deliveryScope: 'current' | 'historical'
   createdAt: number
   updatedAt: number
   locations: StudioResultArtifactLocation[]
@@ -125,6 +139,7 @@ export interface StudioResultAcceptance {
   goalId?: string
   workItemId?: string
   status: WorkflowAcceptanceStatus
+  deliveryScope?: 'blocking' | 'historical'
   criteria: string[]
   coveredCriteria: number
   evidenceRefs: string[]
@@ -133,6 +148,8 @@ export interface StudioResultAcceptance {
   waiverReason?: string
   waivedBy?: string
   notes?: string
+  repairWorkItemId?: string
+  repairWorkItemStatus?: WorkItemStatus
   revision: number
   updatedAt: number
 }
@@ -256,7 +273,11 @@ export interface StudioResultCostSummary {
 export interface StudioResultSummary {
   runs: number
   artifacts: number
+  currentArtifacts: number
+  historicalArtifacts: number
   availableArtifacts: number
+  readyArtifacts: number
+  attentionArtifacts: number
   evidence: number
   acceptances: number
   passedAcceptances: number
@@ -318,6 +339,9 @@ export interface StudioResultSaveResult {
   canceled: boolean
   filePath?: string
   exportDigest?: string
+  workflowArtifactId?: string
+  workflowEvidenceId?: string
+  workflowAcceptanceId?: string
 }
 
 export interface StudioResultApi {

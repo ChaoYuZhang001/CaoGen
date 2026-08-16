@@ -1,14 +1,14 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { ExperienceMode } from '../../store/experience-mode'
+import type { SessionExperienceMode } from '../../store/experience-mode'
 
-const ExperienceProjectionContext = createContext<ExperienceMode>('assistant')
+const ExperienceProjectionContext = createContext<SessionExperienceMode>('assistant')
 
 export function ExperienceProjectionProvider({
   children,
   mode
 }: {
   children: ReactNode
-  mode: ExperienceMode
+  mode: SessionExperienceMode
 }): React.JSX.Element {
   return (
     <ExperienceProjectionContext.Provider value={mode}>
@@ -17,6 +17,6 @@ export function ExperienceProjectionProvider({
   )
 }
 
-export function useExperienceProjection(): ExperienceMode {
+export function useExperienceProjection(): SessionExperienceMode {
   return useContext(ExperienceProjectionContext)
 }

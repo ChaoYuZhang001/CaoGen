@@ -11,6 +11,7 @@ import type {
   ConnectorAuthorizationSubject,
   ConnectorDataDirection,
   ConnectorResourceUsage,
+  ProjectConnectorCatalogEntry,
   ProjectResource,
   ProjectResourceEgressPolicy,
   ProjectResourceInput,
@@ -67,10 +68,12 @@ export interface ProjectResourceDraft {
   dataClass: OutboundDataClass
   egressPolicy: ProjectResourceEgressPolicy
   connectorUsage: ConnectorResourceUsage[]
+  connectorId: string
   connectorCapabilities: string
   connectorDataDirection: ConnectorDataDirection
   connectorAuthorizationSubject: ConnectorAuthorizationSubject
   connectorPrincipalId: string
+  connectorCredentialRef: string
   connectorScopes: string
   connectorVersion: string
   connectorReconciliation: 'queryable' | 'manual_only'
@@ -129,7 +132,7 @@ export const TEXT = {
   startGoalTask: '开始',
   startingGoalTask: '启动中...',
   goalTaskPlaceholder: '想完成什么？',
-  goalTaskStarted: '任务已启动',
+  goalTaskStarted: '工作流草案已生成，待审批后执行',
   cancel: '取消',
   closeForm: '关闭创建表单',
   projectName: '项目名称',
@@ -269,6 +272,12 @@ export const TEXT = {
   projectUpdated: '项目信息已更新',
   resourceAdded: '资源已关联',
   resourceRemoved: '资源已移除',
+  connectorRefreshRequested: '已请求连接器刷新',
+  connectorCachePurged: '连接器缓存已清理',
+  connectorAuthorizationRestored: '连接器授权已启用',
+  connectorAuthorizationRevoked: '连接器授权已撤销',
+  connectorEnabled: '连接器已启用',
+  connectorDisabled: '连接器已停用',
   archiveProject: '归档',
   restoreProject: '恢复',
   exportManifest: '导出项目',
@@ -311,6 +320,35 @@ export const PROJECT_STATUS_LABELS: Record<ProjectWorkspaceStatus, string> = {
 }
 
 export const COLLAB_TEXT = {
+  collaborationInbox: '协作待办',
+  inboxMember: '待办成员',
+  inboxScope: '待办范围',
+  allMembers: '全部成员',
+  unread: '未读',
+  all: '全部',
+  read: '已读',
+  handled: '已处理',
+  noUnreadInbox: '没有未读协作待办',
+  noInbox: '没有协作待办',
+  openWorkItem: '定位工作项',
+  markRead: '标记已读',
+  markHandled: '标记已处理',
+  inboxAssignment: '任务分配',
+  inboxMention: '评论提及',
+  inboxApproval: '共享审批',
+  members: '项目成员',
+  invitations: '项目邀请',
+  principalId: '成员标识',
+  invitationToken: '邀请码',
+  createInvitation: '创建邀请',
+  acceptInvitation: '接受邀请',
+  copyInvitation: '复制邀请码',
+  invitationCopied: '邀请码已复制',
+  invitationAccepted: '邀请已接受，成员权限已生效',
+  newMember: '添加成员',
+  noProjectMembers: '暂无项目成员',
+  chooseMember: '选择项目成员',
+  revoke: '撤销',
   squads: '协作小组',
   cancel: '取消',
   newSquad: '新建小组',
@@ -342,7 +380,21 @@ export const COLLAB_TEXT = {
   delete: '删除',
   writeComment: '写评论',
   mentions: '提及成员',
-  send: '发送'
+  send: '发送',
+  sharedApprovals: '共享审批',
+  newApproval: '发起审批',
+  approvalTitle: '审批事项',
+  quorum: '通过人数',
+  quorumProgress: '已通过 {approved} / {required}',
+  noApprovals: '暂无共享审批',
+  chooseApprover: '选择审批人',
+  approve: '通过',
+  reject: '拒绝',
+  pending: '待决定',
+  approved: '已通过',
+  rejected: '已拒绝',
+  expired: '已过期',
+  revoked: '已撤销'
 } as const
 
 export const PROJECT_RESOURCE_OPTIONS: ReadonlyArray<{ value: ResourceDraftKind; label: string }> = [
@@ -591,12 +643,14 @@ export function resourceInputFromDraft(draft: ProjectResourceDraft): ProjectReso
       ...policy,
       connector: {
         schemaVersion: 1,
+        connectorId: draft.connectorId.trim() || 'generic',
         usage: draft.connectorUsage,
         capabilities: splitCommaSeparated(draft.connectorCapabilities),
         dataDirection: draft.connectorDataDirection,
         authorization: {
           subject: draft.connectorAuthorizationSubject,
           principalId: draft.connectorPrincipalId.trim(),
+          ...(optionalText(draft.connectorCredentialRef) === undefined ? {} : { credentialRef: optionalText(draft.connectorCredentialRef) }),
           scopes: splitCommaSeparated(draft.connectorScopes),
           status: 'active'
         },
@@ -607,6 +661,10 @@ export function resourceInputFromDraft(draft: ProjectResourceDraft): ProjectReso
     }
   }
   return { kind: draft.kind, label, path: location, ...policy }
+}
+
+export function connectorCatalogEntry(id: string, catalog: readonly ProjectConnectorCatalogEntry[]): ProjectConnectorCatalogEntry {
+  return catalog.find((entry) => entry.id === id) ?? catalog[catalog.length - 1]
 }
 
 function splitCommaSeparated(value: string): string[] {

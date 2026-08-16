@@ -36,6 +36,10 @@ export interface ProjectRefactorApplyResult {
   kind: 'typescript-rename'
   files: string[]
   appliedAt: string
+  workflowArtifactId?: string
+  workflowEvidenceId?: string
+  workflowAcceptanceId?: string
+  evidenceError?: string
 }
 
 export interface ProjectRefactorRollbackResult {
@@ -43,6 +47,10 @@ export interface ProjectRefactorRollbackResult {
   operationId: string
   files: string[]
   rolledBackAt: string
+  workflowArtifactId?: string
+  workflowEvidenceId?: string
+  workflowAcceptanceId?: string
+  evidenceError?: string
 }
 
 export interface ProjectRefactorApi {

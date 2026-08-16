@@ -46,7 +46,7 @@ export default function MigrationManager({ defaultDirectory }: { defaultDirector
       })
       setMessage(result.message)
       setBackupId(result.backupId ?? '')
-      if (result.ok && result.status === 'applied') await refreshScan(scan.cwd)
+      if (result.ok && result.status === 'applied') refreshAfterMutation(scan.cwd)
     } catch (error) {
       setMessage(errorText(error))
     } finally {
@@ -62,7 +62,7 @@ export default function MigrationManager({ defaultDirectory }: { defaultDirector
       setMessage(result.message)
       if (result.ok) {
         setBackupId('')
-        await refreshScan(scan?.cwd)
+        refreshAfterMutation(scan?.cwd)
       }
     } catch (error) {
       setMessage(errorText(error))
@@ -75,6 +75,10 @@ export default function MigrationManager({ defaultDirectory }: { defaultDirector
     const refreshed = await window.agentDesk.scanMigration(cwd)
     setScan(refreshed)
     setPicked(recommendedIds(refreshed))
+  }
+
+  const refreshAfterMutation = (cwd?: string): void => {
+    void refreshScan(cwd).catch((error) => setMessage(errorText(error)))
   }
 
   const toggle = (assetId: string): void => {
@@ -223,6 +227,9 @@ function kindLabel(asset: MigrationAsset, t: ReturnType<typeof useT>): string {
   if (asset.kind === 'prompt') return 'Prompt'
   if (asset.kind === 'usage') return t('providerUsageTitle')
   if (asset.kind === 'hook') return 'Hook'
+  if (asset.kind === 'memory') return t('migrateKindMemory')
+  if (asset.kind === 'routine') return t('migrateKindRoutine')
+  if (asset.kind === 'channel') return t('migrateKindChannel')
   return t('migrateKindConfig')
 }
 

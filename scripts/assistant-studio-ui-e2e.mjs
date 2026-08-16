@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
+import { verifyMigrationManager } from './lib/assistant-studio-migration-manager.mjs'
+import { verifyRevokedPlanGates, waitForApprovedPlanCompletion } from './lib/assistant-studio-task-plan-e2e.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -23,10 +25,9 @@ const migrationCanary = 'secret-for-smoke-migration-ui-canary'
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
-const electronBin = process.platform === 'win32'
-  ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
-  : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const electronBin = require('electron')
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
+const workspaceOnly = process.env.CAOGEN_THREE_WORKSPACE_ONLY === '1'
 const softwareWebglArgs = ciSoftwareWebgl
   ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
   : []
@@ -41,9 +42,25 @@ mkdirSync(userDataDir, { recursive: true })
 mkdirSync(projectDir, { recursive: true })
 mkdirSync(path.join(projectDir, '.cursor'), { recursive: true })
 mkdirSync(path.join(migrationHome, '.codex'), { recursive: true })
+mkdirSync(path.join(migrationHome, '.openclaw', 'cron'), { recursive: true })
 writeFileSync(path.join(projectDir, 'README.md'), '# Assistant Studio UI required E2E\n', 'utf8')
+writeFileSync(path.join(projectDir, 'MEMORY.md'), '# Imported memory\n\nKeep acceptance evidence concise.\n', 'utf8')
 writeFileSync(path.join(projectDir, '.cursorrules'), 'Use the project fixture rule.\n', 'utf8')
 writeFileSync(path.join(migrationHome, '.codex', 'AGENTS.md'), 'Use the user fixture rule.\n', 'utf8')
+writeFileSync(path.join(migrationHome, '.openclaw', 'openclaw.json'), `{
+  channels: {
+    telegram: {
+      enabled: true,
+      accounts: { primary: { opaqueFixtureValue: '${migrationCanary}' } },
+      channels: { private: { id: '${migrationCanary}', name: '${migrationCanary}' } },
+    },
+  },
+}\n`, 'utf8')
+writeFileSync(path.join(migrationHome, '.openclaw', 'cron', 'jobs.json'), `${JSON.stringify({ jobs: [{
+  id: 'ui-routine',
+  schedule: { kind: 'cron', expr: '0 9 * * *' },
+  payload: { kind: 'agentTurn', message: 'Prepare the project acceptance summary.' }
+}] }, null, 2)}\n`, 'utf8')
 writeFileSync(path.join(projectDir, '.cursor', 'mcp.json'), JSON.stringify({
   mcpServers: {
     privateFixture: {
@@ -77,7 +94,11 @@ const report = {
   warnings: [],
   coverage: {
     verified: [
-      'pointer and keyboard Assistant/Studio switching',
+      'pointer and keyboard Assistant/Project/Video switching',
+      'independent Video Studio surface outside Project Workspace',
+      'global CaoGen Control Room roundtrip from all workspaces',
+      'real ProjectWorkspace, VideoProduction and zero-cost Mock MediaJob control-room projection',
+      'Assistant/Project/Video default control-room views and return-mode retention',
       'unique aria-pressed state',
       'session identity/count/transcript immutability while switching',
       'Welcome and Composer draft retention',
@@ -85,7 +106,7 @@ const report = {
       'View/Plan/Execute strategy selection, persistence, and active-run switch rejection',
       'immutable plan version creation, restart persistence, exact approval, and approve-to-execute gate',
       'unassigned plan approval remains conversation-only and creates no hidden Project',
-      'redacted low-friction Codex migration preview, no-project conversation entry, responsive layout, safe defaults, apply, and rollback',
+      'redacted migration preview, no-project entry, Memory draft, disabled Routine, Channel index, responsive safe defaults, apply, and rollback',
       'responsive horizontal-overflow and basic overlay stacking'
     ],
     explicitlyNotVerified: [
@@ -97,7 +118,12 @@ const report = {
 
 const mock = await startOpenAiMock()
 const remotePort = await findFreePort(9920)
-const electron = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...softwareWebglArgs, mainEntry], {
+const electron = spawn(electronBin, [
+  ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+  `--remote-debugging-port=${remotePort}`,
+  ...softwareWebglArgs,
+  mainEntry
+], {
   cwd: repoRoot,
   env: {
     ...process.env,
@@ -148,13 +174,143 @@ try {
     await clickTaskStrategy(page, 'execute')
   })
 
-  await check('pointer switching is bidirectional with one pressed option', async () => {
+  await check('three workspace entries switch with one pressed option', async () => {
     await assertMode(page, 'assistant')
     await enterText(page, '.welcome-composer-input', 'welcome draft survives projection changes', 'Welcome draft')
     await clickMode(page, 'studio')
+    await clickMode(page, 'video')
+    await page.waitForSelector('[data-video-studio-view]', { visible: true, timeout: 10_000 })
+    await page.waitForFunction(() => Boolean(
+      document.querySelector('.video-studio-shell-empty') || document.querySelector('.video-studio-panel')
+    ), { timeout: 10_000 })
     await clickMode(page, 'assistant')
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
     assert(value === 'welcome draft survives projection changes', `Welcome draft changed: ${value}`)
+  })
+
+  await check('Project and Video entries clear stale new-session navigation', async () => {
+    await clickMode(page, 'assistant')
+    await page.click('.sidebar-new')
+    await page.waitForFunction(() => document.querySelector('.sidebar-new')?.classList.contains('is-active') === true)
+
+    await clickMode(page, 'studio')
+    const projectState = await page.evaluate(() => ({
+      surface: document.querySelector('[data-experience-mode="studio"]')?.getAttribute('data-studio-surface'),
+      workspaceSelected: document.querySelector('[data-studio-projection-tab="workspace"]')?.getAttribute('aria-selected'),
+      newSessionActive: document.querySelector('.sidebar-new')?.classList.contains('is-active') === true
+    }))
+    assert(projectState.surface === 'workspace', `Project entry did not open workspace: ${JSON.stringify(projectState)}`)
+    assert(projectState.workspaceSelected === 'true', `Project workspace tab is not selected: ${JSON.stringify(projectState)}`)
+    assert(!projectState.newSessionActive, `Project entry retained stale new-session state: ${JSON.stringify(projectState)}`)
+
+    await clickMode(page, 'assistant')
+    await page.click('.sidebar-new')
+    await page.waitForFunction(() => document.querySelector('.sidebar-new')?.classList.contains('is-active') === true)
+    await clickMode(page, 'video')
+    const videoState = await page.evaluate(() => ({
+      videoVisible: Boolean(document.querySelector('.experience-video:not([hidden]) [data-video-studio-view]')),
+      newSessionActive: document.querySelector('.sidebar-new')?.classList.contains('is-active') === true
+    }))
+    assert(videoState.videoVisible, `Video entry did not open Video Studio: ${JSON.stringify(videoState)}`)
+    assert(!videoState.newSessionActive, `Video entry retained stale new-session state: ${JSON.stringify(videoState)}`)
+    await clickMode(page, 'assistant')
+  })
+
+  await check('seed a real Project and zero-cost Mock MediaJob for the shared control room', async () => {
+    const seeded = await page.evaluate(async () => {
+      const project = await window.agentDesk.createProjectWorkspace({
+        id: 'assistant-studio-control-room-project',
+        name: 'Control Room Video Project',
+        kind: 'software'
+      })
+      const production = await window.agentDesk.createVideoProduction({
+        id: 'assistant-studio-control-room-production',
+        projectId: project.id,
+        title: 'Control Room Production',
+        script: 'A short local control-room projection fixture.',
+        autoStructure: false
+      })
+      const job = await window.agentDesk.submitMediaJob({
+        projectId: project.id,
+        productionId: production.id,
+        capability: 'video',
+        operation: 'video.text-to-video',
+        idempotencyKey: 'assistant-studio-control-room-media-job',
+        prompt: 'Local mock video task for CaoGen Control Room.',
+        mockScenario: 'success'
+      })
+      return { project, production, job }
+    })
+    assert(seeded.project?.id, `Project fixture missing: ${JSON.stringify(seeded)}`)
+    assert(seeded.production?.id, `VideoProduction fixture missing: ${JSON.stringify(seeded)}`)
+    assert(seeded.job?.status === 'submitting', `Mock MediaJob is not active: ${JSON.stringify(seeded.job)}`)
+    assert(seeded.job?.cost?.estimatedUsd === 0, `Mock MediaJob is not zero-cost: ${JSON.stringify(seeded.job?.cost)}`)
+  })
+
+  await check('Video Studio is independent and CaoGen Control Room is shared without losing entry state', async () => {
+    await clickMode(page, 'video')
+    const videoState = await page.evaluate(() => ({
+      videoVisible: Boolean(document.querySelector('.experience-video:not([hidden]) [data-video-studio-view]')),
+      projectContainsVideo: Boolean(document.querySelector('.experience-workspace .video-studio-panel'))
+    }))
+    assert(videoState.videoVisible, `Video Studio surface is not visible: ${JSON.stringify(videoState)}`)
+    assert(!videoState.projectContainsVideo, `Project Workspace still contains Video Studio: ${JSON.stringify(videoState)}`)
+
+    for (const [mode, expectedView] of [['assistant', 'assistant'], ['studio', 'project'], ['video', 'video']]) {
+      await clickMode(page, mode)
+      await page.click('.sidebar-office')
+      await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
+      const officeState = await waitForValue(
+        () => page.evaluate(() => {
+          const wrap = document.querySelector('.office-canvas-wrap')
+          const pressed = [...document.querySelectorAll('[data-office-business-view-option][aria-pressed="true"]')]
+            .map((button) => button.getAttribute('data-office-business-view-option'))
+          return Promise.resolve(window.agentDesk.getMediaStudio()).then((directMedia) => ({
+            businessView: wrap?.getAttribute('data-office-business-view'),
+            returnMode: wrap?.getAttribute('data-office-return-mode'),
+            cameraPreset: wrap?.getAttribute('data-office-active-camera-preset'),
+            selectedFacility: wrap?.getAttribute('data-office-selected-facility'),
+            facilityPanel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel'),
+            projects: Number(wrap?.getAttribute('data-office-projects') ?? -1),
+            productions: Number(wrap?.getAttribute('data-office-video-productions') ?? -1),
+            mediaJobs: Number(wrap?.getAttribute('data-office-media-jobs') ?? -1),
+            runningMediaJobs: Number(wrap?.getAttribute('data-office-running-media-jobs') ?? -1),
+            mediaEstimatedCostUsd: Number(wrap?.getAttribute('data-office-media-estimated-cost-usd') ?? -1),
+            mediaActualCostUsd: Number(wrap?.getAttribute('data-office-media-actual-cost-usd') ?? -1),
+            directMediaRevision: directMedia.revision,
+            directMediaProductions: directMedia.productions.length,
+            directMediaJobs: directMedia.jobs.length,
+            pressed
+          }))
+        }),
+        (value) => value.businessView === expectedView && value.cameraPreset === 'facilities' &&
+          value.selectedFacility === expectedView && value.facilityPanel === expectedView &&
+          value.projects >= 1 && value.productions >= 1 && value.mediaJobs >= 1,
+        20_000,
+        `waiting for ${mode} CaoGen Control Room projection`
+      )
+      assert(officeState.returnMode === mode, `${mode} return mode changed: ${JSON.stringify(officeState)}`)
+      assert(officeState.pressed.length === 1 && officeState.pressed[0] === expectedView, `ambiguous business view: ${JSON.stringify(officeState)}`)
+      assert(officeState.cameraPreset === 'facilities' && officeState.selectedFacility === expectedView, `entry did not focus its 3D business zone: ${JSON.stringify(officeState)}`)
+      assert(officeState.runningMediaJobs >= 1, `active Mock MediaJob missing: ${JSON.stringify(officeState)}`)
+      assert(officeState.mediaEstimatedCostUsd === 0 && officeState.mediaActualCostUsd === 0, `Mock cost projection changed: ${JSON.stringify(officeState)}`)
+      await page.waitForFunction(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-scene-assets-ready') === '1')
+      await sleep(1_200)
+      await captureScreenshot(page, `control-room-focus-${mode}`)
+      await page.click('[data-office-business-view-option="all"]')
+      await page.waitForFunction(() => {
+        const wrap = document.querySelector('.office-canvas-wrap')
+        return wrap?.getAttribute('data-office-business-view') === 'all' &&
+          wrap?.getAttribute('data-office-active-camera-preset') === 'overview' &&
+          wrap?.getAttribute('data-office-selected-facility') === ''
+      })
+      await sleep(1_200)
+      await captureScreenshot(page, `control-room-overview-from-${mode}`)
+      await page.click('.office-actions .btn-primary')
+      await page.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
+      await assertMode(page, mode)
+    }
+    await clickMode(page, 'assistant')
   })
 
   await check('Space and Enter switch modes without losing focus or Welcome draft', async () => {
@@ -167,6 +323,38 @@ try {
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
     assert(value === 'welcome draft survives projection changes', `Welcome draft changed after keyboard use: ${value}`)
   })
+
+  if (workspaceOnly) {
+    await check('three workspace entries remain usable on desktop and mobile', async () => {
+      for (const viewport of [
+        { width: 1320, height: 860 },
+        { width: 760, height: 700 },
+        { width: 360, height: 520 }
+      ]) {
+        await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
+        await sleep(150)
+        for (const mode of ['assistant', 'studio', 'video']) {
+          await clickMode(page, mode)
+          if (mode === 'video') {
+            await page.waitForFunction(() => Boolean(
+              document.querySelector('.video-studio-shell-empty') || document.querySelector('.video-studio-panel')
+            ), { timeout: 10_000 })
+          }
+          await sleep(180)
+          const measurement = await readOverflow(page, mode)
+          report.viewports.push(measurement)
+          assert(measurement.documentOverflow <= 1, `${mode} ${viewport.width}: document overflow ${measurement.documentOverflow}px`)
+          assert(measurement.appOverflow <= 1, `${mode} ${viewport.width}: app overflow ${measurement.appOverflow}px`)
+          assert(measurement.mainOverflow <= 1, `${mode} ${viewport.width}: main overflow ${measurement.mainOverflow}px`)
+          assert(measurement.switcherInsideViewport, `${mode} ${viewport.width}: mode switcher outside viewport`)
+          assert(measurement.visibleOffenders.length === 0, `${mode} ${viewport.width}: ${JSON.stringify(measurement.visibleOffenders)}`)
+          await captureScreenshot(page, `workspace-${viewport.width}x${viewport.height}-${mode}`)
+        }
+      }
+    })
+  }
+
+  if (!workspaceOnly) {
 
   await check('seed one real session with a completed transcript', async () => {
     session = await page.evaluate(async ({ cwd, baseUrl }) => {
@@ -210,7 +398,17 @@ try {
   await page.waitForSelector('.composer-input', { visible: true, timeout: 15_000 })
 
   await check('migration manager supports conversation entry, responsive safe defaults, apply, and rollback', async () => {
-    await verifyMigrationManager(page, projectDir, migrationCanary)
+    await verifyMigrationManager({
+      targetPage: page,
+      targetProject: projectDir,
+      secretCanary: migrationCanary,
+      userDataDir,
+      assert,
+      sleep,
+      setFieldValue,
+      captureScreenshot,
+      waitForValue
+    })
   })
 
   await check('Plan strategy survives session creation, history persistence, and renderer reload', async () => {
@@ -228,6 +426,8 @@ try {
   })
 
   await check('Plan requires a persisted exact-version approval before Execute', async () => {
+    const workspaceCountBeforePlan = await page.evaluate(() =>
+      window.agentDesk.listProjectWorkspaces().then((items) => items.length))
     const rejection = await page.evaluate(async (id) => {
       try {
         await window.agentDesk.setTaskStrategy(id, 'execute')
@@ -253,6 +453,16 @@ try {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await waitForApp(page)
     await page.waitForSelector('[data-task-plan-approve-execute]', { visible: true, timeout: 15_000 })
+    const reloadedOperationSnapshots = await page.evaluate(() => window.agentDesk.listTaskSnapshots()
+      .then((snapshots) => snapshots.filter((snapshot) => snapshot.run?.operation)))
+    assert(reloadedOperationSnapshots.length === 0,
+      `page reload restored migration operation recovery: ${JSON.stringify(reloadedOperationSnapshots)}`)
+    await page.waitForSelector('.task-recovery-drawer', { visible: true, timeout: 10_000 })
+    const recoveryText = await page.$eval('.task-recovery-drawer', (element) => element.textContent ?? '')
+    assert(!recoveryText.includes('外部 Agent'), `page reload restored migration recovery: ${recoveryText}`)
+    await page.waitForFunction(() => !document.querySelector('.task-recovery-drawer-close')?.disabled, { timeout: 15_000 })
+    await page.$eval('.task-recovery-drawer-close', (button) => button.click())
+    await page.waitForFunction(() => !document.querySelector('.task-recovery-drawer'), { timeout: 5_000 })
     const restarted = await page.evaluate((id) => window.agentDesk.getTaskPlan(id), session.id)
     assert(restarted.currentVersion?.digest === created.currentVersion.digest, 'plan digest changed after reload')
     await page.click('[data-task-plan-approve-execute]')
@@ -265,9 +475,14 @@ try {
     const approved = await page.evaluate((id) => window.agentDesk.getTaskPlan(id), session.id)
     assert(approved.approvalStatus === 'approved', `plan approval missing: ${JSON.stringify(approved)}`)
     assert(approved.projection?.mode === 'conversation', `unassigned plan projection is not conversation-only: ${JSON.stringify(approved)}`)
+    const execution = await waitForApprovedPlanCompletion(page, session.id, waitForValue)
+    assert(execution.executionStatus === 'success', `approved plan DAG failed: ${JSON.stringify(execution)}`)
+    assert(execution.children.length === 1 && execution.children[0].isolated === false,
+      `approved plan did not inherit non-isolated parent placement: ${JSON.stringify(execution)}`)
     await page.waitForSelector('[data-task-plan-projection="conversation"]', { visible: true, timeout: 5_000 })
     const workspaceCount = await page.evaluate(() => window.agentDesk.listProjectWorkspaces().then((items) => items.length))
-    assert(workspaceCount === 0, `unassigned plan created hidden Project state: ${workspaceCount}`)
+    assert(workspaceCount === workspaceCountBeforePlan,
+      `unassigned plan changed hidden Project state: before=${workspaceCountBeforePlan}, after=${workspaceCount}`)
   })
 
   await check('idle strategy switch is explicit and active-run switch fails closed', async () => {
@@ -306,62 +521,16 @@ try {
     assert(/任务正在运行/.test(runningState.planMutationRejection),
       `running plan mutation did not fail closed: ${JSON.stringify(runningState)}`)
     await waitForValue(
-      () => page.evaluate((id) => window.agentDesk.getTranscript(id), session.id),
-      (entries) => entries.filter((entry) => entry.event?.kind === 'turn-result').length >= 2,
+      () => page.evaluate((id) => window.agentDesk.listSessions()
+        .then((items) => items.find((item) => item.id === id)?.status), session.id),
+      (status) => status === 'idle',
       15_000,
       'waiting for running strategy fixture completion'
     )
-    const revokedGate = await page.evaluate(async (id) => {
-      const plan = await window.agentDesk.getTaskPlan(id)
-      const current = plan.currentVersion
-      if (!current) throw new Error('current plan missing')
-      await window.agentDesk.revokeTaskPlanApproval(id, { version: current.version, digest: current.digest })
-      const beforeSessions = await window.agentDesk.listSessions()
-      const beforeTranscript = await window.agentDesk.getTranscript(id)
-      let subagentRejection = ''
-      let dagRejection = ''
-      try {
-        await window.agentDesk.dispatchSubagents(id, { tasks: [{ id: 'blocked', prompt: 'must not run' }] })
-      } catch (error) {
-        subagentRejection = error instanceof Error ? error.message : String(error)
-      }
-      try {
-        await window.agentDesk.dispatchTaskDag(id, {
-          dag: {
-            id: 'blocked-dag',
-            title: 'Blocked DAG',
-            source: 'ui-e2e',
-            complexity: 'single',
-            createdAt: Date.now(),
-            tasks: [{
-              id: 'blocked', title: 'Blocked', description: 'must not run', dependencies: [], role: 'qa', prompt: 'must not run'
-            }]
-          }
-        })
-      } catch (error) {
-        dagRejection = error instanceof Error ? error.message : String(error)
-      }
-      await window.agentDesk.sendMessage(id, { text: 'must not enter the transcript' })
-      const afterSessions = await window.agentDesk.listSessions()
-      const afterTranscript = await window.agentDesk.getTranscript(id)
-      await window.agentDesk.approveTaskPlan(id, { version: current.version, digest: current.digest })
-      return {
-        subagentRejection,
-        dagRejection,
-        sessionCountBefore: beforeSessions.length,
-        sessionCountAfter: afterSessions.length,
-        transcriptCountBefore: beforeTranscript.length,
-        transcriptCountAfter: afterTranscript.length,
-        lastError: afterSessions.find((item) => item.id === id)?.lastError
-      }
-    }, session.id)
-    assert(/尚未批准|取代/.test(revokedGate.subagentRejection), `subagent gate missing: ${JSON.stringify(revokedGate)}`)
-    assert(/尚未批准|取代/.test(revokedGate.dagRejection), `DAG gate missing: ${JSON.stringify(revokedGate)}`)
-    assert(revokedGate.sessionCountAfter === revokedGate.sessionCountBefore,
-      `rejected dispatch created a session: ${JSON.stringify(revokedGate)}`)
-    assert(revokedGate.transcriptCountAfter === revokedGate.transcriptCountBefore,
-      `rejected send entered transcript: ${JSON.stringify(revokedGate)}`)
-    assert(/尚未批准|取代/.test(revokedGate.lastError ?? ''), `send gate missing: ${JSON.stringify(revokedGate)}`)
+    const completedTranscript = await page.evaluate((id) => window.agentDesk.getTranscript(id), session.id)
+    assert(completedTranscript.filter((entry) => entry.event?.kind === 'turn-result').length >= 2,
+      'running strategy fixture returned idle without a completed turn')
+    await verifyRevokedPlanGates(page, session.id, assert)
     await clickTaskStrategy(page, 'plan')
   })
 
@@ -391,39 +560,38 @@ try {
         acceptanceCriteria: current.acceptanceCriteria,
         changeReason: 'Electron supersession probe'
       })
-      let executeRejection = ''
-      try {
-        await window.agentDesk.setTaskStrategy(id, 'execute')
-      } catch (error) {
-        executeRejection = error instanceof Error ? error.message : String(error)
-      }
-      const interactiveRejections = []
-      for (const operation of [
-        () => window.agentDesk.startTerminal(id, { reuse: false }),
-        () => window.agentDesk.writeTextFile(id, 'blocked-by-plan.txt', 'must not be written'),
-        () => window.agentDesk.stageAll(id)
-      ]) {
-        try {
-          await operation()
-          interactiveRejections.push('')
-        } catch (error) {
-          interactiveRejections.push(error instanceof Error ? error.message : String(error))
-        }
-      }
       return {
         taskCount: decomposed.dag.tasks.length,
         dispatchRejection,
-        executeRejection,
         beforeCount: before.length,
-        afterCount: (await window.agentDesk.listSessions()).length,
         version: second.currentVersion?.version,
         approvalStatus: second.approvalStatus,
-        lastEvent: second.approvalEvents.at(-1)?.kind,
-        interactiveRejections,
-        blockedFilePresent: (await window.agentDesk.listProjectFiles(id)).entries
-          .some((entry) => entry.path === 'blocked-by-plan.txt')
+        lastEvent: second.approvalEvents.at(-1)?.kind
       }
     }, session.id)
+    await waitForValue(
+      () => page.evaluate((id) => window.agentDesk.listSessions()
+        .then((items) => items.find((item) => item.id === id)?.status), session.id),
+      (status) => status !== 'running' && status !== 'starting',
+      15_000,
+      'waiting for v2 Execute gate session to settle'
+    )
+    Object.assign(result, await page.evaluate(async (id) => {
+      const executeRejection = await window.agentDesk.setTaskStrategy(id, 'execute').then(() => '', (error) =>
+        error instanceof Error ? error.message : String(error))
+      const interactiveRejections = await Promise.all([
+        () => window.agentDesk.startTerminal(id, { reuse: false }),
+        () => window.agentDesk.writeTextFile(id, 'blocked-by-plan.txt', 'must not be written'),
+        () => window.agentDesk.stageAll(id)
+      ].map(async (operation) => operation().then(() => '', (error) =>
+        error instanceof Error ? error.message : String(error))))
+      return {
+        executeRejection,
+        interactiveRejections,
+        afterCount: (await window.agentDesk.listSessions()).length,
+        blockedFilePresent: (await window.agentDesk.listProjectFiles(id)).entries.some((entry) => entry.path === 'blocked-by-plan.txt')
+      }
+    }, session.id))
     assert(result.taskCount > 0, `Plan decomposition returned no tasks: ${JSON.stringify(result)}`)
     assert(/规划策略不允许执行任务 DAG/.test(result.dispatchRejection), `Plan dispatch gate missing: ${JSON.stringify(result)}`)
     assert(result.beforeCount === result.afterCount, `Plan dispatch created a session: ${JSON.stringify(result)}`)
@@ -438,8 +606,7 @@ try {
   let stableSnapshot
   await check('switching preserves session id, count, and transcript bytes', async () => {
     stableSnapshot = await readSessionSnapshot(page, session.id)
-    assert(stableSnapshot.count === 1, `expected one session, got ${stableSnapshot.count}`)
-    assert(stableSnapshot.ids[0] === session.id, `active session identity mismatch: ${stableSnapshot.ids.join(',')}`)
+    assert(stableSnapshot.ids.includes(session.id), `active session identity missing: ${stableSnapshot.ids.join(',')}`)
     await clickMode(page, 'studio')
     await clickMode(page, 'assistant')
     const after = await readSessionSnapshot(page, session.id)
@@ -491,7 +658,7 @@ try {
     await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 5_000 })
   })
 
-  await check('responsive Assistant and Studio panes do not overflow horizontally', async () => {
+  await check('responsive Assistant, Project, and Video panes do not overflow horizontally', async () => {
     for (const viewport of [
       { width: 1320, height: 860 },
       { width: 760, height: 700 },
@@ -499,7 +666,7 @@ try {
     ]) {
       await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
       await sleep(250)
-      for (const mode of ['assistant', 'studio']) {
+      for (const mode of ['assistant', 'studio', 'video']) {
         await clickMode(page, mode)
         await sleep(50)
         const measurement = await readOverflow(page, mode)
@@ -508,8 +675,10 @@ try {
         assert(measurement.appOverflow <= 1, `${mode} ${viewport.width}: app overflow ${measurement.appOverflow}px`)
         assert(measurement.mainOverflow <= 1, `${mode} ${viewport.width}: main overflow ${measurement.mainOverflow}px`)
         assert(measurement.switcherInsideViewport, `${mode} ${viewport.width}: mode switcher outside viewport`)
-        assert(measurement.strategyInsideViewport, `${mode} ${viewport.width}: task strategy outside viewport`)
-        assert(measurement.strategyTextFits, `${mode} ${viewport.width}: task strategy text clipped`)
+        if (mode !== 'video') {
+          assert(measurement.strategyInsideViewport, `${mode} ${viewport.width}: task strategy outside viewport`)
+          assert(measurement.strategyTextFits, `${mode} ${viewport.width}: task strategy text clipped`)
+        }
         assert(measurement.visibleOffenders.length === 0, `${mode} ${viewport.width}: ${JSON.stringify(measurement.visibleOffenders)}`)
         await captureScreenshot(page, `${viewport.width}x${viewport.height}-${mode}`)
       }
@@ -528,6 +697,7 @@ try {
     await page.mouse.click(350, 260)
     await page.waitForSelector('.mobile-sidebar-backdrop', { hidden: true, timeout: 5_000 })
   })
+  }
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   process.exitCode = 1
@@ -553,7 +723,11 @@ try {
   const reportText = JSON.stringify(report, null, 2)
   writeFileSync(path.join(runDir, 'report.json'), reportText)
   writeFileSync(path.join(outputRoot, 'latest.json'), reportText)
-  cleanupTempRoot(tempRoot)
+  if (process.env.CAOGEN_KEEP_ASSISTANT_STUDIO_UI_FIXTURE !== '1') {
+    cleanupTempRoot(tempRoot)
+  } else {
+    console.error(`assistant/studio fixture retained: ${tempRoot}`)
+  }
 }
 
 if (report.status !== 'pass') {
@@ -562,93 +736,6 @@ if (report.status !== 'pass') {
 } else {
   console.log(`assistant/studio required UI E2E ok: ${runDir}`)
   console.log(`${report.checks.length}/${report.checks.length} checks passed; ${report.screenshots.length} screenshots captured`)
-}
-
-async function verifyMigrationManager(targetPage, targetProject, secretCanary) {
-  await targetPage.click('.sidebar-footer button.sidebar-nav-item')
-  await targetPage.waitForSelector('[data-settings-tab="migrate"]', { visible: true, timeout: 10_000 })
-  await targetPage.click('[data-settings-tab="migrate"]')
-  await targetPage.waitForSelector('[data-migration-manager]', { visible: true, timeout: 5_000 })
-  await sleep(100)
-  await setFieldValue(targetPage, '[data-migration-manager] input', '')
-  await targetPage.click('[data-migration-scan]')
-  await targetPage.waitForSelector('[data-migration-mode="conversation"]', { visible: true, timeout: 10_000 })
-  const conversation = await targetPage.evaluate(() => ({
-    directory: document.querySelector('[data-migration-manager] input')?.value,
-    rows: document.querySelectorAll('[data-migration-asset]').length,
-    selected: [...document.querySelectorAll('[data-migration-asset] input')].filter((input) => input.checked).length
-  }))
-  assert(conversation.directory === '', `conversation migration required a project path: ${JSON.stringify(conversation)}`)
-  assert(conversation.rows > 0, `conversation migration found no user assets: ${JSON.stringify(conversation)}`)
-  assert(conversation.selected === 0, `user-scoped assets were selected by default: ${JSON.stringify(conversation)}`)
-
-  await setFieldValue(targetPage, '[data-migration-manager] input', targetProject)
-  await targetPage.click('[data-migration-scan]')
-  await targetPage.waitForSelector('[data-migration-mode="project"]', { visible: true, timeout: 10_000 })
-  await targetPage.waitForSelector('[data-migration-asset]', { visible: true, timeout: 10_000 })
-  const state = await targetPage.evaluate((canary) => {
-    const rows = [...document.querySelectorAll('[data-migration-asset]')].map((row) => ({
-      kind: row.getAttribute('data-migration-kind'),
-      risk: row.getAttribute('data-migration-risk'),
-      checked: row.querySelector('input')?.checked,
-      disabled: row.querySelector('input')?.disabled
-    }))
-    return {
-      rows,
-      leaked: document.querySelector('[data-migration-manager]')?.textContent?.includes(canary) === true
-    }
-  }, secretCanary)
-  assert(!state.leaked, 'migration preview exposed the credential canary')
-  assert(state.rows.some((row) => row.kind === 'rules' && row.risk === 'low' && row.checked),
-    `safe rule was not selected by default: ${JSON.stringify(state.rows)}`)
-  assert(state.rows.some((row) => row.kind === 'mcp' && row.risk === 'review' && !row.checked),
-    `credential-bearing MCP was selected by default: ${JSON.stringify(state.rows)}`)
-  for (const viewport of [
-    { width: 1320, height: 860 },
-    { width: 760, height: 700 },
-    { width: 360, height: 520 }
-  ]) {
-    await targetPage.setViewport({ ...viewport, deviceScaleFactor: 1 })
-    await sleep(150)
-    const layout = await readMigrationLayout(targetPage)
-    assert(layout.documentOverflow <= 1, `migration ${viewport.width}: document overflow ${layout.documentOverflow}px`)
-    assert(layout.managerInsideViewport, `migration ${viewport.width}: manager outside viewport ${JSON.stringify(layout)}`)
-    assert(layout.visibleOffenders.length === 0, `migration ${viewport.width}: ${JSON.stringify(layout.visibleOffenders)}`)
-    await captureScreenshot(targetPage, `migration-manager-${viewport.width}x${viewport.height}`)
-  }
-  await targetPage.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
-  await targetPage.click('[data-migration-apply]')
-  await targetPage.waitForSelector('[data-migration-rollback]', { visible: true, timeout: 10_000 })
-  assert(existsSync(path.join(targetProject, 'CLAUDE.md')), 'selected project rule was not imported')
-  assert(!existsSync(path.join(targetProject, '.mcp.json')), 'unselected MCP was imported')
-  await targetPage.click('[data-migration-rollback]')
-  await waitForValue(
-    async () => !existsSync(path.join(targetProject, 'CLAUDE.md')),
-    Boolean,
-    5_000,
-    'waiting for migration rollback'
-  )
-  await targetPage.click('.settings-page-back')
-  await targetPage.waitForSelector('.composer-input', { visible: true, timeout: 10_000 })
-}
-
-async function readMigrationLayout(targetPage) {
-  return targetPage.evaluate(() => {
-    const manager = document.querySelector('[data-migration-manager]')
-    const managerRect = manager?.getBoundingClientRect()
-    const visibleOffenders = [...(manager?.querySelectorAll('*') ?? [])].flatMap((element) => {
-      const rect = element.getBoundingClientRect()
-      const style = getComputedStyle(element)
-      if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return []
-      const overflow = Math.max(0, rect.right - innerWidth, -rect.left)
-      return overflow > 1 ? [{ tag: element.tagName, className: element.className, overflow }] : []
-    }).slice(0, 10)
-    return {
-      documentOverflow: Math.max(0, document.documentElement.scrollWidth - innerWidth),
-      managerInsideViewport: Boolean(managerRect && managerRect.left >= -1 && managerRect.right <= innerWidth + 1),
-      visibleOffenders
-    }
-  })
 }
 
 async function check(name, fn) {
@@ -840,6 +927,10 @@ async function openCommandPalette(targetPage) {
   await targetPage.keyboard.press('k')
   await targetPage.keyboard.up(modifier)
   await targetPage.waitForSelector('.command-palette-backdrop', { visible: true, timeout: 5_000 })
+  await targetPage.waitForFunction(
+    () => document.activeElement?.classList.contains('command-palette-input'),
+    { timeout: 5_000 }
+  )
 }
 
 async function readOverlayStacking(targetPage, overlaySelector) {

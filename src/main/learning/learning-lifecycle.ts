@@ -12,13 +12,15 @@ import type {
 } from '../../shared/learning-types'
 import type { TrustedLearningDecision } from './learning-security'
 import { requireTrustedUserLearningActor } from './learning-security'
+import { redactSensitiveValue } from '../security/secret-redaction'
 import {
   materializedContentDigest,
   normalizeSkillRelativePath,
+  skillMaterializationPath,
   securelyRemoveMaterializedSkill,
   securelyWriteMaterializedSkill
 } from './learning-materialization'
-export { skillMaterializationPath } from './learning-materialization'
+export { skillMaterializationPath }
 import {
   learningStateExistsSync,
   learningStatePath,
@@ -31,6 +33,7 @@ import {
   resolveDefaultLearningRootSync,
   type LearningPersistedState
 } from './learning-store'
+import { approveManagedLearningSkillRuntime } from '../plugin/plugin-runtime-authorization'
 
 export interface LearningProposalContext {
   actor?: LearningActor
@@ -53,42 +56,41 @@ export async function createLearningDraft(
   input: LearningDraftInput,
   context: LearningProposalContext = {}
 ): Promise<LearningRecord> {
+  const safeInput = redactSensitiveValue(input)
+  const safeContext = redactSensitiveValue(context)
   const project = learningProjectHash(projectRoot)
-  const actor = normalizeActor(context.actor ?? DEFAULT_PROPOSAL_ACTOR)
-  const source = requiredText(input.source, 'source', 256)
-  const confidence = normalizeConfidence(input.confidence)
-  const payload = normalizePayload(input.kind, input.payload)
-  const workerScope = normalizeWorkerScope(input, payload)
+  const actor = normalizeActor(safeContext.actor ?? DEFAULT_PROPOSAL_ACTOR)
+  const source = requiredText(safeInput.source, 'source', 256)
+  const confidence = normalizeConfidence(safeInput.confidence)
+  const payload = normalizePayload(safeInput.kind, safeInput.payload)
+  const workerScope = normalizeWorkerScope(safeInput, payload)
   const digest = payloadDigest(payload)
-  const expiresAt = normalizeOptionalTime(input.expiresAt, 'expiresAt')
+  const expiresAt = normalizeOptionalTime(safeInput.expiresAt, 'expiresAt')
 
   return mutateLearningState(learningRoot, projectRoot, (state) => {
-    const previous = input.supersedes ? findRecord(state, input.supersedes) : undefined
-    if (previous && previous.kind !== input.kind) throw new Error('A learning revision must keep the same kind')
+    const previous = safeInput.supersedes ? findRecord(state, safeInput.supersedes) : undefined
+    if (previous && previous.kind !== safeInput.kind) throw new Error('A learning revision must keep the same kind')
     if (previous && previous.project !== project) throw new Error('Learning project mismatch')
-    if (previous && (previous.scope !== workerScope.scope || previous.workerId !== workerScope.workerId ||
-      previous.memoryNamespace !== workerScope.memoryNamespace)) {
+    if (previous && !sameWorkerScope(previous, workerScope)) {
       throw new Error('A learning revision must keep the same scope and Worker namespace')
     }
 
-    const duplicate = state.records.find((record) =>
-      record.status === 'draft' && record.kind === input.kind && record.digest === digest &&
-      record.scope === workerScope.scope && record.workerId === workerScope.workerId &&
-      record.supersedes === previous?.id && record.source === source
-    )
+    const duplicate = state.records.find((record) => matchesDraft(
+      record, safeInput.kind, digest, workerScope, previous?.id, source
+    ))
     if (duplicate) return cloneRecord(duplicate)
 
-    const logicalId = previous?.logicalId ?? safeRequestedId(context.requestedLogicalId, randomUUID())
+    const logicalId = previous?.logicalId ?? safeRequestedId(safeContext.requestedLogicalId, randomUUID())
     assertSkillPathOwnership(state, payload, logicalId)
-    const now = timestamp(context.now)
+    const now = timestamp(safeContext.now)
     const version = previous ? maxVersion(state, logicalId) + 1 : 1
-    const id = safeRequestedId(context.requestedId, randomUUID())
+    const id = safeRequestedId(safeContext.requestedId, randomUUID())
     if (state.records.some((record) => record.id === id)) throw new Error(`Learning record already exists: ${id}`)
     const record: LearningRecord = {
       schemaVersion: 1,
       id,
       logicalId,
-      kind: input.kind,
+      kind: safeInput.kind,
       project,
       ...workerScope,
       source,
@@ -108,6 +110,32 @@ export async function createLearningDraft(
     state.audit.push(auditEvent(record, 'proposed', actor, undefined, 'draft', now))
     return cloneRecord(record)
   })
+}
+
+function sameWorkerScope(
+  record: LearningRecord,
+  scope: Pick<LearningRecord, 'scope' | 'workerId' | 'memoryNamespace'>
+): boolean {
+  return [record.scope === scope.scope, record.workerId === scope.workerId,
+    record.memoryNamespace === scope.memoryNamespace].every(Boolean)
+}
+
+function matchesDraft(
+  record: LearningRecord,
+  kind: LearningRecord['kind'],
+  digest: string,
+  scope: Pick<LearningRecord, 'scope' | 'workerId' | 'memoryNamespace'>,
+  supersedes: string | undefined,
+  source: string
+): boolean {
+  return [
+    record.status === 'draft',
+    record.kind === kind,
+    record.digest === digest,
+    sameWorkerScope(record, scope),
+    record.supersedes === supersedes,
+    record.source === source
+  ].every(Boolean)
 }
 
 export async function importSkillLearningBaseline(
@@ -409,6 +437,12 @@ function materializeSkillStateSync(projectRoot: string, state: LearningPersisted
     )
     if (active) securelyWriteMaterializedSkill(projectRoot, relativePath, active.payload.markdown, allowedExistingDigests)
     else securelyRemoveMaterializedSkill(projectRoot, relativePath, allowedExistingDigests)
+    if (active) {
+      approveManagedLearningSkillRuntime(
+        projectRoot,
+        skillMaterializationPath(projectRoot, active.payload.relativePath)
+      )
+    }
   }
   return managedPaths.size
 }

@@ -6,6 +6,8 @@ import {
   STUDIO_RESULT_SCHEMA_VERSION,
   type StudioResultAcceptance,
   type StudioResultArtifact,
+  type StudioResultArtifactDeliveryStatus,
+  type StudioResultDeliveryCategory,
   type StudioResultCostSummary,
   type StudioResultEvidence,
   type StudioResultExportResult,
@@ -27,6 +29,12 @@ import {
   projectAggregateCanonicalJson,
   projectAggregateDigest
 } from '../project-aggregate/codec'
+import { workflowAcceptanceRepairWorkItemId } from '../task/workflow-acceptance-repair-coordinator'
+import {
+  artifactAcceptanceDeliveryScope,
+  currentArtifactLineageLeafIds,
+  currentArtifactLineageLeafIdsByArtifact
+} from '../task/artifact-lineage'
 
 const TERMINAL_WORK_ITEM_STATUSES = new Set(['done', 'failed', 'cancelled'])
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -61,18 +69,29 @@ export function buildStudioResultSnapshot(
   } = selectResultRecords(session, aggregate)
   const costBySession = normalizedSessionCosts(sessionCosts)
   const projectedRuns = runs.map((run) => projectRun(run, costBySession.get(run.sessionId)))
-  const projectedAcceptances = acceptances.map(projectAcceptance)
+  const projectedAcceptances = acceptances.map((acceptance) =>
+    projectAcceptance(acceptance, aggregate.workItems, evidenceLinks, aggregate.workflow.artifacts))
+  const blockingAcceptances = projectedAcceptances.filter((acceptance) =>
+    acceptance.deliveryScope === 'blocking')
+  // A repair can emit the successor from a different WorkItem. Resolve
+  // deliverable leaves against the whole Project, then keep this result view
+  // ownership-scoped when projecting records below.
+  const currentArtifactIds = currentArtifactLineageLeafIds(aggregate.workflow.artifacts)
+  const currentArtifactIdsByArtifact = currentArtifactLineageLeafIdsByArtifact(aggregate.workflow.artifacts)
   const projectedArtifacts = artifacts.map((artifact) => projectArtifact(
     artifact,
     aggregate,
     evidenceLinks,
-    acceptanceIds
+    acceptanceIds,
+    currentArtifactIds,
+    currentArtifactIdsByArtifact,
+    new Map(projectedAcceptances.map((acceptance) => [acceptance.id, acceptance.status]))
   ))
   const projectedEvidence = projectEvidence(workflowEvidence, taskEvidence)
   const tests = buildTests(projectedArtifacts, workflowEvidence, projectedAcceptances, evidenceLinks)
-  const risks = buildRisks(goal, workItems, projectedRuns, projectedArtifacts, projectedAcceptances)
-  const openItems = buildOpenItems(workItems, projectedRuns, projectedArtifacts, projectedAcceptances)
-  const approvals = buildApprovals(goal, workItems, projectedRuns, workflowEvidence, projectedAcceptances)
+  const risks = buildRisks(goal, workItems, projectedRuns, projectedArtifacts, blockingAcceptances)
+  const openItems = buildOpenItems(workItems, projectedRuns, projectedArtifacts, blockingAcceptances)
+  const approvals = buildApprovals(goal, workItems, projectedRuns, workflowEvidence, blockingAcceptances)
   const timeline = selectTimeline(aggregate, session, workItemIds, runIds, artifactIds, acceptanceIds)
   const cost = buildCostSummary(projectedRuns)
 
@@ -120,10 +139,15 @@ export function buildStudioResultSnapshot(
     summary: {
       runs: projectedRuns.length,
       artifacts: projectedArtifacts.length,
+      currentArtifacts: projectedArtifacts.filter((artifact) => artifact.deliveryScope === 'current').length,
+      historicalArtifacts: projectedArtifacts.filter((artifact) => artifact.deliveryScope === 'historical').length,
       availableArtifacts: projectedArtifacts.filter((artifact) => artifact.locations.some((location) => location.availability === 'available')).length,
+      readyArtifacts: projectedArtifacts.filter((artifact) => artifact.deliveryStatus === 'ready').length,
+      attentionArtifacts: projectedArtifacts.filter((artifact) =>
+        !['ready', 'superseded'].includes(artifact.deliveryStatus)).length,
       evidence: projectedEvidence.length,
-      acceptances: projectedAcceptances.length,
-      passedAcceptances: projectedAcceptances.filter((acceptance) => acceptance.status === 'passed').length,
+      acceptances: blockingAcceptances.length,
+      passedAcceptances: blockingAcceptances.filter((acceptance) => acceptance.status === 'passed').length,
       tests: tests.length,
       changes: projectedArtifacts.filter((artifact) => CHANGE_ARTIFACT_KINDS.has(artifact.kind)).length,
       openItems: openItems.length,
@@ -172,7 +196,7 @@ function selectResultRecords(session: SessionMeta, aggregate: ProjectAggregateSn
   const runIds = new Set(runs.map((run) => run.id))
   const artifacts = selectArtifacts(session, aggregate, workItems, workItemIds, runIds)
   const artifactIds = new Set(artifacts.map((artifact) => artifact.id))
-  const acceptances = selectAcceptances(session, aggregate, workItemIds)
+  const acceptances = selectAcceptances(session, aggregate, workItemIds, runIds, artifactIds)
   const acceptanceIds = new Set(acceptances.map((acceptance) => acceptance.id))
   const evidenceLinks = selectEvidenceLinks(aggregate, runIds, artifactIds, acceptanceIds)
   const workflowEvidence = selectWorkflowEvidence(
@@ -287,7 +311,7 @@ function buildUnboundSnapshot(sessionId: string, now: number): StudioResultSnaps
     timeline: [],
     cost: { knownUsd: 0, knownRunCount: 0, totalRunCount: 0, coverage: 'unavailable' as const },
     summary: {
-      runs: 0, artifacts: 0, availableArtifacts: 0, evidence: 0, acceptances: 0,
+      runs: 0, artifacts: 0, currentArtifacts: 0, historicalArtifacts: 0, availableArtifacts: 0, readyArtifacts: 0, attentionArtifacts: 0, evidence: 0, acceptances: 0,
       passedAcceptances: 0, tests: 0, changes: 0, openItems: 0, approvals: 0, risks: 0
     }
   }
@@ -336,9 +360,17 @@ function selectWorkItems(session: SessionMeta, aggregate: ProjectAggregateSnapsh
 function selectAcceptances(
   session: SessionMeta,
   aggregate: ProjectAggregateSnapshot,
-  workItemIds: ReadonlySet<string>
+  workItemIds: ReadonlySet<string>,
+  runIds: ReadonlySet<string>,
+  artifactIds: ReadonlySet<string>
 ): WorkflowAcceptanceRecord[] {
+  const linkedAcceptanceIds = new Set(aggregate.workflow.evidenceLinks.flatMap((link) =>
+    link.acceptanceId && (Boolean(link.runId && runIds.has(link.runId)) ||
+      Boolean(link.artifactId && artifactIds.has(link.artifactId)))
+      ? [link.acceptanceId]
+      : []))
   return aggregate.workflow.acceptances.filter((acceptance) =>
+    linkedAcceptanceIds.has(acceptance.id) ||
     Boolean(acceptance.workItemId && workItemIds.has(acceptance.workItemId)) ||
     (!session.workItemId && Boolean(session.goalId && acceptance.goalId === session.goalId)) ||
     (!session.goalId && !session.workItemId)
@@ -388,9 +420,29 @@ function projectArtifact(
   artifact: ProjectAggregateSnapshot['workflow']['artifacts'][number],
   aggregate: ProjectAggregateSnapshot,
   links: WorkflowEvidenceLinkRecord[],
-  acceptanceIds: ReadonlySet<string>
+  acceptanceIds: ReadonlySet<string>,
+  currentArtifactIds: ReadonlySet<string>,
+  currentArtifactIdsByArtifact: ReadonlyMap<string, readonly string[]>,
+  acceptanceStatusById: ReadonlyMap<string, WorkflowAcceptanceRecord['status']>
 ): StudioResultArtifact {
   const artifactLinks = links.filter((link) => link.artifactId === artifact.id)
+  const locations = aggregate.workflow.artifactLocations
+    .filter((location) => location.artifactId === artifact.id)
+    .map((location) => ({
+      id: location.id,
+      kind: location.kind,
+      availability: location.availability,
+      ...(location.uri ? { uri: location.uri } : {}),
+      ...(location.path ? { path: location.path } : {}),
+      ...(location.checksum ? { checksum: location.checksum } : {}),
+      ...(location.sizeBytes === undefined ? {} : { sizeBytes: location.sizeBytes }),
+      ...(location.mediaType ? { mediaType: location.mediaType } : {})
+    }))
+  const evidenceIds = [...new Set(artifactLinks.map((link) => link.evidenceId))].sort()
+  const linkedAcceptanceIds = [...new Set(artifactLinks.flatMap((link) =>
+    link.acceptanceId && acceptanceIds.has(link.acceptanceId) ? [link.acceptanceId] : []
+  ))].sort()
+  const deliveryScope = currentArtifactIds.has(artifact.id) ? 'current' as const : 'historical' as const
   return {
     id: artifact.id,
     ...(artifact.runId ? { runId: artifact.runId } : {}),
@@ -400,28 +452,55 @@ function projectArtifact(
     version: artifact.version,
     digest: artifact.digest,
     ...(artifact.mediaType ? { mediaType: artifact.mediaType } : {}),
+    deliveryCategory: artifactDeliveryCategory(artifact.kind, artifact.mediaType),
+    deliveryStatus: artifactDeliveryStatus(
+      deliveryScope,
+      locations.some((location) => location.availability === 'available'),
+      evidenceIds,
+      linkedAcceptanceIds,
+      acceptanceStatusById
+    ),
     ...(artifact.supersedesId ? { supersedesId: artifact.supersedesId } : {}),
+    currentArtifactIds: [...(currentArtifactIdsByArtifact.get(artifact.id) ?? [])],
+    deliveryScope,
     createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
-    locations: aggregate.workflow.artifactLocations
-      .filter((location) => location.artifactId === artifact.id)
-      .map((location) => ({
-        id: location.id,
-        kind: location.kind,
-        availability: location.availability,
-        ...(location.uri ? { uri: location.uri } : {}),
-        ...(location.path ? { path: location.path } : {}),
-        ...(location.checksum ? { checksum: location.checksum } : {}),
-        ...(location.sizeBytes === undefined ? {} : { sizeBytes: location.sizeBytes }),
-        ...(location.mediaType ? { mediaType: location.mediaType } : {})
-      })),
+    locations,
     inboundRelations: aggregate.workflow.artifactEdges.filter((edge) => edge.toArtifactId === artifact.id).length,
     outboundRelations: aggregate.workflow.artifactEdges.filter((edge) => edge.fromArtifactId === artifact.id).length,
-    evidenceIds: [...new Set(artifactLinks.map((link) => link.evidenceId))].sort(),
-    acceptanceIds: [...new Set(artifactLinks.flatMap((link) =>
-      link.acceptanceId && acceptanceIds.has(link.acceptanceId) ? [link.acceptanceId] : []
-    ))].sort()
+    evidenceIds,
+    acceptanceIds: linkedAcceptanceIds
   }
+}
+
+function artifactDeliveryCategory(
+  kind: ProjectAggregateSnapshot['workflow']['artifacts'][number]['kind'],
+  mediaType?: string
+): StudioResultDeliveryCategory {
+  if (['document', 'spreadsheet', 'presentation', 'pdf'].includes(kind)) return 'office'
+  if (['source', 'code', 'patch', 'diff', 'pull_request'].includes(kind)) return 'code'
+  if (kind === 'release_package') return 'package'
+  if (mediaType && /^(image|video|audio)\//.test(mediaType)) return 'media'
+  if (['report', 'requirement', 'design', 'test_report'].includes(kind)) return 'report'
+  return 'other'
+}
+
+function artifactDeliveryStatus(
+  scope: StudioResultArtifact['deliveryScope'],
+  available: boolean,
+  evidenceIds: readonly string[],
+  acceptanceIds: readonly string[],
+  acceptanceStatusById: ReadonlyMap<string, WorkflowAcceptanceRecord['status']>
+): StudioResultArtifactDeliveryStatus {
+  if (scope === 'historical') return 'superseded'
+  if (!available) return 'unavailable'
+  if (evidenceIds.length === 0) return 'evidence_missing'
+  if (acceptanceIds.length === 0) return 'verification_pending'
+  const statuses = acceptanceIds.map((id) => acceptanceStatusById.get(id))
+  if (statuses.includes('failed')) return 'failed'
+  return statuses.every((status) => status === 'passed' || status === 'waived')
+    ? 'ready'
+    : 'verification_pending'
 }
 
 function projectWorkflowEvidence(evidence: WorkflowEvidenceRecord): StudioResultEvidence {
@@ -440,15 +519,27 @@ function projectWorkflowEvidence(evidence: WorkflowEvidenceRecord): StudioResult
   }
 }
 
-function projectAcceptance(acceptance: WorkflowAcceptanceRecord): StudioResultAcceptance {
+function projectAcceptance(
+  acceptance: WorkflowAcceptanceRecord,
+  workItems: ProjectAggregateSnapshot['workItems'],
+  links: readonly WorkflowEvidenceLinkRecord[],
+  artifacts: ProjectAggregateSnapshot['workflow']['artifacts']
+): StudioResultAcceptance {
   const covered = new Set((acceptance.criterionEvidence ?? [])
     .filter((criterion) => criterion.evidenceRefs.length > 0)
     .map((criterion) => criterion.criterionIndex))
+  const repair = acceptance.status === 'failed'
+    ? workItems.find((item) => item.id === workflowAcceptanceRepairWorkItemId(acceptance.id, acceptance.revision))
+    : undefined
+  const linkedArtifactIds = new Set(links.flatMap((link) =>
+    link.acceptanceId === acceptance.id && link.artifactId ? [link.artifactId] : []))
+  const deliveryScope = artifactAcceptanceDeliveryScope(linkedArtifactIds, artifacts)
   return {
     id: acceptance.id,
     ...(acceptance.goalId ? { goalId: acceptance.goalId } : {}),
     ...(acceptance.workItemId ? { workItemId: acceptance.workItemId } : {}),
     status: acceptance.status,
+    deliveryScope,
     criteria: [...acceptance.criteria],
     coveredCriteria: covered.size,
     evidenceRefs: [...acceptance.evidenceRefs],
@@ -457,6 +548,7 @@ function projectAcceptance(acceptance: WorkflowAcceptanceRecord): StudioResultAc
     ...(acceptance.waiverReason ? { waiverReason: acceptance.waiverReason } : {}),
     ...(acceptance.waivedBy ? { waivedBy: acceptance.waivedBy } : {}),
     ...(acceptance.notes ? { notes: acceptance.notes } : {}),
+    ...(repair ? { repairWorkItemId: repair.id, repairWorkItemStatus: repair.status } : {}),
     revision: acceptance.revision,
     updatedAt: acceptance.updatedAt
   }

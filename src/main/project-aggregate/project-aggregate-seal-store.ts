@@ -181,10 +181,10 @@ function validateDocument(value: unknown, filePath: string): ProjectAggregateSea
 function normalizeLegacySeal(seal: ProjectAggregateSeal): ProjectAggregateSeal {
   if (!isRecord(seal.objectCounts) || !isRecord(seal.objectDigests)) return seal
   for (const kind of PROJECT_AGGREGATE_OBJECT_KINDS) {
-    if (seal.objectCounts[kind] === undefined && (kind === 'squad' || kind === 'comment')) {
+    if (seal.objectCounts[kind] === undefined && (kind === 'squad' || kind === 'member' || kind === 'comment' || kind === 'shared_approval')) {
       seal.objectCounts[kind] = 0
     }
-    if (seal.objectDigests[kind] === undefined && (kind === 'squad' || kind === 'comment')) {
+    if (seal.objectDigests[kind] === undefined && (kind === 'squad' || kind === 'member' || kind === 'comment' || kind === 'shared_approval')) {
       seal.objectDigests[kind] = {}
     }
   }

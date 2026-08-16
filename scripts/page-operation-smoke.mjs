@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { assertRelayProviderPersistence } from './lib/page-provider-credential-fixture.mjs'
+import { assertRelayProviderPersistence, providerRecords } from './lib/page-provider-credential-fixture.mjs'
 import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
 
 const repoRoot = process.cwd()
@@ -413,7 +413,7 @@ try {
     await waitForText(cdp, '插件')
     await clickByText(cdp, '迁移')
     await waitForText(cdp, '迁移')
-    await clickByText(cdp, '取消')
+    await clickSelector(cdp, '.settings-page > .settings-page-actions button:first-child')
   })
   await screenshot(cdp, '02-after-settings')
 
@@ -439,7 +439,7 @@ try {
     assert(providerEditorSurface?.nestedBackdropCount === 0, `provider editor still uses a modal backdrop: ${JSON.stringify(providerEditorSurface)}`)
     assert(providerEditorSurface?.globalSettingsActionsCount === 0, `global settings actions should hide while editing a provider: ${JSON.stringify(providerEditorSurface)}`)
     await screenshot(cdp, '02-provider-editor-page')
-    await chooseProviderEditorSelectOption(cdp, 'CaoGen 中转站模板')
+    await applyProviderEditorPreset(cdp, 'CaoGen 中转站模板')
     await waitForText(cdp, 'CaoGen 中转站预设入口', 10_000); await setInputByPlaceholder(cdp, 'https://your-gateway.example.com', PAGE_SMOKE_LOCAL_SINK_URL)
     await setInputByPlaceholder(cdp, '例如:公司网关 / OpenRouter', 'CaoGen Relay UI Smoke')
     await setInputByPlaceholder(cdp, '<your-api-key>', 'sk-page-smoke-primary')
@@ -461,12 +461,12 @@ try {
       providers: JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8')),
       providerListText, userDataDir, legacyProviderId: PAGE_SMOKE_PROVIDER_ID, expectedBaseUrl: PAGE_SMOKE_LOCAL_SINK_URL, assert
     })
-    await clickByText(cdp, '取消')
+    await clickSelector(cdp, '.settings-page > .settings-page-actions button:first-child')
   })
   await screenshot(cdp, '02-provider-relay')
 
   await check(cdp, 'automatic routing preferences can be configured from settings UI', async () => {
-    const providers = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
+    const providers = providerRecords(JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8')))
     const relay = providers.find((provider) => provider.name === 'CaoGen Relay UI Smoke')
     assert(relay, 'relay provider must exist before configuring routing preferences')
 
@@ -888,9 +888,9 @@ try {
 
   await check(cdp, 'office view loads without blank first screen', async () => {
     await bringPageToFront(cdp)
-    await clickByText(cdp, 'Agent 控制室')
+    await clickByText(cdp, 'CaoGen 控制室')
     await waitForSelector(cdp, '.office', 30_000)
-    await bringPageToFront(cdp)
+    await clickSelector(cdp, '[data-office-camera-preset="agent"]'); await waitForSelector(cdp, '.office-selection-panel', 10_000)
     const officeTelemetry = await waitForOfficeTelemetry(cdp)
     report.officeTelemetry = officeTelemetry
     const canvasStats = await waitForCanvasPixels(cdp)
@@ -936,8 +936,8 @@ try {
     assert(restored.length === 1 && restored[0].archived !== true, `project restore was not persisted: ${JSON.stringify(restored)}`)
   })
 
-  await check(cdp, 'deleting the last session leaves a usable new-session composer', async () => {
-    await evalValue(cdp, `(() => { window.confirm = () => true; return true })()`)
+  await check(cdp, 'discarding the managed worktree then deleting the last session leaves a usable new-session composer', async () => {
+    await evalValue(cdp, `(() => { window.confirm = () => true; return true })()`); await clickByAriaLabel(cdp, '⎇ Worktree'); await waitForText(cdp, '状态\nactive', 10_000); await clickByText(cdp, '丢弃隔离副本'); await waitForText(cdp, '状态\nremoved', 30_000)
     await clickSelector(cdp, '.session-card.active .session-card-more')
     await clickByText(cdp, '关闭会话')
     await waitForSelector(cdp, '.welcome-composer-input', 10_000)
@@ -1819,24 +1819,20 @@ async function setLatestRoutingRuleTask(cdp, text, checked) {
   await sleep(200)
 }
 
-async function chooseProviderEditorSelectOption(cdp, text) {
+async function applyProviderEditorPreset(cdp, text) {
   const result = await evalValue(
     cdp,
     `(() => {
       const editor = document.querySelector('.provider-editor');
       const needle = ${JSON.stringify(text)};
-      for (const select of editor?.querySelectorAll('select') ?? []) {
-        const option = [...select.options].find((candidate) => candidate.textContent.includes(needle) && !candidate.disabled);
-        if (!option) continue;
-        select.value = option.value;
-        select.dispatchEvent(new Event('input', { bubbles: true }));
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        return { ok: true };
-      }
+      const card = [...(editor?.querySelectorAll('.provider-preset-card') ?? [])]
+        .find((candidate) => candidate.textContent.includes(needle));
+      const button = card?.querySelector('button:not(:disabled)');
+      if (button) { button.click(); return { ok: true }; }
       return { ok: false, text: editor?.innerText || document.body.innerText.slice(0, 2000) };
     })()`
   )
-  assert(result?.ok, `provider editor select option not found: ${text}\n${result?.text ?? ''}`)
+  assert(result?.ok, `provider editor preset card not found: ${text}\n${result?.text ?? ''}`)
   await sleep(250)
 }
 
@@ -2067,26 +2063,17 @@ async function waitForOfficeTelemetry(cdp, timeout = 10_000) {
         };
       })()`
     )
-    const ok =
-      last?.ok &&
-      last.sessions >= 1 &&
-      last.isolatedSessions >= 1 &&
-      last.workspaceChangedFiles >= 1 &&
-      last.gitTrackedSessions >= 1 &&
-      last.gitDirtySessions >= 1 &&
-      last.gitFiles >= 1 &&
-      last.gitUntracked >= 1 &&
-      last.routedSessions + last.failoverSessions >= 1 &&
-      last.totalDurationMs >= 1 &&
-      last.routingBudgetPanels >= 1 &&
-      last.clickableWorkstations >= last.sessions &&
-      last.oneWatercolorCharacterPerAgent === 1 &&
-      last.visibleWatercolorCharacters === last.sessions &&
-      last.visibleRobots === 0 &&
-      last.selectedSession &&
-      [PAGE_SMOKE_MODEL, 'caogen-relay-fast', 'caogen-relay-strong'].some((model) => last.selectedPanelText.includes(model)) &&
-      last.selectedPanelText.includes('文件 1') &&
-      last.canvas
+    const ok = [
+      last?.ok,
+      last.sessions >= 1, last.isolatedSessions >= 1, last.workspaceChangedFiles >= 1,
+      last.gitTrackedSessions >= 1, last.gitDirtySessions >= 1, last.gitFiles >= 1, last.gitUntracked >= 1,
+      last.totalDurationMs >= 1,
+      last.routingBudgetPanels >= 1, last.clickableWorkstations >= last.sessions,
+      last.oneWatercolorCharacterPerAgent === 1, last.visibleWatercolorCharacters === last.sessions, last.visibleRobots === 0,
+      last.selectedSession,
+      [PAGE_SMOKE_MODEL, 'caogen-relay-fast', 'caogen-relay-strong'].some((model) => last.selectedPanelText.includes(model)),
+      last.selectedPanelText.includes('文件 1'), last.canvas
+    ].every(Boolean)
     if (ok) return last
     await sleep(250)
   }

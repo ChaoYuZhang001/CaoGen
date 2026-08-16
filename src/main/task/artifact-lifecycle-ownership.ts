@@ -70,7 +70,7 @@ function assertLegacyRunOwnership(
   workItem: WorkflowWorkItemRecord | null,
   projectId: string
 ): asserts workItem is WorkflowWorkItemRecord {
-  if (run.projectId !== projectId || !workItem || workItem.source !== 'legacy-derived' ||
+  if (run.projectId !== projectId || !workItem || workItem.source === 'explicit' ||
       workItem.id !== run.workItemId || workItem.projectId !== projectId ||
       workItem.goalId !== run.goalId || !workItem.runIds.includes(run.id)) {
     throw new WorkflowLedgerCorruptionError(

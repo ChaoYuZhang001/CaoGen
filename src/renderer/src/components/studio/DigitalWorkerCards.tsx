@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Brain, Gauge, History } from 'lucide-react'
+import { Brain, Gauge, History, Unlink } from 'lucide-react'
 import type { DigitalWorker, DigitalWorkerAssignment, RoleTemplate } from '../../../../shared/types'
 import type { DigitalWorkerStudioWorkItem } from './digital-worker-studio-model'
 import {
@@ -34,6 +34,7 @@ interface WorkerRosterProps {
   onMemory: (worker: DigitalWorker) => void
   onHistory: (worker: DigitalWorker) => void
   onAssign: (workerId: string) => void
+  onReleaseAssignment: (assignment: DigitalWorkerAssignment) => void
   onHire: () => void
 }
 
@@ -61,17 +62,8 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
     assignments,
     workItems,
     showProject,
-    busyKey,
-    onActivate,
-    onPause,
-    onResume,
-    onRetire,
-    onRefreshPerformance,
-    onMemory,
-    onHistory,
-    onAssign
+    busyKey
   } = props
-  const [confirmRetire, setConfirmRetire] = useState(false)
   const role = roleForWorker(worker, roles)
   const watercolorRole = watercolorRoleForWorker(worker, role)
   const permissions = permissionsFor(worker)
@@ -151,75 +143,83 @@ function WorkerCard(props: WorkerRosterProps & { worker: DigitalWorker }): React
         {activeAssignments.length > 0 ? (
           <ul className="dws-assignment-list">
             {activeAssignments.map((assignment) => (
-              <li key={assignment.id}>{workItemTitle(assignment.workItemId, workItems)}</li>
+              <li key={assignment.id} className="dws-assignment-row">
+                <span>{workItemTitle(assignment.workItemId, workItems)}</span>
+                <button
+                  type="button"
+                  className="dws-button dws-button-quiet dws-icon-button"
+                  disabled={busy}
+                  onClick={() => props.onReleaseAssignment(assignment)}
+                  aria-label={`解除 ${workItemTitle(assignment.workItemId, workItems)} 分配`}
+                  title="解除分配"
+                  data-dws-action="release-assignment"
+                  data-assignment-id={assignment.id}
+                >
+                  <Unlink aria-hidden="true" />
+                </button>
+              </li>
             ))}
           </ul>
         ) : <span className="dws-muted">暂无分配</span>}
       </section>
 
-      {confirmRetire && worker.status !== 'retired' ? (
-        <div className="dws-retire-confirm" role="alert">
-          <span>退休后不可重新启用。</span>
-          <div>
-            <button type="button" className="dws-button dws-button-danger" disabled={busy} onClick={() => onRetire(worker)} data-dws-action="confirm-retire">确认退休</button>
-            <button type="button" className="dws-button dws-button-quiet" disabled={busy} onClick={() => setConfirmRetire(false)}>取消</button>
-          </div>
-        </div>
-      ) : (
-        <footer className="dws-worker-actions">
-          <button
-            type="button"
-            className="dws-button"
-            disabled={busy}
-            onClick={() => onMemory(worker)}
-            aria-label={`查看 ${worker.displayName} 的记忆`}
-            data-dws-action="worker-memory"
-          >
-            <Brain aria-hidden="true" />
-            记忆
-          </button>
-          <button
-            type="button"
-            className="dws-button"
-            disabled={busy}
-            onClick={() => onHistory(worker)}
-            aria-label={`查看 ${worker.displayName} 的交付历史`}
-            data-dws-action="worker-history"
-          >
-            <History aria-hidden="true" />
-            历史
-          </button>
-          {worker.status !== 'retired' && (
-            <button
-              type="button"
-              className="dws-button"
-              disabled={busy}
-              onClick={() => onRefreshPerformance(worker)}
-              aria-label={`刷新 ${worker.displayName} 的绩效`}
-              data-dws-action="refresh-performance"
-            >
-              <Gauge aria-hidden="true" />
-              刷新绩效
-            </button>
-          )}
-          {worker.status === 'proposed' && (
-            <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onActivate(worker)} aria-label={`启用 ${worker.displayName}`} data-dws-action="activate">启用</button>
-          )}
-          {worker.status === 'active' && (
-            <>
-              <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onAssign(worker.id)} aria-label={`给 ${worker.displayName} 分配 WorkItem`} data-dws-action="assign">分配任务</button>
-              <button type="button" className="dws-button" disabled={busy} onClick={() => onPause(worker)} aria-label={`暂停 ${worker.displayName}`} data-dws-action="pause">暂停</button>
-            </>
-          )}
-          {worker.status === 'paused' && (
-            <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onResume(worker)} aria-label={`恢复 ${worker.displayName}`} data-dws-action="resume">恢复</button>
-          )}
-          {worker.status !== 'retired' && (
-            <button type="button" className="dws-button dws-button-quiet" disabled={busy} onClick={() => setConfirmRetire(true)} aria-label={`退休 ${worker.displayName}`} data-dws-action="retire">退休</button>
-          )}
-        </footer>
-      )}
+      <WorkerCardActions {...props} worker={worker} busy={busy} />
     </article>
+  )
+}
+
+type WorkerCardActionsProps = Pick<
+  WorkerRosterProps,
+  | 'onActivate' | 'onPause' | 'onResume' | 'onRetire' | 'onRefreshPerformance'
+  | 'onMemory' | 'onHistory' | 'onAssign'
+> & { worker: DigitalWorker; busy: boolean }
+
+function WorkerCardActions(props: WorkerCardActionsProps): React.JSX.Element {
+  const {
+    worker, busy, onActivate, onPause, onResume, onRetire,
+    onRefreshPerformance, onMemory, onHistory, onAssign
+  } = props
+  const [confirmRetire, setConfirmRetire] = useState(false)
+  if (confirmRetire && worker.status !== 'retired') {
+    return (
+      <div className="dws-retire-confirm" role="alert">
+        <span>退休后不可重新启用；请先解除所有在办任务。</span>
+        <div>
+          <button type="button" className="dws-button dws-button-danger" disabled={busy} onClick={() => onRetire(worker)} data-dws-action="confirm-retire">确认退休</button>
+          <button type="button" className="dws-button dws-button-quiet" disabled={busy} onClick={() => setConfirmRetire(false)}>取消</button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <footer className="dws-worker-actions">
+      <button type="button" className="dws-button" disabled={busy} onClick={() => onMemory(worker)} aria-label={`查看 ${worker.displayName} 的记忆`} data-dws-action="worker-memory">
+        <Brain aria-hidden="true" />记忆
+      </button>
+      <button type="button" className="dws-button" disabled={busy} onClick={() => onHistory(worker)} aria-label={`查看 ${worker.displayName} 的交付历史`} data-dws-action="worker-history">
+        <History aria-hidden="true" />历史
+      </button>
+      {worker.status !== 'retired' && (
+        <button type="button" className="dws-button" disabled={busy} onClick={() => onRefreshPerformance(worker)} aria-label={`刷新 ${worker.displayName} 的绩效`} data-dws-action="refresh-performance">
+          <Gauge aria-hidden="true" />刷新绩效
+        </button>
+      )}
+      {worker.status === 'proposed' && (
+        <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onActivate(worker)} aria-label={`启用 ${worker.displayName}`} data-dws-action="activate">启用</button>
+      )}
+      {worker.status === 'active' && (
+        <>
+          <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onAssign(worker.id)} aria-label={`给 ${worker.displayName} 分配 WorkItem`} data-dws-action="assign">分配任务</button>
+          <button type="button" className="dws-button" disabled={busy} onClick={() => onPause(worker)} aria-label={`暂停 ${worker.displayName}`} data-dws-action="pause">暂停</button>
+        </>
+      )}
+      {worker.status === 'paused' && (
+        <button type="button" className="dws-button dws-button-primary" disabled={busy} onClick={() => onResume(worker)} aria-label={`恢复 ${worker.displayName}`} data-dws-action="resume">恢复</button>
+      )}
+      {worker.status !== 'retired' && (
+        <button type="button" className="dws-button dws-button-quiet" disabled={busy} onClick={() => setConfirmRetire(true)} aria-label={`退休 ${worker.displayName}`} data-dws-action="retire">退休</button>
+      )}
+    </footer>
   )
 }
 

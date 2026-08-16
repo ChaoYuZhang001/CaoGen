@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import ts from 'typescript'
@@ -137,6 +137,7 @@ function verifyMainProcessDefaultSelection() {
   const originalLoad = require('node:module').Module._load
   try {
     compileMainLifecycle(outDir)
+    installFixtureDependencies(outDir)
     require('node:module').Module._load = function patchedLoad(request, parent, isMain) {
       if (request === 'electron') {
         return {
@@ -198,7 +199,17 @@ function verifyMainProcessDefaultSelection() {
   }
 }
 
+function installFixtureDependencies(outDir) {
+  symlinkSync(
+    path.join(repoRoot, 'node_modules'),
+    path.join(outDir, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
+}
+
 function verifyPersistedWelcomeDraftMigration() {
+  const currentSchemaVersion = draftPersistence.WELCOME_DRAFT_SCHEMA_VERSION
+  assert.equal(typeof currentSchemaVersion, 'number', 'Welcome Draft must export its schema contract')
   const values = new Map()
   const storage = {
     getItem: (key) => values.get(key) ?? null,
@@ -235,8 +246,8 @@ function verifyPersistedWelcomeDraftMigration() {
   assert.equal(migrated.computeSelectionSource, 'default')
   assert.equal(
     JSON.parse(storage.getItem(draftPersistence.WELCOME_DRAFT_STORAGE_KEY)).schemaVersion,
-    3,
-    'A loaded v1 draft must be rewritten as schema v3'
+    currentSchemaVersion,
+    'A loaded v1 draft must be rewritten with the current schema'
   )
   assert.deepEqual(
     projection.resolveWelcomeComputeSelection(
@@ -257,8 +268,8 @@ function verifyPersistedWelcomeDraftMigration() {
   assert.equal(draftPersistence.loadWelcomeDraft(fallback, storage).text, 'read only')
   assert.equal(
     JSON.parse(storage.getItem(draftPersistence.WELCOME_DRAFT_STORAGE_KEY)).schemaVersion,
-    3,
-    'A loaded v2 draft must be rewritten as schema v3'
+    currentSchemaVersion,
+    'A loaded v2 draft must be rewritten with the current schema'
   )
 
   const explicitLegacy = {

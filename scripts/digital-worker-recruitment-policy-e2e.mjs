@@ -337,6 +337,10 @@ function exerciseStudioPolicyModel({ React, ReactDomServer, studioForms, studioM
   for (const label of ['水墨岗位形象', '允许的数据类', '禁止的数据类', '允许的 Resource ID', '最少 Evidence 数', '验收需用户确认']) {
     assert(markup.includes(label), `rendered recruitment form must expose ${label}`)
   }
+  for (const label of ['岗位', '员工名称', '自定义职责', '高级设置']) {
+    assert(markup.includes(label), `simplified recruitment form must expose ${label}`)
+  }
+  assert(markup.includes('<details class="dws-advanced'), 'advanced policy controls must be collapsed by default')
   const formsSource = readFileSync(
     path.join(repoRoot, 'src', 'renderer', 'src', 'components', 'studio', 'DigitalWorkerForms.tsx'),
     'utf8'

@@ -120,7 +120,28 @@ export async function executeBrowserTool(
         sessionId,
         typeof args.selector === 'string' && args.selector.trim() ? args.selector : undefined
       )
-      return { ok: true, output: path ? `截图已保存: ${path}` : '当前浏览器视图不可截图。' }
+      return {
+        ok: true,
+        output: path ? `截图已保存: ${path}` : '当前浏览器视图不可截图。',
+        ...(path ? {
+          producedArtifacts: [{
+            kind: 'screenshot' as const,
+            title: 'Browser screenshot',
+            path,
+            lineageKey: `browser-screenshot:${sessionId}`,
+            producer: 'browser_screenshot',
+            mediaType: 'image/png',
+            metadata: {
+              ...(typeof args.selector === 'string' && args.selector.trim()
+                ? { selector: args.selector.trim() }
+                : {})
+            },
+            evidenceKind: 'observation' as const,
+            evidenceSummary: 'The embedded browser captured a non-empty PNG output for this Run.',
+            evidenceVerifier: 'browser-runtime'
+          }]
+        } : {})
+      }
     }
     case 'browser_wait_for': {
       await browserViewManager.waitFor(sessionId, requireString(args.selector, 'selector'), numberArg(args.timeoutMs) ?? 5000)

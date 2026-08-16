@@ -5,6 +5,7 @@ import type {
   ProjectAggregateBudgetRecord,
   ProjectAggregateDependencies,
   ProjectAggregatePolicyRecord,
+  ProjectAggregatePortfolio,
   ProjectAggregateQueryOptions,
   ProjectAggregateReference,
   ProjectAggregateRoots,
@@ -16,11 +17,15 @@ import type {
 import type { WorkflowLedgerExportSelection } from '../../shared/workflow-types'
 import { DigitalWorkerStore } from '../digital-worker/domain-store'
 import { ProjectWorkspaceStore } from '../project-workspace'
+import { getProjectPortfolioStore } from '../project-portfolio/store'
+import { getMediaStore } from '../media/media-store'
 import { exportPersistedWorkflowLedger } from '../task/workflow-ledger-maintenance'
 import { readRuns } from '../task/workflow-ledger-query'
 import { digest as workflowDigest } from '../task/workflow-ledger-codec'
 import { readTaskSnapshotDatabase } from '../task/task-snapshot'
 import { readProjectRoutineSlice } from '../routines/routine-project-store'
+import { collectProjectPortableRuntime } from '../data-lifecycle/project-portable-runtime'
+import { isLocalProjectWorkspaceAuthorityEvent } from '../project-workspace/ledger-import-authority'
 import { projectAggregateCanonicalJson, sanitizeProjectAggregateValue } from './codec'
 import { aggregateIntegrityError, ProjectAggregateError, requiredProjectId } from './errors'
 import { buildProjectAggregateExport, buildProjectAggregateVerification } from './project-aggregate-export'
@@ -145,11 +150,43 @@ export class ProjectAggregateService {
         { projectId: aggregate.projectId }
       )
     }
+    const firstRuntime = await collectProjectPortableRuntime(aggregate.projectId, this.roots.workflowRoot, aggregate)
+    const runtime = await collectProjectPortableRuntime(aggregate.projectId, this.roots.workflowRoot, aggregate)
+    if (firstRuntime.runtimeDigest !== runtime.runtimeDigest) {
+      throw new ProjectAggregateError(
+        'REVISION_CONFLICT',
+        `Project runtime ${aggregate.projectId} changed during export`,
+        { projectId: aggregate.projectId }
+      )
+    }
+    const portfolioStore = getProjectPortfolioStore(this.roots.workspaceRoot)
+    const firstPortfolio = await portfolioStore.exportProjectSlice(aggregate.projectId)
+    const portfolio = await portfolioStore.exportProjectSlice(aggregate.projectId)
+    if (projectAggregateCanonicalJson(firstPortfolio) !== projectAggregateCanonicalJson(portfolio)) {
+      throw new ProjectAggregateError(
+        'REVISION_CONFLICT',
+        `Project Portfolio ${aggregate.projectId} changed during export`,
+        { projectId: aggregate.projectId }
+      )
+    }
+    const mediaStore = getMediaStore(this.roots.workspaceRoot)
+    const firstMedia = await mediaStore.exportProjectSlice(aggregate.projectId)
+    const media = await mediaStore.exportProjectSlice(aggregate.projectId)
+    if (firstMedia.mediaDigest !== media.mediaDigest) {
+      throw new ProjectAggregateError(
+        'REVISION_CONFLICT',
+        `Project Media ${aggregate.projectId} changed during export`,
+        { projectId: aggregate.projectId }
+      )
+    }
     return buildProjectAggregateExport(
       aggregate,
       this.stableSealFor(aggregate),
       this.collectExportDependencies(aggregate),
-      sanitizeProjectAggregateValue(automation) as ProjectAggregateAutomation
+      sanitizeProjectAggregateValue(automation) as ProjectAggregateAutomation,
+      sanitizeProjectAggregateValue(portfolio) as ProjectAggregatePortfolio,
+      runtime,
+      media
     )
   }
 
@@ -257,7 +294,11 @@ export class ProjectAggregateService {
     const goals = workspaceState.goals.filter((goal) => goal.projectId === projectId).sort(byId)
     const workItems = workspaceState.workItems.filter((item) => item.projectId === projectId).sort(byId)
     const squads = workspaceState.squads.filter((squad) => squad.projectId === projectId).sort(byId)
+    const members = workspaceState.members.filter((member) => member.projectId === projectId).sort(byId)
+    const invitations = workspaceState.invitations.filter((invitation) => invitation.projectId === projectId).sort(byId)
     const comments = workspaceState.comments.filter((comment) => comment.projectId === projectId).sort(byId)
+    const sharedApprovals = workspaceState.sharedApprovals.filter((approval) => approval.projectId === projectId).sort(byId)
+    const inboxReceipts = workspaceState.inboxReceipts.filter((receipt) => receipt.projectId === projectId).sort(byId)
     const workspaceAudit = workspaceState.events.filter((event) => event.projectId === projectId).sort(byEvent)
     const digitalWorkers = workerState.workers.filter((worker) => worker.projectId === projectId).sort(byId)
     const assignments = workerState.assignments.filter((assignment) => assignment.projectId === projectId).sort(byId)
@@ -279,7 +320,7 @@ export class ProjectAggregateService {
         occurredAt: event.occurredAt,
         value: event
       })),
-      ...ledger.events.items.map((event) => ({
+      ...ledger.events.items.filter((event) => !isLocalProjectWorkspaceAuthorityEvent(event)).map((event) => ({
         id: `workflow-ledger:${event.eventId}`,
         projectId,
         source: 'workflow_ledger' as const,
@@ -310,7 +351,11 @@ export class ProjectAggregateService {
       goals,
       workItems,
       squads,
+      members,
+      invitations,
       comments,
+      sharedApprovals,
+      ...(inboxReceipts.length > 0 ? { inboxReceipts } : {}),
       digitalWorkers,
       assignments,
       leases,

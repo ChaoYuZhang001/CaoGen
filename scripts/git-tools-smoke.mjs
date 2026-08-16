@@ -609,6 +609,9 @@ try {
     'git',
     [
       '#!/bin/sh',
+      `semantic_marker=${posixShellLiteral(semanticDriftMarker)}`,
+      `semantic_repo=${posixShellLiteral(semanticDriftDir)}`,
+      `real_git=${posixShellLiteral(semanticRealGit)}`,
       'is_merge=0',
       'is_no_ff=0',
       'for arg in "$@"',
@@ -618,32 +621,21 @@ try {
       'done',
       'if [ "$is_merge" = 1 ] && [ "$is_no_ff" = 1 ]',
       'then',
-      '  printf "semantic drift wrapper reached real merge\\n" > "$CAOGEN_SEMANTIC_MARKER"',
-      '  printf "app.txt merge=caogen-race\\n" > "$CAOGEN_SEMANTIC_REPO/.git/info/attributes"',
-      '  "$CAOGEN_REAL_GIT" -C "$CAOGEN_SEMANTIC_REPO" config merge.caogen-race.driver true',
+      '  printf "semantic drift wrapper reached real merge\\n" > "$semantic_marker"',
+      '  printf "app.txt merge=caogen-race\\n" > "$semantic_repo/.git/info/attributes"',
+      '  "$real_git" -C "$semantic_repo" config merge.caogen-race.driver true',
       'fi',
-      'exec "$CAOGEN_REAL_GIT" "$@"',
+      'exec "$real_git" "$@"',
       ''
     ].join('\n')
   )
-  const semanticDriftEnv = {
-    PATH: process.env.PATH,
-    CAOGEN_SEMANTIC_MARKER: process.env.CAOGEN_SEMANTIC_MARKER,
-    CAOGEN_SEMANTIC_REPO: process.env.CAOGEN_SEMANTIC_REPO,
-    CAOGEN_REAL_GIT: process.env.CAOGEN_REAL_GIT
-  }
+  const semanticDriftPath = process.env.PATH
   process.env.PATH = `${semanticWrapperDir}${path.delimiter}${process.env.PATH ?? ''}`
-  process.env.CAOGEN_SEMANTIC_MARKER = semanticDriftMarker
-  process.env.CAOGEN_SEMANTIC_REPO = semanticDriftDir
-  process.env.CAOGEN_REAL_GIT = semanticRealGit
   let semanticDriftMerge
   try {
     semanticDriftMerge = gitHelper.gitMerge(semanticDriftDir, 'feature')
   } finally {
-    restoreEnv('PATH', semanticDriftEnv.PATH)
-    restoreEnv('CAOGEN_SEMANTIC_MARKER', semanticDriftEnv.CAOGEN_SEMANTIC_MARKER)
-    restoreEnv('CAOGEN_SEMANTIC_REPO', semanticDriftEnv.CAOGEN_SEMANTIC_REPO)
-    restoreEnv('CAOGEN_REAL_GIT', semanticDriftEnv.CAOGEN_REAL_GIT)
+    restoreEnv('PATH', semanticDriftPath)
   }
   assert(existsSync(semanticDriftMarker), 'fixture must change merge semantics only when the real merge starts')
   assert(!semanticDriftMerge.ok, 'reference transaction must reject a commit built with drifted merge semantics')
@@ -1055,6 +1047,10 @@ function writeExecutable(dir, name, content) {
   writeFileSync(file, content, 'utf8')
   chmodSync(file, 0o755)
   return file
+}
+
+function posixShellLiteral(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`
 }
 
 function git(cwd, args) {

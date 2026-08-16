@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -22,7 +22,7 @@ const baseArgs = [
 try {
   const validRecord = makeRecord()
   const valid = runAudit('valid', validRecord, ['--required', ...baseArgs])
-  assert.equal(valid.exitCode, 0)
+  assert.equal(valid.exitCode, 0, JSON.stringify(valid.report))
   assert.equal(valid.report.status, 'passed')
   assert.equal(valid.report.summary.completedStepCount, 5)
   assert.equal(valid.report.summary.evidenceFiles.length, 4)
@@ -245,7 +245,7 @@ function runWithoutRecord(args) {
 function writeFixture(name, contents) {
   const target = path.join(tempRoot, name)
   writeFileSync(target, contents, 'utf8')
-  return target
+  return realpathSync.native(target)
 }
 
 function sha256(value) {

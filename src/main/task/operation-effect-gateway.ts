@@ -14,6 +14,7 @@ import {
   projectConfirmedManagedWorktreeTarget
 } from '../managed-worktree-lifecycle'
 import {
+  confirmedEffectFromArtifactProjectionError,
   completeEffectExecution,
   markEffectExecutionStarted,
   prepareEffectExecution,
@@ -26,10 +27,13 @@ import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { createTaskRun, isTaskRunTerminal, transitionTaskRun } from './task-run'
 import { taskRuntimeRegistry } from './task-runtime-registry'
 import { withSessionOperationQueue } from '../session-operation-queue'
+import { bindWorkflowRunToCanonicalWorkItem } from './workflow-run-canonical-binding'
 
 const activeOperationScopes = new Set<string>()
 
 export interface InteractiveOperationEffectSpec<T> {
+  /** Canonical ProjectWorkspace root used by application-owned operations. */
+  rootDir?: string
   operationId?: string
   source?: InteractiveOperationSource
   kind: InteractiveOperationKind
@@ -75,6 +79,7 @@ export type InteractiveOperationEffectOutcome<T> =
     }
 
 interface InteractiveOperationExecutionContext {
+  rootDir?: string
   operationId: string
   scopeId: string
   now: number
@@ -155,13 +160,14 @@ function createOperationExecutionContext<T>(
   )
   const meta = operationMeta(scopeId, spec.cwd, operation.title, spec, now)
   const effectInput: PrepareEffectExecutionInput = {
+    rootDir: spec.rootDir,
     sessionId: scopeId,
     cwd: spec.cwd,
     toolUseId,
     toolName: spec.toolName,
     toolInput: spec.toolInput
   }
-  return { operationId, scopeId, now, run, meta, effectInput }
+  return { rootDir: spec.rootDir, operationId, scopeId, now, run, meta, effectInput }
 }
 
 async function initializeOperationScope(context: InteractiveOperationExecutionContext): Promise<void> {
@@ -175,10 +181,11 @@ async function initializeOperationScope(context: InteractiveOperationExecutionCo
     subtasks: [],
     dagExecutions: [],
     now: context.now
-  }))
+  }), context.rootDir)
   context.run = persisted.run ?? context.run
   context.effectInput.toolUseId = nextOperationEffectToolUseId(context.scopeId, context.run)
   taskRuntimeRegistry.set(context.scopeId, context.run)
+  await bindWorkflowRunToCanonicalWorkItem(context.meta, context.run, context.rootDir)
 }
 
 function nextOperationEffectToolUseId(scopeId: string, run: TaskRunRecord): string {
@@ -230,6 +237,15 @@ async function completeInteractiveEffect<T>(
     if (!effect) throw new Error('Effect Runtime 未返回外部效果记录')
     return { kind: 'recorded', effect }
   } catch (error) {
+    const confirmedEffect = confirmedEffectFromArtifactProjectionError(error)
+    if (confirmedEffect) {
+      const message = `外部操作效果已确认，但 Artifact/Evidence/Acceptance 投影未收敛:${errorText(error)}`
+      await ensureOperationWaiting(context, message)
+      return {
+        kind: 'waiting',
+        outcome: waitingOutcome(context, confirmedEffect.id, attempt.value, message, confirmedEffect.status)
+      }
+    }
     return {
       kind: 'waiting',
       outcome: waitingOutcome(
@@ -248,19 +264,19 @@ async function settleInteractiveEffectOutcome<T>(
   attempt: InteractiveEffectAttempt<T>
 ): Promise<InteractiveOperationEffectOutcome<T>> {
   if (isConfirmedEffect(effect)) {
-    const projectionError = await finalizeOperationScope(context.scopeId, 'completed')
+    const projectionError = await finalizeOperationScope(context, 'completed')
     if (projectionError) {
       return waitingOutcome(context, effect.id, attempt.value, projectionError, effect.status)
     }
     return completedOutcome(context.operationId, effect, attempt.value)
   }
   if (isUnresolvedEffect(effect)) {
-    await ensureOperationWaiting(context.scopeId)
-    const error = effect.error ?? attempt.executionError ?? '外部操作结果无法唯一确认，已禁止自动重放'
+    await ensureOperationWaiting(context)
+    const error = attempt.executionError ?? effect.error ?? '外部操作结果无法唯一确认，已禁止自动重放'
     return waitingOutcome(context, effect.id, attempt.value, error, effect.status)
   }
-  const error = effect.error ?? attempt.executionError ?? '外部操作失败'
-  await finalizeOperationScope(context.scopeId, 'failed', error)
+  const error = attempt.executionError ?? effect.error ?? '外部操作失败'
+  await finalizeOperationScope(context, 'failed', error)
   return failedEffectOutcome(context.operationId, effect, attempt.value, error)
 }
 
@@ -268,7 +284,7 @@ async function settleFailedInteractiveOperation<T>(
   context: InteractiveOperationExecutionContext,
   error: unknown
 ): Promise<InteractiveOperationEffectOutcome<T>> {
-  const settled = await settleOperationAfterPreExecutionFailure(context.scopeId)
+  const settled = await settleOperationAfterPreExecutionFailure(context)
   if (settled?.run?.status === 'waiting_reconciliation') {
     const effect = latestEffect(settled.run)
     return waitingRecoveryOutcome(
@@ -359,7 +375,8 @@ export async function settleStoppedInteractiveOperationSnapshot(
   let current = stored ?? snapshot
   const projection = ensureManagedWorktreeProjections(current.run)
   if ('error' in projection) return await saveProjectionWaitingSnapshot(current, projection.error)
-  if (projection.projected && runHasUnresolvedEffects(current.run)) {
+  if (current.run && (runHasUnresolvedEffects(current.run) ||
+      current.run.status === 'waiting_reconciliation')) {
     current = await reconcilePersistedTaskSnapshot(current)
   }
   if (runHasUnresolvedEffects(current.run)) return current
@@ -374,44 +391,50 @@ export async function settleStoppedInteractiveOperationSnapshot(
   return null
 }
 
-async function ensureOperationWaiting(scopeId: string, error?: string): Promise<void> {
-  const snapshot = await getTaskSnapshot(scopeId)
+async function ensureOperationWaiting(
+  context: Pick<InteractiveOperationExecutionContext, 'scopeId' | 'rootDir'>,
+  error?: string
+): Promise<void> {
+  const { scopeId, rootDir } = context
+  const snapshot = await getTaskSnapshot(scopeId, rootDir)
   const current = taskRuntimeRegistry.get(scopeId) ?? snapshot?.run
   if (!snapshot || !current) return
   const transitioned = current.status === 'waiting_reconciliation'
     ? current
     : transitionTaskRun(current, 'waiting_reconciliation')
   const run = error ? { ...transitioned, error } : transitioned
-  await saveTaskSnapshot({ ...snapshot, updatedAt: Date.now(), run })
+  await saveTaskSnapshot({ ...snapshot, updatedAt: Date.now(), run }, rootDir)
   taskRuntimeRegistry.set(scopeId, run)
 }
 
 async function finalizeOperationScope(
-  scopeId: string,
+  context: Pick<InteractiveOperationExecutionContext, 'scopeId' | 'rootDir'>,
   status: 'completed' | 'failed',
   error?: string
 ): Promise<string | undefined> {
-  const snapshot = await getTaskSnapshot(scopeId)
+  const { scopeId, rootDir } = context
+  const snapshot = await getTaskSnapshot(scopeId, rootDir)
   const current = taskRuntimeRegistry.get(scopeId) ?? snapshot?.run
   if (!current) throw new Error('交互操作的 TaskRun 已丢失，无法收敛恢复入口')
   if (status === 'completed') {
     const projection = ensureManagedWorktreeProjections(current)
     if ('error' in projection) {
       const message = `外部效果已确认，但 managed worktree projection 未收敛: ${projection.error}`
-      await ensureOperationWaiting(scopeId, message)
+      await ensureOperationWaiting(context, message)
       return message
     }
   }
   const finalRun = settleRun(current, status, error)
-  await deleteTaskSnapshot(scopeId, undefined, finalRun)
+  await deleteTaskSnapshot(scopeId, rootDir, finalRun)
   taskRuntimeRegistry.delete(scopeId)
   return undefined
 }
 
 async function settleOperationAfterPreExecutionFailure(
-  scopeId: string
+  context: Pick<InteractiveOperationExecutionContext, 'scopeId' | 'rootDir'>
 ): Promise<TaskSnapshotRecord | null> {
-  const snapshot = await getTaskSnapshot(scopeId)
+  const { scopeId, rootDir } = context
+  const snapshot = await getTaskSnapshot(scopeId, rootDir)
   if (!snapshot) {
     taskRuntimeRegistry.delete(scopeId)
     return null
@@ -420,7 +443,7 @@ async function settleOperationAfterPreExecutionFailure(
   const projection = ensureManagedWorktreeProjections(snapshot.run)
   if (!projection.ok) return snapshot
   const run = snapshot.run ? settleRun(snapshot.run, 'failed', '交互操作在外部执行前停止') : undefined
-  await deleteTaskSnapshot(scopeId, undefined, run)
+  await deleteTaskSnapshot(scopeId, rootDir, run)
   taskRuntimeRegistry.delete(scopeId)
   return null
 }

@@ -11,19 +11,18 @@ import type {
   ProviderApiKeyView,
   ProviderAdvancedConfig,
   ProviderCredentialRoutingMode,
-  ProviderCredentialStorage,
   ProviderGenerationProbeResult,
   ProviderInput,
   ProviderModelFetchError,
   ProviderModelSuggestedAction,
   ProviderView
 } from '../../../shared/types'
-import ProviderSavedKeys from './settings/ProviderSavedKeys'
 import {
   createProviderKeyDrafts,
   providerKeyPolicyFromDraft,
   type ProviderKeyDraft
 } from './settings/ProviderSavedKeys'
+import ProviderCredentialFields, { ProviderCredentialMigrationNotice } from './settings/ProviderCredentialFields'
 import ProviderAuthorizationPanel from './settings/ProviderAuthorizationPanel'
 import ProviderBalancePanel from './settings/ProviderBalancePanel'
 import ProviderAdvancedConfigEditor from './ProviderAdvancedConfigEditor'
@@ -84,6 +83,39 @@ function NewProviderEditor({ onClose }: Pick<Props, 'onClose'>): React.JSX.Eleme
           onSaved={(provider) => onClose({ reason: 'saved', provider })}
         />
       )
+}
+
+function ProviderEditorIntro({ provider, isEdit, presetHint, onClose, onApplyPreset, onNavigate }: {
+  provider: ProviderView | null
+  isEdit: boolean
+  presetHint: string
+  onClose: Props['onClose']
+  onApplyPreset: (key: string) => void
+  onNavigate: (selector: string) => void
+}): React.JSX.Element {
+  const t = useT()
+  return <>
+    <header className="provider-editor-header">
+      <button type="button" className="provider-editor-back" data-provider-editor-action="back" aria-label={t('backToProviders')} title={t('backToProviders')} onClick={() => onClose({ reason: 'cancelled' })}>←</button>
+      <h2 className="provider-editor-title">{isEdit ? t('providerEditTitle') : t('providerAddTitle')}</h2>
+    </header>
+    {!isEdit && <>
+      <label className="field-label">{t('quickTemplate')}</label>
+      <ProviderPresetCatalog onSelect={(preset) => onApplyPreset(preset.key)} />
+      <p className="provider-gateway-note">{t('gatewayNote1')}<b>{t('gatewayNoteBold')}</b>{t('gatewayNote2')}</p>
+    </>}
+    {presetHint && <div className="notice notice-info">{presetHint}</div>}
+    <ProviderCredentialMigrationNotice provider={provider} />
+    <nav className="provider-editor-section-nav" aria-label={t('providerEditorSectionNavigation')}>
+      {provider && <button type="button" onClick={() => onNavigate('.provider-authorization')}>{t('providerEditorSectionAuthorization')}</button>}
+      <button type="button" onClick={() => onNavigate('[data-provider-field="base-url"]')}>{t('providerEditorSectionConnection')}</button>
+      <button type="button" onClick={() => onNavigate('[data-provider-field="models"]')}>{t('providerEditorSectionModels')}</button>
+      <button type="button" onClick={() => onNavigate('[data-provider-model-catalog]')}>{t('providerEditorSectionPricing')}</button>
+      <button type="button" onClick={() => onNavigate('[data-provider-reliability-config]')}>{t('providerEditorSectionReliability')}</button>
+    </nav>
+    {provider && <ProviderAuthorizationPanel provider={provider} />}
+    {provider && <ProviderBalancePanel provider={provider} />}
+  </>
 }
 
 function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.JSX.Element {
@@ -305,54 +337,7 @@ function ProviderEditor({ provider, initialDiagnostic, onClose }: Props): React.
   }
   return (
     <section ref={editorRef} className="provider-editor" aria-label={isEdit ? t('providerEditTitle') : t('providerAddTitle')} data-provider-editor="form">
-        <header className="provider-editor-header">
-          <button
-            type="button"
-            className="provider-editor-back" data-provider-editor-action="back"
-            aria-label={t('backToProviders')}
-            title={t('backToProviders')}
-            onClick={() => onClose({ reason: 'cancelled' })}
-          >
-            ←
-          </button>
-          <h2 className="provider-editor-title">{isEdit ? t('providerEditTitle') : t('providerAddTitle')}</h2>
-        </header>
-
-        {!isEdit && (
-          <>
-            <label className="field-label">{t('quickTemplate')}</label>
-            <ProviderPresetCatalog onSelect={(preset) => applyPreset(preset.key)} />
-            <p className="provider-gateway-note">
-              {t('gatewayNote1')}
-              <b>{t('gatewayNoteBold')}</b>
-              {t('gatewayNote2')}
-            </p>
-          </>
-        )}
-
-        {presetHint && <div className="notice notice-info">{presetHint}</div>}
-        <ProviderCredentialMigrationNotice provider={provider} />
-        <nav className="provider-editor-section-nav" aria-label={t('providerEditorSectionNavigation')}>
-          {provider && (
-            <button type="button" onClick={() => scrollToEditorSection('.provider-authorization')}>
-              {t('providerEditorSectionAuthorization')}
-            </button>
-          )}
-          <button type="button" onClick={() => scrollToEditorSection('[data-provider-field="base-url"]')}>
-            {t('providerEditorSectionConnection')}
-          </button>
-          <button type="button" onClick={() => scrollToEditorSection('[data-provider-field="models"]')}>
-            {t('providerEditorSectionModels')}
-          </button>
-          <button type="button" onClick={() => scrollToEditorSection('[data-provider-model-catalog]')}>
-            {t('providerEditorSectionPricing')}
-          </button>
-          <button type="button" onClick={() => scrollToEditorSection('[data-provider-reliability-config]')}>
-            {t('providerEditorSectionReliability')}
-          </button>
-        </nav>
-        {provider && <ProviderAuthorizationPanel provider={provider} />}
-        {provider && <ProviderBalancePanel provider={provider} />}
+        <ProviderEditorIntro provider={provider} isEdit={isEdit} presetHint={presetHint} onClose={onClose} onApplyPreset={applyPreset} onNavigate={scrollToEditorSection} />
 
         <label className="field-label">{t('nameLabel')}</label>
         <input
@@ -627,147 +612,6 @@ function buildProviderCredentialPatch(state: ProviderEditorSaveState): Partial<P
   if (removeKeyIds.length > 0) patch.removeKeyIds = removeKeyIds
   if (activeKeyId) patch.activeKeyId = activeKeyId
   return patch
-}
-
-function ProviderCredentialFields({
-  authMode,
-  onAuthModeChange,
-  existingCredentialCount,
-  provider,
-  isEdit,
-  token,
-  tokenTouched,
-  onTokenChange,
-  tokenLabel,
-  onTokenLabelChange,
-  savedKeys,
-  keyDrafts,
-  activeKeyId,
-  onActiveKeyChange,
-  credentialRoutingMode,
-  onCredentialRoutingModeChange,
-  onKeyDraftsChange,
-  additionalKeysText,
-  onAdditionalKeysTextChange
-}: {
-  authMode: ProviderAuthMode
-  onAuthModeChange: (mode: ProviderAuthMode) => void
-  existingCredentialCount: number
-  provider: ProviderView | null
-  isEdit: boolean
-  token: string
-  tokenTouched: boolean
-  onTokenChange: (value: string) => void
-  tokenLabel: string
-  onTokenLabelChange: (value: string) => void
-  savedKeys: ProviderApiKeyView[]
-  keyDrafts: Record<string, ProviderKeyDraft>
-  activeKeyId: string
-  onActiveKeyChange: (id: string) => void
-  credentialRoutingMode: ProviderCredentialRoutingMode
-  onCredentialRoutingModeChange: (mode: ProviderCredentialRoutingMode) => void
-  onKeyDraftsChange: React.Dispatch<React.SetStateAction<Record<string, ProviderKeyDraft>>>
-  additionalKeysText: string
-  onAdditionalKeysTextChange: (value: string) => void
-}): React.JSX.Element {
-  const t = useT()
-  return (
-    <>
-      <label className="field-label">{t('providerAuthModeLabel')}</label>
-      <select className="select select-block" value={authMode} onChange={(event) => onAuthModeChange(event.target.value as ProviderAuthMode)}>
-        <option value="api-key">{t('providerAuthModeApiKey')}</option>
-        <option value="none">{t('providerAuthModeNone')}</option>
-      </select>
-      {authMode === 'none' ? (
-        <div className={`notice ${existingCredentialCount > 0 ? 'notice-error' : 'notice-info'}`}>
-          {t(existingCredentialCount > 0
-            ? 'providerAuthModeNoneDeletesKeysHint'
-            : 'providerAuthModeNoneHint', { n: existingCredentialCount })}
-        </div>
-      ) : (
-        <>
-          <ProviderCredentialStorageNotice storage={provider?.credentialStorage} />
-          <label className="field-label">
-            {t('apiKeyLabelPrimary')}
-            {isEdit && provider?.hasToken && !tokenTouched && <span className="field-hint">{t('savedKeepEmpty')}</span>}
-          </label>
-          <input
-            className="input input-block" data-provider-field="api-key"
-            type="password"
-            value={token}
-            placeholder={isEdit && provider?.hasToken ? t('tokenPlaceholderSaved') : '<your-api-key>'}
-            onChange={(event) => onTokenChange(event.target.value)}
-          />
-          <label className="field-label">{t('apiKeyNameLabel')}</label>
-          <input
-            className="input input-block"
-            value={tokenLabel}
-            placeholder={t('apiKeyNamePlaceholder')}
-            onChange={(event) => onTokenLabelChange(event.target.value)}
-          />
-          <ProviderSavedKeys
-            provider={provider}
-            savedKeys={savedKeys}
-            keyDrafts={keyDrafts}
-            activeKeyId={activeKeyId}
-            routingMode={credentialRoutingMode}
-            onActiveKeyChange={onActiveKeyChange}
-            onRoutingModeChange={onCredentialRoutingModeChange}
-            onKeyDraftsChange={onKeyDraftsChange}
-          />
-          <label className="field-label">{t('additionalApiKeysLabel')}</label>
-          <textarea
-            className="input input-block textarea" data-provider-field="additional-api-keys"
-            value={additionalKeysText}
-            rows={3}
-            placeholder={t('additionalApiKeysPlaceholder')}
-            onChange={(event) => onAdditionalKeysTextChange(event.target.value)}
-          />
-          <div className="field-hint">{t('additionalApiKeysHint')}</div>
-        </>
-      )}
-    </>
-  )
-}
-
-function providerCredentialNotice(
-  storage: ProviderCredentialStorage
-): { key: string; tone: 'notice-info' | 'notice-error' } | null {
-  switch (storage) {
-    case 'session':
-      return { key: 'providerCredentialSessionNotice', tone: 'notice-info' }
-    case 'legacy-b64':
-      return { key: 'providerCredentialLegacyNotice', tone: 'notice-info' }
-    case 'unavailable':
-      return { key: 'providerCredentialUnavailableNotice', tone: 'notice-error' }
-    case 'mixed':
-      return { key: 'providerCredentialMixedNotice', tone: 'notice-info' }
-    case 'none':
-    case 'encrypted':
-      return null
-  }
-}
-
-function ProviderCredentialMigrationNotice({
-  provider
-}: {
-  provider: ProviderView | null
-}): React.JSX.Element | null {
-  const t = useT()
-  if (!provider?.credentialMigrationRequired) return null
-  return <div className="notice notice-error">{t('providerCredentialMigrationNotice')}</div>
-}
-
-function ProviderCredentialStorageNotice({
-  storage
-}: {
-  storage: ProviderCredentialStorage | undefined
-}): React.JSX.Element | null {
-  const t = useT()
-  if (!storage) return null
-  const notice = providerCredentialNotice(storage)
-  if (!notice) return null
-  return <div className={`notice ${notice.tone}`}>{t(notice.key)}</div>
 }
 
 function parseAdditionalKeys(value: string): ProviderApiKeyInput[] {

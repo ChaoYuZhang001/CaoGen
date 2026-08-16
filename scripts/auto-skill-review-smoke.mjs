@@ -194,8 +194,10 @@ function assertRuntimeWiring() {
   assert(anthropicEngine.includes('augmentNativePayloadWithLayeredMemory'), 'Anthropic engine must use the native layered prompt')
 
   const openaiEngine = read('src/main/openaiEngine.ts')
-  assert(openaiEngine.includes('buildSkillInvocationPrompt'), 'OpenAI path must inject learned skills')
-  assert(openaiEngine.includes('autoSkillLearningEnabled'), 'OpenAI path must honor skill invocation setting')
+  assert(
+    openaiEngine.includes('augmentNativePayloadWithLayeredMemory'),
+    'OpenAI engine must use the native layered prompt for authorized Skill injection'
+  )
 
   const settings = read('src/main/settings.ts')
   assert(settings.includes('autoSkillLearningEnabled: false'), 'auto skill learning must default off')

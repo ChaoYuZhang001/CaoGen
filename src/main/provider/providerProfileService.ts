@@ -48,6 +48,11 @@ import {
   type ProviderProfileOperationReconciliation
 } from './providerProfileOperationJournal'
 import { withProviderStoreMutationLock } from './providerStoreMutationLock'
+import { providerBackupChangedFields } from './providerProfileBackupComparison'
+import {
+  protectedProviderProfileBackupIds,
+  pruneProviderProfileBackups
+} from './provider-profile-backup-retention'
 import {
   parseProviderProfile,
   planProviderProfileImport,
@@ -59,7 +64,8 @@ const BACKUP_KIND = 'caogen-provider-profile-backup'
 const BACKUP_VERSION = 1
 const PREVIEW_TTL_MS = 15 * 60 * 1_000
 const MAX_PENDING_PREVIEWS = 20
-const MAX_LOCAL_BACKUPS = 50
+export const PROVIDER_PROFILE_BACKUP_MAX_COUNT = 50
+export const PROVIDER_PROFILE_BACKUP_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000
 const BACKUP_ID = /^[0-9TZ-]{19,40}-[0-9a-f-]{36}$/i
 
 interface PendingProviderProfileImport {
@@ -167,10 +173,7 @@ export function applyProviderProfilePreview(
   })
   if (mutations.length === 0) throw new Error('没有需要应用的 Provider Profile 配置')
   const { backup, committed } = withProviderStoreMutationLock(app.getPath('userData'), () => {
-    if (providerConfigurationDigest(listProviders()) !== pending.providerConfigurationDigest) {
-      pendingImports.delete(pending.preview.previewId)
-      throw new Error('Provider 配置在预览后已变化，请重新预览后再应用')
-    }
+    assertProviderProfileImportCurrent(pending)
     const backup = createProviderProfileBackup('import')
     const safetyBinding = readBackupBinding(backup.id)
     const committed = executeProviderProfileStoreOperation(
@@ -195,6 +198,19 @@ export function applyProviderProfilePreview(
   }
 }
 
+export function preflightProviderProfilePreview(
+  previewId: string,
+  decisions: ProviderProfileImportDecision[]
+): void {
+  reconcileProviderProfileOperations()
+  const pending = requirePendingImport(previewId)
+  const selected = selectedImportActions(pending, decisions)
+  if (selected.every(({ action }) => action === 'skip')) {
+    throw new Error('没有需要应用的 Provider Profile 配置')
+  }
+  assertProviderProfileImportCurrent(pending)
+}
+
 export function listProviderProfileBackups(): ProviderProfileBackupView[] {
   reconcileProviderProfileOperations()
   const root = backupRoot()
@@ -210,7 +226,23 @@ export function listProviderProfileBackups(): ProviderProfileBackupView[] {
       }
     })
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, MAX_LOCAL_BACKUPS)
+    .slice(0, PROVIDER_PROFILE_BACKUP_MAX_COUNT)
+}
+
+export function deleteProviderProfileBackup(backupId: string): { deletedBackupId: string } {
+  reconcileProviderProfileOperations()
+  const normalizedId = normalizedBackupId(backupId)
+  const protectedIds = protectedProviderProfileBackupIds(
+    pendingBackups.values(),
+    providerProfileOperationJournal().list()
+  )
+  if (protectedIds.has(normalizedId)) {
+    throw new Error('Provider Profile 备份正被未完成操作或预览引用，暂时不能删除')
+  }
+  const filePath = join(backupRoot(), `${normalizedId}.json`)
+  readBackup(filePath)
+  removeProviderProfileBackupFile(filePath)
+  return { deletedBackupId: normalizedId }
 }
 
 export function previewProviderProfileBackup(backupId: string): ProviderProfileBackupPreview {
@@ -338,9 +370,10 @@ export function commitPreparedProviderStoreOperation(
 
 export function reconcileProviderProfileOperations(): ProviderProfileOperationReconciliation[] {
   return withProviderStoreMutationLock(app.getPath('userData'), () => {
-    scrubProviderProfileBackups()
     const journal = providerProfileOperationJournal()
-    for (const entry of journal.list()) {
+    const entries = journal.list()
+    scrubProviderProfileBackups(protectedProviderProfileBackupIds(pendingBackups.values(), entries))
+    for (const entry of entries) {
       if (entry.phase !== 'prepared' && entry.phase !== 'waiting_reconciliation') continue
       try {
         assertOperationBackupBindings(entry)
@@ -432,6 +465,12 @@ function requirePendingImport(previewId: string): PendingProviderProfileImport {
   return pending
 }
 
+function assertProviderProfileImportCurrent(pending: PendingProviderProfileImport): void {
+  if (providerConfigurationDigest(listProviders()) === pending.providerConfigurationDigest) return
+  pendingImports.delete(pending.preview.previewId)
+  throw new Error('Provider 配置在预览后已变化，请重新预览后再应用')
+}
+
 function prunePendingImports(): void {
   const expiredBefore = Date.now() - PREVIEW_TTL_MS
   for (const [id, pending] of pendingImports) {
@@ -499,30 +538,6 @@ function backupChangeItems(
   })
 }
 
-function providerBackupChangedFields(
-  backup: Provider,
-  current: ReturnType<typeof listProviders>[number]
-): string[] {
-  const fields: Array<[string, unknown, unknown]> = [
-    ['name', backup.name, current.name],
-    ['baseUrl', backup.baseUrl, current.baseUrl],
-    ['models', backup.models, current.models],
-    ['authMode', backup.authMode, current.authMode],
-    ['engine', backup.engine, current.engine],
-    ['customHeaders', backup.customHeaders ?? '', current.customHeaders ?? ''],
-    ['credentialHeaderNames', backup.credentialHeaderNames ?? [], current.credentialHeaderNames ?? []],
-    ['credentialRoutingMode', backup.credentialRoutingMode ?? 'preferred', current.credentialRoutingMode ?? 'preferred'],
-    ['budgetUsd', backup.budgetUsd ?? 0, current.budgetUsd ?? 0],
-    ['openaiProtocol', backup.openaiProtocol ?? '', current.openaiProtocol ?? ''],
-    ['note', backup.note ?? '', current.note ?? ''],
-    ['authorization', backup.authorization ?? null, current.authorization ?? null],
-    ['advancedConfig', backup.advancedConfig ?? null, current.advancedConfig ?? null]
-  ]
-  return fields
-    .filter(([, before, now]) => JSON.stringify(before) !== JSON.stringify(now))
-    .map(([field]) => field)
-}
-
 function createProviderProfileBackup(reason: ProviderProfileBackupView['reason']): ProviderProfileBackupView {
   const snapshot = snapshotProviderStoreForBackup()
   const createdAt = new Date().toISOString()
@@ -584,6 +599,7 @@ function hasValidBackupIdentity(document: Partial<ProviderProfileBackupDocument>
     && typeof document.id === 'string'
     && BACKUP_ID.test(document.id)
     && typeof document.createdAt === 'string'
+    && Number.isFinite(Date.parse(document.createdAt))
     && [
       'import',
       'manual',
@@ -646,7 +662,7 @@ function migrateBackupCredentials(
   return migrated
 }
 
-function scrubProviderProfileBackups(): void {
+function scrubProviderProfileBackups(protectedIds: ReadonlySet<string>): void {
   const root = backupRoot()
   if (!existsSync(root)) return
   assertPrivateDirectory(root)
@@ -654,17 +670,36 @@ function scrubProviderProfileBackups(): void {
     if (!name.endsWith('.json')) continue
     try { readBackup(join(root, name)) } catch { /* unusable backups stay excluded from rollback */ }
   }
+  pruneProviderProfileBackups(root, protectedIds, {
+    maxCount: PROVIDER_PROFILE_BACKUP_MAX_COUNT,
+    maxAgeMs: PROVIDER_PROFILE_BACKUP_MAX_AGE_MS,
+    readBackup,
+    backupId: (backup) => backup.id,
+    createdAt: (backup) => backup.createdAt,
+    removeFile: removeProviderProfileBackupFile
+  })
 }
 
 function backupView(document: ProviderProfileBackupPayload): ProviderProfileBackupView {
+  const createdAt = Date.parse(document.createdAt)
   return {
     id: document.id,
     createdAt: document.createdAt,
+    expiresAt: new Date(createdAt + PROVIDER_PROFILE_BACKUP_MAX_AGE_MS).toISOString(),
     providerCount: document.providerCount,
     reason: document.reason,
     nonPersistentCredentialCount: document.nonPersistentCredentialCount,
     excludedCredentialCount: document.excludedCredentialCount
   }
+}
+
+function removeProviderProfileBackupFile(filePath: string): void {
+  const info = lstatSync(filePath)
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error('Provider Profile 备份必须是可删除的常规文件')
+  }
+  unlinkSync(filePath)
+  fsyncDirectory(dirname(filePath))
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

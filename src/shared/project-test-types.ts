@@ -32,6 +32,9 @@ export interface ProjectTestRunResult {
   stderrTruncated: boolean
   evidenceId: string
   evidenceError?: string
+  workflowArtifactId?: string
+  workflowEvidenceId?: string
+  workflowAcceptanceId?: string
 }
 
 export interface ProjectTestApi {

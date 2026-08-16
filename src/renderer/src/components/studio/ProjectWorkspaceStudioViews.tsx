@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
-import type { Goal, GoalPatch, GoalRiskLevel, WorkItem, WorkItemOwner, WorkItemStatus } from '../../../../shared/types'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type UIEvent } from 'react'
+import type { AcceptanceResult, Goal, GoalPatch, GoalRiskLevel, WorkItem, WorkItemOwner, WorkItemStatus } from '../../../../shared/types'
 import { GoalEditForm } from './ProjectWorkspaceStudioForms'
 import { WorkItemTransferForm } from './WorkItemTransferForm'
 import {
@@ -21,8 +21,8 @@ import {
   workItemTypeLabel
 } from './projectWorkspaceStudioModel'
 
-const WORK_ITEM_LIST_ROW_HEIGHT = 116
-const WORK_ITEM_BOARD_CARD_HEIGHT = 268
+const WORK_ITEM_LIST_ROW_HEIGHT = 176
+const WORK_ITEM_BOARD_CARD_HEIGHT = 362
 const WORK_ITEM_VIRTUAL_MAX_HEIGHT = 604
 const WORK_ITEM_VIRTUAL_OVERSCAN = 3
 
@@ -55,6 +55,7 @@ export function WorkItemsView({
   items,
   onCreate,
   onControl,
+  onAcceptance,
   onReorder,
   onTransfer,
   onViewChange,
@@ -65,6 +66,7 @@ export function WorkItemsView({
   items: WorkItem[]
   onCreate: () => void
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onAcceptance?: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   onTransfer?: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   onViewChange: (view: StudioView) => void
@@ -109,8 +111,8 @@ export function WorkItemsView({
         visibleItems.length === 0
           ? <div className="pws-filter-empty" data-work-item-filter-empty>{TEXT.noMatchingWorkItems}</div>
           : view === 'list'
-            ? <WorkItemList items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
-            : <WorkItemBoard items={visibleItems} goalNames={goalNames} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
+            ? <WorkItemList items={visibleItems} goalNames={goalNames} onAcceptance={onAcceptance} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
+            : <WorkItemBoard items={visibleItems} allItems={items} goalNames={goalNames} onAcceptance={onAcceptance} onControl={onControl} onReorder={onReorder} onTransferRequest={onTransfer ? setTransferItemId : undefined} />
       )}
     </section>
   )
@@ -302,12 +304,14 @@ function WorkItemList({
   items,
   goalNames,
   onControl,
+  onAcceptance,
   onReorder,
   onTransferRequest
 }: {
   items: WorkItem[]
   goalNames: Map<string, string>
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onAcceptance?: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   onTransferRequest?: (workItemId: string) => void
 }): React.JSX.Element {
@@ -344,7 +348,7 @@ function WorkItemList({
               <span role="cell"><AcceptanceBadge status={acceptance.status} label={acceptance.label} /></span>
               <span role="cell" className="pws-table-actions">
                 {onReorder && <WorkItemOrderControls item={item} previous={items[index - 1]} next={items[index + 1]} onReorder={onReorder} />}
-                {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransferRequest ? () => onTransferRequest(item.id) : undefined} />}
+                {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransferRequest ? () => onTransferRequest(item.id) : undefined} onAcceptance={onAcceptance} />}
               </span>
             </div>
           )
@@ -355,26 +359,62 @@ function WorkItemList({
 }
 
 function WorkItemBoard({
+  allItems,
   items,
   goalNames,
   onControl,
+  onAcceptance,
   onReorder,
   onTransferRequest
 }: {
+  allItems: WorkItem[]
   items: WorkItem[]
   goalNames: Map<string, string>
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onAcceptance?: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   onTransferRequest?: (workItemId: string) => void
 }): React.JSX.Element {
   const baseId = useId()
+  const [draggedItemId, setDraggedItemId] = useState<string | null>(null)
+  const [dragOverStatus, setDragOverStatus] = useState<WorkItemStatus | null>(null)
+  const [dragError, setDragError] = useState('')
+  const itemById = useMemo(() => new Map(allItems.map((item) => [item.id, item])), [allItems])
+  const handleDrop = async (status: WorkItemStatus, event: DragEvent<HTMLElement>): Promise<void> => {
+    event.preventDefault()
+    const itemId = event.dataTransfer.getData('text/plain') || draggedItemId
+    const item = itemId ? itemById.get(itemId) : undefined
+    setDraggedItemId(null)
+    setDragOverStatus(null)
+    if (!item || !onControl || item.status === status || !WORK_ITEM_TRANSITIONS[item.status].includes(status)) return
+    setDragError('')
+    try {
+      await onControl(item, { kind: 'transition', status })
+    } catch (cause) {
+      setDragError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
   return (
     <div className="pws-board" aria-label={TEXT.board}>
+      {dragError && <div className="pws-board-drag-error" role="alert">{TEXT.controlFailed}: {dragError}</div>}
       {WORK_ITEM_STATUSES.map((status) => {
         const statusItems = items.filter((item) => item.status === status)
         const headingId = `${baseId}-${status}`
         return (
-          <section key={status} className="pws-board-column" aria-labelledby={headingId}>
+          <section
+            key={status}
+            className={`pws-board-column${dragOverStatus === status ? ' pws-board-column-drag-over' : ''}`}
+            aria-labelledby={headingId}
+            onDragOver={(event) => {
+              const dragged = draggedItemId ? itemById.get(draggedItemId) : undefined
+              if (!dragged || !WORK_ITEM_TRANSITIONS[dragged.status].includes(status)) return
+              event.preventDefault()
+              setDragOverStatus(status)
+            }}
+            onDragLeave={() => setDragOverStatus((current) => current === status ? null : current)}
+            onDrop={(event) => { void handleDrop(status, event) }}
+            data-board-drop-status={status}
+          >
             <header><h3 id={headingId}>{WORK_ITEM_STATUS_LABELS[status]}</h3><span>{statusItems.length}</span></header>
             {statusItems.length === 0 ? <div className="pws-board-empty" data-board-status-empty={status} /> : (
               <VirtualWorkItemStack
@@ -385,12 +425,22 @@ function WorkItemBoard({
                 renderItem={(item, index) => (
                   <WorkItemBoardCard
                     item={item}
+                    dependencyItems={item.dependencyIds.map((id) => itemById.get(id)).filter((candidate): candidate is WorkItem => Boolean(candidate))}
                     goalName={item.goalId ? goalNames.get(item.goalId) : undefined}
                     onControl={onControl}
+                    onAcceptance={onAcceptance}
                     onReorder={onReorder}
                     onTransfer={onTransferRequest ? () => onTransferRequest(item.id) : undefined}
                     previous={statusItems[index - 1]}
                     next={statusItems[index + 1]}
+                    draggable={Boolean(onControl)}
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', item.id)
+                      setDragError('')
+                      setDraggedItemId(item.id)
+                    }}
+                    onDragEnd={() => { setDraggedItemId(null); setDragOverStatus(null) }}
                   />
                 )}
               />
@@ -403,23 +453,35 @@ function WorkItemBoard({
 }
 
 function WorkItemBoardCard({
+  dependencyItems,
+  draggable,
   item,
   goalName,
   next,
   onControl,
+  onAcceptance,
   onReorder,
   onTransfer,
-  previous
+  previous,
+  onDragStart,
+  onDragEnd
 }: {
   item: WorkItem
+  dependencyItems: WorkItem[]
+  draggable: boolean
   goalName?: string
   next?: WorkItem
   onControl?: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onAcceptance?: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   onReorder?: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   onTransfer?: () => void
   previous?: WorkItem
+  onDragStart: (event: DragEvent<HTMLElement>) => void
+  onDragEnd: () => void
 }): React.JSX.Element {
   const acceptance = acceptancePresentation(item.acceptanceSpec.length, item.acceptance)
+  const incompleteDependencies = item.dependencyIds.filter((id) => item.dependencyIds.length > 0 && dependencyItems.find((dependency) => dependency.id === id)?.status !== 'done')
+  const missingDependencies = item.dependencyIds.filter((id) => !dependencyItems.some((dependency) => dependency.id === id))
   return (
     <article
       className="pws-board-item"
@@ -431,6 +493,9 @@ function WorkItemBoardCard({
       data-goal-id={item.goalId ?? ''}
       data-owner-id={item.owner?.id ?? ''}
       data-priority={item.priority}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
     >
       <div className="pws-board-item-head"><strong>{item.title}</strong><span>{workItemTypeLabel(item.type)}</span></div>
       {item.description && <p>{item.description}</p>}
@@ -439,12 +504,18 @@ function WorkItemBoardCard({
         <span>{item.owner?.displayName ?? item.owner?.id ?? TEXT.untitledOwner}</span>
         <span>{formatDate(item.dueAt)}</span>
       </div>
+      {item.dependencyIds.length > 0 && (
+        <div className={`pws-board-dependencies${incompleteDependencies.length > 0 ? ' pws-board-dependencies-blocked' : ''}`} title={missingDependencies.length > 0 ? '部分依赖不存在' : undefined}>
+          {incompleteDependencies.length === 0 ? '依赖已满足' : `依赖未完成 ${incompleteDependencies.length}/${item.dependencyIds.length}`}
+          {missingDependencies.length > 0 ? ` · 缺失 ${missingDependencies.length}` : ''}
+        </div>
+      )}
       <div className="pws-row-badges">
         <StatusBadge status={item.status} label={WORK_ITEM_STATUS_LABELS[item.status]} />
         <AcceptanceBadge status={acceptance.status} label={acceptance.label} />
       </div>
       {onReorder && <WorkItemOrderControls item={item} previous={previous} next={next} onReorder={onReorder} />}
-      {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransfer} />}
+      {onControl && <WorkItemControls item={item} onAction={onControl} onTransfer={onTransfer} onAcceptance={onAcceptance} />}
     </article>
   )
 }
@@ -565,14 +636,18 @@ function VirtualWorkItemStack<T extends { id: string }>({
 function WorkItemControls({
   item,
   onAction,
-  onTransfer
+  onTransfer,
+  onAcceptance
 }: {
   item: WorkItem
   onAction: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
   onTransfer?: () => void
+  onAcceptance?: (item: WorkItem, result: AcceptanceResult) => Promise<void>
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [evidenceRefs, setEvidenceRefs] = useState(item.acceptance?.evidenceRefs.join('\n') ?? '')
+  const [waiverReason, setWaiverReason] = useState(item.acceptance?.waiverReason ?? '')
   const run = async (action: WorkItemControlAction): Promise<void> => {
     setBusy(true)
     setError('')
@@ -588,6 +663,32 @@ function WorkItemControls({
   const canAcquire = (item.status === 'ready' || item.status === 'running') && Boolean(item.owner) && !item.lease
   const canRenew = Boolean(item.lease)
   const canRelease = Boolean(item.lease)
+  const saveAcceptance = async (status: AcceptanceResult['status']): Promise<void> => {
+    if (!onAcceptance) return
+    const refs = [...new Set(evidenceRefs.split(/[\n,]/).map((value) => value.trim()).filter(Boolean))]
+    if (status === 'passed' && refs.length === 0) {
+      setError('通过验收需要至少一条 Evidence 引用')
+      return
+    }
+    if (status === 'waived' && !waiverReason.trim()) {
+      setError('豁免验收需要填写原因')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await onAcceptance(item, {
+        status,
+        evidenceRefs: refs,
+        verifiedAt: Date.now(),
+        ...(status === 'waived' ? { waiverReason: waiverReason.trim() } : {})
+      })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="pws-work-item-controls" data-work-item-controls={item.id} aria-label={TEXT.workItemControls}>
       <div className="pws-work-item-control-actions">
@@ -625,6 +726,19 @@ function WorkItemControls({
           </button>
         )}
       </div>
+      {onAcceptance && item.acceptanceSpec.length > 0 && (
+        <details className="pws-acceptance-editor" data-work-item-acceptance={item.id}>
+          <summary>{TEXT.acceptance} · {acceptancePresentation(item.acceptanceSpec.length, item.acceptance).label}</summary>
+          <label>Evidence 引用<textarea className="input" rows={2} value={evidenceRefs} onChange={(event) => setEvidenceRefs(event.target.value)} placeholder="每行一个 Artifact/Evidence ID" disabled={busy} /></label>
+          <label>豁免原因<input className="input" value={waiverReason} onChange={(event) => setWaiverReason(event.target.value)} placeholder="仅豁免时需要" disabled={busy} /></label>
+          <div className="pws-acceptance-editor-actions">
+            <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={() => void saveAcceptance('pending')}>标记待验收</button>
+            <button type="button" className="btn btn-primary btn-xs" disabled={busy} onClick={() => void saveAcceptance('passed')}>通过</button>
+            <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={() => void saveAcceptance('failed')}>未通过</button>
+            <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={() => void saveAcceptance('waived')}>豁免</button>
+          </div>
+        </details>
+      )}
       {item.lease && <span className="pws-work-item-lease" data-work-item-lease-state="active">{TEXT.leaseActive} · {item.lease.fencingToken}</span>}
       {!item.lease && (item.status === 'ready' || item.status === 'running') && !item.owner && <span className="pws-work-item-lease pws-muted">{TEXT.leaseMissing}</span>}
       {error && <span className="pws-work-item-control-error" role="alert">{TEXT.controlFailed}: {error}</span>}

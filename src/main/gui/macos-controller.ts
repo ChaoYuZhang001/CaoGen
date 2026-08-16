@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 type MouseButton = 'left' | 'right' | 'middle'
 
@@ -456,6 +457,7 @@ function runSwiftAxHelper(args: string[]): Promise<OsascriptResult> {
       '/usr/bin/swift',
       [scriptPath, ...args],
       {
+        env: buildMinimalSubprocessEnv(),
         timeout: SWIFT_AX_TIMEOUT_MS,
         maxBuffer: OSASCRIPT_MAX_BUFFER,
         windowsHide: true
@@ -480,6 +482,7 @@ function runOsascript(lines: string[]): Promise<OsascriptResult> {
       'osascript',
       lines.flatMap((line) => ['-e', line]),
       {
+        env: buildMinimalSubprocessEnv(),
         timeout: OSASCRIPT_TIMEOUT_MS,
         maxBuffer: OSASCRIPT_MAX_BUFFER,
         windowsHide: true

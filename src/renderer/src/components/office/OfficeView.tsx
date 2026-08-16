@@ -11,6 +11,7 @@ import FacilityHotspots, {
   OFFICE_FACILITY_SPECS
 } from './kit/FacilityHotspots'
 import type { OfficeFacilityKey } from './kit/FacilityHotspots'
+import { CONTROL_ROOM_LAYOUT } from './kit/controlRoomLayout'
 import OfficeScene from './kit/OfficeScene'
 import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
 import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQuality'
@@ -19,10 +20,12 @@ import WatercolorCharacterRig from './kit/WatercolorCharacterRig'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
 import { buildOfficeModel } from './model'
-import type { OfficeSessionActivity } from './model'
+import type { OfficeRealtimeSummary, OfficeSessionActivity } from './model'
 import OfficeFailoverSignals from './OfficeFailoverSignals'
 import type { OfficeContactShadowMode } from './quality'
 import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
+import type { MediaJobStatus, MediaStudioSnapshot } from '../../../../shared/media-types'
+import type { ProjectWorkspace, WorkItem } from '../../../../shared/project-workspace-types'
 import {
   resolveWatercolorRole,
   stableWatercolorRole,
@@ -34,8 +37,17 @@ import {
  * 前区 z≈+6~8 休息/会议、左右墙 x≈±9.5、四角盆栽)。
  * 网格限定在 x∈[-6,6]、z∈[-5,3] 的安全区,间距随数量自适应收紧,绝不越界撞家具。
  */
-function gridPositions(count: number): Array<[number, number, number]> {
+function gridPositions(count: number, teamPhoto = false): Array<[number, number, number]> {
   if (count === 0) return []
+  if (teamPhoto) {
+    const columns = Math.min(8, Math.max(1, count))
+    return Array.from({ length: count }, (_, index) => {
+      const row = Math.floor(index / columns)
+      const itemsInRow = Math.min(columns, count - row * columns)
+      const column = index % columns
+      return [(column - (itemsInRow - 1) / 2) * 1.85, 0, -1.2 + row * 2.3]
+    })
+  }
   const cols = Math.max(1, Math.ceil(Math.sqrt(count)))
   const rowCount = Math.ceil(count / cols)
   const SAFE_X = 12 // 中央可用宽度(x∈[-6,6])
@@ -54,25 +66,100 @@ function gridPositions(count: number): Array<[number, number, number]> {
   return out
 }
 
-const TEA_STOPS: Array<[number, number, number]> = [
-  [4.35, 0, 1.82],
-  [4.95, 0, 1.82]
-]
-const TEA_LOOK_AT: [number, number, number] = [5.48, 0, 2.02]
-const APPROVAL_STOPS: Array<[number, number, number]> = [[4.18, 0, 0.74]]
-const APPROVAL_LOOK_AT: [number, number, number] = [5.18, 0, 0.78]
-const RESTROOM_STOPS: Array<[number, number, number]> = [[-7.62, 0, 3.92]]
-const RESTROOM_LOOK_AT: [number, number, number] = [-8, 0, 4.65]
-const DINING_STOPS: Array<[number, number, number]> = [[-5.34, 0, 5.18]]
-const DINING_LOOK_AT: [number, number, number] = [-4.45, 0, 6.55]
-const OFFICE_CAMERA_POSITION: [number, number, number] = [0.28, 4.5, 9.55]
-const OFFICE_CAMERA_TARGET: [number, number, number] = [0.02, 0.82, -1.18]
-const OFFICE_CAMERA_FOV = 44
+const ASSISTANT_STOPS: Array<[number, number, number]> = [CONTROL_ROOM_LAYOUT.assistant.approach]
+const ASSISTANT_LOOK_AT = CONTROL_ROOM_LAYOUT.assistant.lookAt
+const APPROVAL_STOPS: Array<[number, number, number]> = [CONTROL_ROOM_LAYOUT.approvalApproach]
+const APPROVAL_LOOK_AT: [number, number, number] = [CONTROL_ROOM_LAYOUT.approval[0], 0.82, CONTROL_ROOM_LAYOUT.approval[2]]
+const PROJECT_STOPS: Array<[number, number, number]> = [CONTROL_ROOM_LAYOUT.project.approach]
+const PROJECT_LOOK_AT = CONTROL_ROOM_LAYOUT.project.lookAt
+const VIDEO_STOPS: Array<[number, number, number]> = [CONTROL_ROOM_LAYOUT.video.approach]
+const VIDEO_LOOK_AT = CONTROL_ROOM_LAYOUT.video.lookAt
+const OFFICE_CAMERA_POSITION = CONTROL_ROOM_LAYOUT.overview.position
+const OFFICE_CAMERA_TARGET = CONTROL_ROOM_LAYOUT.overview.target
+const OFFICE_CAMERA_FOV = CONTROL_ROOM_LAYOUT.overview.fov
 const WALKER_VISUAL_SCALE = 1.18
-const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1 }
+const DEFAULT_OFFICE_SETTINGS = {
+  qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false,
+  spaceTheme: 'control-room' as const, outfitPalette: 'role-default' as const,
+  hairStyle: 'role-default' as const, teamLayout: 'grid' as const
+}
 const OFFICE_CONTACT_SHADOW_POSITION: [number, number, number] = [0, 0.02, 0]
 type CameraPreset = 'overview' | 'agent' | 'facilities' | 'incidents'
+type OfficeBusinessView = 'all' | 'assistant' | 'project' | 'video'
 const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
+const BUSINESS_VIEWS: OfficeBusinessView[] = ['all', 'assistant', 'project', 'video']
+
+const EMPTY_MEDIA_SNAPSHOT: MediaStudioSnapshot = {
+  schemaVersion: 12,
+  revision: 0,
+  productions: [],
+  jobs: [],
+  providers: [],
+  projectStorage: [],
+  snapshotDigest: ''
+}
+
+interface MediaOperationalSummary {
+  productions: number
+  jobs: number
+  running: number
+  failed: number
+  waitingReconciliation: number
+  succeeded: number
+  estimatedUsd: number
+  actualUsd: number
+}
+
+interface ProjectOperationalSummary {
+  projects: number
+  workItems: number
+  running: number
+  approvals: number
+  blocked: number
+  failed: number
+}
+
+const RUNNING_MEDIA_STATUSES = new Set<MediaJobStatus>(['requested', 'submitting', 'running', 'downloading'])
+
+function summarizeMedia(snapshot: MediaStudioSnapshot): MediaOperationalSummary {
+  return snapshot.jobs.reduce<MediaOperationalSummary>((summary, job) => {
+    summary.jobs += 1
+    if (RUNNING_MEDIA_STATUSES.has(job.status)) summary.running += 1
+    if (job.status === 'failed') summary.failed += 1
+    if (job.status === 'waiting_reconciliation') summary.waitingReconciliation += 1
+    if (job.status === 'succeeded') summary.succeeded += 1
+    summary.estimatedUsd += job.cost.estimatedUsd
+    summary.actualUsd += job.cost.actualUsd ?? 0
+    return summary
+  }, {
+    productions: snapshot.productions.length,
+    jobs: 0,
+    running: 0,
+    failed: 0,
+    waitingReconciliation: 0,
+    succeeded: 0,
+    estimatedUsd: 0,
+    actualUsd: 0
+  })
+}
+
+function summarizeProjects(projects: ProjectWorkspace[], workItems: WorkItem[]): ProjectOperationalSummary {
+  return workItems.reduce<ProjectOperationalSummary>((summary, item) => {
+    summary.workItems += 1
+    if (item.status === 'running' || item.status === 'verifying') summary.running += 1
+    if (item.status === 'waiting_approval') summary.approvals += 1
+    if (item.status === 'blocked') summary.blocked += 1
+    if (item.status === 'failed') summary.failed += 1
+    return summary
+  }, {
+    projects: projects.filter((project) => project.status === 'active').length,
+    workItems: 0,
+    running: 0,
+    approvals: 0,
+    blocked: 0,
+    failed: 0
+  })
+}
 const OfficeContactShadows = memo(function OfficeContactShadows({
   lightMode,
   mode,
@@ -103,6 +190,7 @@ function OfficeBootScene({
   positions,
   activeId,
   lightMode,
+  interactive,
   onSelect,
   onOpen
 }: {
@@ -110,6 +198,7 @@ function OfficeBootScene({
   positions: Array<[number, number, number]>
   activeId: string | null
   lightMode: boolean
+  interactive: boolean
   onSelect: (id: string) => void
   onOpen: (id: string) => void
 }): React.JSX.Element {
@@ -127,14 +216,18 @@ function OfficeBootScene({
             name="office-boot-workstation"
             position={position}
             userData={{ officeBootWorkstation: true, officeRobotSessionId: id }}
-            onClick={(event) => {
-              event.stopPropagation()
-              onSelect(id)
-            }}
-            onDoubleClick={(event) => {
-              event.stopPropagation()
-              onOpen(id)
-            }}
+            {...(interactive
+              ? {
+                  onClick: (event: { stopPropagation: () => void }) => {
+                    event.stopPropagation()
+                    onSelect(id)
+                  },
+                  onDoubleClick: (event: { stopPropagation: () => void }) => {
+                    event.stopPropagation()
+                    onOpen(id)
+                  }
+                }
+              : {})}
           >
             <mesh position={[0, 0.04, 0.08]}>
               <boxGeometry args={[2.05, 0.08, 1.66]} />
@@ -238,8 +331,14 @@ export default function OfficeView(): React.JSX.Element {
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
-  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('overview')
-  const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(null)
+  const experienceMode = useStore((s) => s.experienceMode)
+  const setExperienceMode = useStore((s) => s.setExperienceMode)
+  const initialBusinessViewRef = useRef<OfficeFacilityKey>(
+    experienceMode === 'studio' ? 'project' : experienceMode === 'video' ? 'video' : 'assistant'
+  )
+  const [businessView, setBusinessView] = useState<OfficeBusinessView>(initialBusinessViewRef.current)
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('facilities')
+  const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(initialBusinessViewRef.current)
   const [sceneDetailEnabled, setSceneDetailEnabled] = useState(false)
   const [sceneAssetsEnabled, setSceneAssetsEnabled] = useState(false)
   const bootFrameRenderedRef = useRef(false)
@@ -247,6 +346,10 @@ export default function OfficeView(): React.JSX.Element {
   const officeHitRef = useRef({ seq: 0, kind: '', id: '' })
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
   const [watercolorRoleByWorkerId, setWatercolorRoleByWorkerId] = useState<Record<string, WatercolorCharacterRole>>({})
+  const [mediaSnapshot, setMediaSnapshot] = useState<MediaStudioSnapshot>(EMPTY_MEDIA_SNAPSHOT)
+  const [projectSnapshot, setProjectSnapshot] = useState<{ projects: ProjectWorkspace[]; workItems: WorkItem[] }>({ projects: [], workItems: [] })
+  const [operationalDataReady, setOperationalDataReady] = useState(false)
+  const operationalRefreshSequence = useRef(0)
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
 
@@ -283,11 +386,22 @@ export default function OfficeView(): React.JSX.Element {
 
   // 办公区场景色随主题切换
   const isLight = themePref === 'light' || (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
-  const scene = isLight ? { bg: '#d8dde0', floor: '#a7b1b7', grid1: '#6f7d86', grid2: '#bcc4c9', ground: '#b2bcc2' } : { bg: '#1c2024', floor: '#2a3036', grid1: '#4a565d', grid2: '#363e43', ground: '#272c31' }
+  const scene = office.spaceTheme === 'creative-studio'
+    ? (isLight ? { bg: '#dce4df' } : { bg: '#26312f' })
+    : office.spaceTheme === 'quiet-library'
+      ? (isLight ? { bg: '#deddd7' } : { bg: '#292a28' })
+      : (isLight ? { bg: '#d8dde0' } : { bg: '#1c2024' })
 
   const ids = order.filter((id) => sessions[id])
-  const idsKey = ids.join('\0')
-  const assignedWorkerIdsKey = ids
+  const visibleIds = businessView === 'video'
+    ? []
+    : businessView === 'project'
+      ? ids.filter((id) => Boolean(sessions[id]?.meta.workspaceId || sessions[id]?.meta.projectId || sessions[id]?.meta.workItemId))
+      : businessView === 'assistant'
+        ? ids.filter((id) => !sessions[id]?.meta.workspaceId && !sessions[id]?.meta.projectId && !sessions[id]?.meta.workItemId)
+        : ids
+  const visibleIdsKey = visibleIds.join('\0')
+  const assignedWorkerIdsKey = visibleIds
     .map((id) => sessions[id]?.meta.digitalWorkerBinding)
     .filter((binding) => binding?.kind === 'assigned')
     .map((binding) => binding.workerId)
@@ -315,17 +429,48 @@ export default function OfficeView(): React.JSX.Element {
     })
     return () => { cancelled = true }
   }, [assignedWorkerIdsKey])
-  const positions = gridPositions(ids.length)
+  const positions = gridPositions(visibleIds.length, office.teamLayout === 'team-photo')
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return
     let cancelled = false
     const refresh = async (): Promise<void> => {
-      if (ids.length === 0) {
+      const sequence = ++operationalRefreshSequence.current
+      try {
+        const [media, projects, workItems] = await Promise.all([
+          window.agentDesk.getMediaStudio(),
+          window.agentDesk.listProjectWorkspaces({ includeArchived: true }),
+          window.agentDesk.listProjectWorkItems()
+        ])
+        if (!cancelled && sequence === operationalRefreshSequence.current) {
+          setMediaSnapshot(media)
+          setProjectSnapshot({ projects, workItems })
+        }
+      } catch (error) {
+        if (!cancelled) console.error('[agent-desk] Failed to load CaoGen Control Room operations', error)
+      } finally {
+        if (!cancelled && sequence === operationalRefreshSequence.current) setOperationalDataReady(true)
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 5_000)
+    const refreshOnFocus = (): void => { void refresh() }
+    window.addEventListener('focus', refreshOnFocus)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refreshOnFocus)
+    }
+  }, [])
+  useEffect(() => {
+    if (typeof window.agentDesk === 'undefined') return
+    let cancelled = false
+    const refresh = async (): Promise<void> => {
+      if (visibleIds.length === 0) {
         if (!cancelled) setOfficeGitStatusBySession({})
         return
       }
       const entries = await Promise.all(
-        ids.map(async (id) => {
+        visibleIds.map(async (id) => {
           try {
             return [id, await window.agentDesk.gitStatus(id)] as const
           } catch (err) {
@@ -344,14 +489,14 @@ export default function OfficeView(): React.JSX.Element {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [idsKey])
+  }, [visibleIdsKey])
   const officeModel = useMemo(
-    () => buildOfficeModel(ids, sessions, officeGitStatusBySession),
-    [ids, sessions, officeGitStatusBySession]
+    () => buildOfficeModel(visibleIds, sessions, officeGitStatusBySession),
+    [visibleIds, sessions, officeGitStatusBySession]
   )
   const realtime = officeModel.realtime
   const subagentPacketCount = officeModel.packets.filter((packet) => packet.toolName === 'Subagent').length
-  const officeSignalPanelCount = ids.filter((id) => {
+  const officeSignalPanelCount = visibleIds.filter((id) => {
     const signal = officeModel.sessions[id]?.signal
     return Boolean(
       signal?.routing ||
@@ -367,7 +512,7 @@ export default function OfficeView(): React.JSX.Element {
   }).length
   const activitySummary = useMemo(
     () =>
-      ids.reduce(
+      visibleIds.reduce(
         (acc, id) => {
           acc.total += 1
           acc[activityOf(sessions[id])] += 1
@@ -375,8 +520,19 @@ export default function OfficeView(): React.JSX.Element {
         },
         { total: 0, idle: 0, working: 0, awaiting: 0, completed: 0, error: 0 }
       ),
-    [ids, sessions]
+    [visibleIds, sessions]
   )
+  const mediaSummary = useMemo(() => summarizeMedia(mediaSnapshot), [mediaSnapshot])
+  const projectSummary = useMemo(
+    () => summarizeProjects(projectSnapshot.projects, projectSnapshot.workItems),
+    [projectSnapshot]
+  )
+  const assistantSessionCount = ids.filter((id) =>
+    !sessions[id]?.meta.workspaceId && !sessions[id]?.meta.projectId && !sessions[id]?.meta.workItemId
+  ).length
+  const projectSessionCount = ids.length - assistantSessionCount
+  const totalIncidentCount = activitySummary.error + projectSummary.blocked + projectSummary.failed + mediaSummary.failed + mediaSummary.waitingReconciliation
+  const hasAnyOperations = ids.length > 0 || projectSummary.projects > 0 || projectSummary.workItems > 0 || mediaSummary.productions > 0 || mediaSummary.jobs > 0
 
   const providerNameOf = (providerId: string): string => {
     return providerId ? (providers.find((p) => p.id === providerId)?.name ?? '') : ''
@@ -389,7 +545,7 @@ export default function OfficeView(): React.JSX.Element {
   const vendorKeyOf = (providerId: string, modelName?: string): string => {
     return vendorKeyFor([providerNameOf(providerId), modelName, providerBaseUrlOf(providerId)].filter(Boolean).join(' '))
   }
-  const sessionLogoSpecs = ids.map((id) => {
+  const sessionLogoSpecs = visibleIds.map((id) => {
     const session = sessions[id]
     return providerLogoFor([
       providerNameOf(session.meta.providerId),
@@ -412,7 +568,7 @@ export default function OfficeView(): React.JSX.Element {
     const awaiting: AgentWalkerSpec[] = []
     const completedFacility: AgentWalkerSpec[] = []
 
-    ids.forEach((id, i) => {
+    visibleIds.forEach((id, i) => {
       const session = sessions[id]
       const position = positions[i]
       if (!session || !position) return
@@ -445,15 +601,15 @@ export default function OfficeView(): React.JSX.Element {
           departureDelay: 0
         })
       } else if (activity === 'idle') {
-        const target = TEA_STOPS[idle.length % TEA_STOPS.length]
+        const target = ASSISTANT_STOPS[idle.length % ASSISTANT_STOPS.length]
         idle.push({
-          id: `${id}:tea`,
+          id: `${id}:assistant`,
           sessionId: id,
           home,
           homeLookAt,
           target,
-          targetLookAt: TEA_LOOK_AT,
-          reason: 'tea',
+          targetLookAt: ASSISTANT_LOOK_AT,
+          reason: 'assistant',
           providerName,
           providerBaseUrl,
           modelName,
@@ -463,18 +619,18 @@ export default function OfficeView(): React.JSX.Element {
           departureDelay: 0.4
         })
       } else if (activity === 'completed') {
-        const reason = completedFacility.length % 2 === 0 ? 'dining' : 'restroom'
+        const reason = completedFacility.length % 2 === 0 ? 'video' : 'project'
         const target =
-          reason === 'dining'
-            ? DINING_STOPS[completedFacility.length % DINING_STOPS.length]
-            : RESTROOM_STOPS[completedFacility.length % RESTROOM_STOPS.length]
+          reason === 'video'
+            ? VIDEO_STOPS[completedFacility.length % VIDEO_STOPS.length]
+            : PROJECT_STOPS[completedFacility.length % PROJECT_STOPS.length]
         completedFacility.push({
           id: `${id}:${reason}`,
           sessionId: id,
           home,
           homeLookAt,
           target,
-          targetLookAt: reason === 'dining' ? DINING_LOOK_AT : RESTROOM_LOOK_AT,
+          targetLookAt: reason === 'video' ? VIDEO_LOOK_AT : PROJECT_LOOK_AT,
           reason,
           providerName,
           providerBaseUrl,
@@ -488,7 +644,7 @@ export default function OfficeView(): React.JSX.Element {
     })
 
     return [...awaiting.slice(0, 1), ...idle.slice(0, 1), ...completedFacility.slice(0, 2)]
-  }, [ids, positions, sessions, providers, watercolorRoleByWorkerId])
+  }, [visibleIds, positions, sessions, providers, watercolorRoleByWorkerId])
   const walkerRenderSpecs = useMemo<AgentWalkerSpec[]>(
     () =>
       semanticWalkers.map((spec) => ({
@@ -510,13 +666,13 @@ export default function OfficeView(): React.JSX.Element {
       return next
     })
   }, [])
-  const teaWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'tea').length
+  const assistantWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'assistant').length
   const approvalWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'approval').length
-  const restroomWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'restroom').length
-  const diningWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'dining').length
-  const facilityWalkerCount = teaWalkerCount + restroomWalkerCount + diningWalkerCount
-  const deskCharacterCount = Math.max(0, ids.length - awaySessionIds.size)
-  const activeOfficeId = activeId && ids.includes(activeId) ? activeId : (ids[0] ?? null)
+  const projectWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'project').length
+  const videoWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'video').length
+  const facilityWalkerCount = assistantWalkerCount + projectWalkerCount + videoWalkerCount
+  const deskCharacterCount = Math.max(0, visibleIds.length - awaySessionIds.size)
+  const activeOfficeId = activeId && visibleIds.includes(activeId) ? activeId : (visibleIds[0] ?? null)
   const presentedWalkerSpecs = useMemo(
     () =>
       cameraPreset === 'agent' && activeOfficeId
@@ -524,11 +680,11 @@ export default function OfficeView(): React.JSX.Element {
         : walkerRenderSpecs,
     [activeOfficeId, cameraPreset, walkerRenderSpecs]
   )
-  const activeOfficeIndex = activeOfficeId ? ids.indexOf(activeOfficeId) : -1
+  const activeOfficeIndex = activeOfficeId ? visibleIds.indexOf(activeOfficeId) : -1
   const activeOfficeSession = activeOfficeId ? sessions[activeOfficeId] : undefined
   const activeOfficeActivity = activeOfficeSession ? activityOf(activeOfficeSession) : undefined
   const activeOfficeSignal = activeOfficeId ? officeModel.sessions[activeOfficeId]?.signal : undefined
-  const faultHitTargets = ids
+  const faultHitTargets = visibleIds
     .map((id, i) => ({
       id,
       activity: activityOf(sessions[id]),
@@ -574,7 +730,7 @@ export default function OfficeView(): React.JSX.Element {
     return { position: OFFICE_CAMERA_POSITION, target: OFFICE_CAMERA_TARGET }
   }, [activeOfficePosition, cameraPreset, incidentCamera, selectedFacilitySpec])
   const cameraMinDistance = cameraPreset === 'overview' || (cameraPreset === 'facilities' && !selectedFacilitySpec) ? 5.5 : 2.6
-  const workstationHitTargets = ids.map((id, i) => ({
+  const workstationHitTargets = visibleIds.map((id, i) => ({
     id,
     x: positions[i]?.[0] ?? 0,
     y: 0.78,
@@ -594,12 +750,12 @@ export default function OfficeView(): React.JSX.Element {
     z: spec.hit[2]
   }))
   const officeOptimizationComplete =
-    ids.length > 0 &&
-    deskCharacterCount + awaySessionIds.size === ids.length &&
+    (visibleIds.length > 0 || hasAnyOperations) &&
+    deskCharacterCount + awaySessionIds.size === visibleIds.length &&
     OFFICE_FACILITY_SPECS.length === 3 &&
     CAMERA_PRESETS.length === 4 &&
-    knownLogoCount >= ids.length &&
-    logoAssetCount >= ids.length &&
+    knownLogoCount >= visibleIds.length &&
+    logoAssetCount >= visibleIds.length &&
     cnLogoAssetCount >= cnSessionCount &&
     abstractLogoFallbacks === 0 &&
     semanticWalkers.length === approvalWalkerCount + facilityWalkerCount &&
@@ -622,8 +778,22 @@ export default function OfficeView(): React.JSX.Element {
     setSelectedFacility(key)
     setCameraPreset('facilities')
   }
+  const selectBusinessView = (nextView: OfficeBusinessView): void => {
+    setBusinessView(nextView)
+    if (nextView === 'all') {
+      setSelectedFacility(null)
+      setCameraPreset('overview')
+      return
+    }
+    setSelectedFacility(nextView)
+    setCameraPreset('facilities')
+  }
   const focus = (id: string): void => {
     selectSession(id)
+    setView('list')
+  }
+  const returnToWorkspace = (): void => {
+    setExperienceMode(experienceMode)
     setView('list')
   }
 
@@ -636,16 +806,16 @@ export default function OfficeView(): React.JSX.Element {
           <button className="btn btn-ghost" onClick={() => setShowNewSession(true)}>
             {t('newShort')}
           </button>
-          <button className="btn btn-primary" onClick={() => setView('list')}>
-            {t('listView')}
+          <button className="btn btn-primary" onClick={returnToWorkspace}>
+            {t('officeReturnWorkspace')}
           </button>
         </div>
       </div>
 
-      {hydrated && ids.length === 0 ? (
+      {hydrated && operationalDataReady && !hasAnyOperations ? (
         <div className="office-empty">
           <div className="office-empty-inner">
-            <div className="office-empty-mark">AGENT</div>
+            <div className="office-empty-mark">CAOGEN</div>
             <p>{t('officeEmpty')}</p>
             <button className="btn btn-primary" onClick={() => setShowNewSession(true)}>
               {t('newSession')}
@@ -655,7 +825,26 @@ export default function OfficeView(): React.JSX.Element {
       ) : (
         <div
           className="office-canvas-wrap"
-          data-office-sessions={ids.length}
+          data-office-business-view={businessView}
+          data-office-return-mode={experienceMode}
+          data-office-sessions={visibleIds.length}
+          data-office-assistant-sessions={assistantSessionCount}
+          data-office-project-sessions={projectSessionCount}
+          data-office-projects={projectSummary.projects}
+          data-office-work-items={projectSummary.workItems}
+          data-office-running-work-items={projectSummary.running}
+          data-office-project-approvals={projectSummary.approvals}
+          data-office-blocked-work-items={projectSummary.blocked}
+          data-office-failed-work-items={projectSummary.failed}
+          data-office-video-productions={mediaSummary.productions}
+          data-office-media-jobs={mediaSummary.jobs}
+          data-office-running-media-jobs={mediaSummary.running}
+          data-office-failed-media-jobs={mediaSummary.failed}
+          data-office-reconciliation-media-jobs={mediaSummary.waitingReconciliation}
+          data-office-succeeded-media-jobs={mediaSummary.succeeded}
+          data-office-media-estimated-cost-usd={mediaSummary.estimatedUsd.toFixed(6)}
+          data-office-media-actual-cost-usd={mediaSummary.actualUsd.toFixed(6)}
+          data-office-total-incidents={totalIncidentCount}
           data-office-idle-sessions={activitySummary.idle}
           data-office-running-sessions={activitySummary.working}
           data-office-waiting-approval-sessions={activitySummary.awaiting}
@@ -689,21 +878,24 @@ export default function OfficeView(): React.JSX.Element {
           data-office-desk-robots={0}
           data-office-visible-robots={0}
           data-office-one-robot-per-agent={0}
-          data-office-watercolor-characters={ids.length}
-          data-office-one-watercolor-character-per-agent={deskCharacterCount + awaySessionIds.size === ids.length ? 1 : 0}
-          data-office-tea-walkers={teaWalkerCount}
+          data-office-watercolor-characters={visibleIds.length}
+          data-office-one-watercolor-character-per-agent={deskCharacterCount + awaySessionIds.size === visibleIds.length ? 1 : 0}
+          data-office-assistant-walkers={assistantWalkerCount}
           data-office-approval-walkers={approvalWalkerCount}
-          data-office-restroom-walkers={restroomWalkerCount}
-          data-office-dining-walkers={diningWalkerCount}
+          data-office-project-walkers={projectWalkerCount}
+          data-office-video-walkers={videoWalkerCount}
           data-office-facility-walkers={facilityWalkerCount}
           data-office-approval-stations={1}
-          data-office-hydration-stations={1}
-          data-office-restroom-stations={1}
-          data-office-dining-stations={1}
+          data-office-assistant-stations={1}
+          data-office-project-stations={1}
+          data-office-video-stations={1}
+          data-office-command-stations={1}
+          data-office-artifact-vaults={1}
+          data-office-render-racks={1}
           data-office-facility-fixtures={3}
-          data-office-service-wayfinding={1}
-          data-office-amenity-portals={2}
-          data-office-facility-signals={4}
+          data-office-service-wayfinding={0}
+          data-office-amenity-portals={0}
+          data-office-facility-signals={3}
           data-office-clickable-facilities={OFFICE_FACILITY_SPECS.length}
           data-office-selected-facility={selectedFacility ?? ''}
           data-office-facility-hit-targets={JSON.stringify(facilityHitTargets)}
@@ -719,7 +911,7 @@ export default function OfficeView(): React.JSX.Element {
           data-office-work-inputs={deskCharacterCount}
           data-office-operator-input-arrays={deskCharacterCount}
           data-office-service-foreground-occluders={0}
-          data-office-screen-panels={ids.length * 2}
+          data-office-screen-panels={visibleIds.length * 2 + 6}
           data-office-walker-routes={semanticWalkers.length}
           data-office-sightline-safe={1}
           data-office-cutaway-walls={1}
@@ -748,7 +940,7 @@ export default function OfficeView(): React.JSX.Element {
           data-office-fault-hit-targets={JSON.stringify(faultHitTargets)}
           data-office-incident-camera={JSON.stringify(incidentCamera)}
           data-office-incident-camera-available={primaryFaultTarget ? 1 : 0}
-          data-office-provider-skin-panels={ids.length + semanticWalkers.length}
+          data-office-provider-skin-panels={visibleIds.length + semanticWalkers.length}
           data-office-real-provider-logo-skins={knownLogoCount}
           data-office-real-provider-logo-assets={logoAssetCount}
           data-office-real-provider-logo-wordmarks={logoWordmarkAssetCount}
@@ -764,7 +956,7 @@ export default function OfficeView(): React.JSX.Element {
           data-office-provider-logo-badges={deskCharacterCount * 3 + semanticWalkers.length * 2}
           data-office-provider-logo-texture-badges={deskCharacterCount * 3 + semanticWalkers.length * 2}
           data-office-provider-logo-wordmark-badges={deskCharacterCount * 2 + semanticWalkers.length}
-          data-office-clickable-workstations={ids.length}
+          data-office-clickable-workstations={visibleIds.length}
           data-office-clickable-walkers={semanticWalkers.length}
           data-office-selected-session={activeOfficeId ?? ''}
           data-office-selected-workstations={activeOfficeId ? 1 : 0}
@@ -777,10 +969,14 @@ export default function OfficeView(): React.JSX.Element {
           data-office-walker-hit-targets={JSON.stringify(walkerHitTargets)}
           data-office-ops-backplane={1}
           data-office-data-trunks={1}
-          data-office-workstation-branches={Math.max(4, ids.length)}
+          data-office-workstation-branches={Math.max(4, visibleIds.length)}
           data-office-subject-framing={1}
           data-office-3d-optimization-complete={officeOptimizationComplete ? 1 : 0}
           data-office-quality-requested={office.qualityMode}
+          data-office-space-theme={office.spaceTheme}
+          data-office-outfit-palette={office.outfitPalette}
+          data-office-hair-style={office.hairStyle}
+          data-office-team-layout={office.teamLayout}
           data-office-quality-effective={renderQuality.resolvedTier}
           data-office-quality-dpr-maximum={qualityDprMaximum}
           data-office-quality-shadows={renderQuality.profile.shadows ? 1 : 0}
@@ -795,62 +991,23 @@ export default function OfficeView(): React.JSX.Element {
           data-office-render-active={renderQuality.renderActive ? 1 : 0}
           data-office-render-paused={renderQuality.renderActive ? 0 : 1}
           data-office-frame-loop={renderQuality.renderActive ? 'manual' : 'paused'}
+          data-office-scene-assets-ready={sceneAssetsEnabled ? 1 : 0}
         >
-          <div className="office-command-strip no-drag">
-            <div className="office-metric">
-              <span>{t('officeMetricSessions')}</span>
-              <strong>{activitySummary.total}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricWorking')}</span>
-              <strong>{activitySummary.working}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricAwaiting')}</span>
-              <strong>{activitySummary.awaiting}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricCompleted')}</span>
-              <strong>{activitySummary.completed}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricFailed')}</span>
-              <strong>{activitySummary.error}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricPackets')}</span>
-              <strong>{officeModel.packets.length}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricRouted')}</span>
-              <strong>{realtime.routedSessions}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricFailover')}</span>
-              <strong>{realtime.failoverSessions}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricCost')}</span>
-              <strong>{moneyShort(realtime.totalCostUsd)}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricWorkspace')}</span>
-              <strong>{realtime.workspaceChangedFiles}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricGit')}</span>
-              <strong>{realtime.gitDirtySessions}</strong>
-            </div>
-            <div className="office-metric">
-              <span>{t('officeMetricIsolated')}</span>
-              <strong>{realtime.isolatedSessions}</strong>
-            </div>
-          </div>
+          <OfficeBusinessSwitcher value={businessView} onChange={selectBusinessView} />
+          <OfficeCommandStrip
+            businessView={businessView}
+            activity={activitySummary}
+            packetCount={officeModel.packets.length}
+            realtime={realtime}
+            projects={projectSummary}
+            media={mediaSummary}
+          />
           <div className="office-camera-strip no-drag" data-office-camera-preset-controls={CAMERA_PRESETS.length}>
             {CAMERA_PRESETS.map((preset) => (
               <button
                 key={preset}
                 className={`office-camera-button ${cameraPreset === preset ? 'active' : ''}`}
+                data-office-camera-preset={preset}
                 aria-label={t(`officePreset${preset[0].toUpperCase()}${preset.slice(1)}`)}
                 aria-pressed={cameraPreset === preset}
                 title={t(`officePreset${preset[0].toUpperCase()}${preset.slice(1)}`)}
@@ -942,12 +1099,12 @@ export default function OfficeView(): React.JSX.Element {
           )}
           <Canvas
             shadows={renderQuality.profile.shadows}
-            camera={{ position: OFFICE_CAMERA_POSITION, fov: OFFICE_CAMERA_FOV, near: 0.1, far: 100 }}
+            camera={{ position: cameraPose.position, fov: OFFICE_CAMERA_FOV, near: 0.1, far: 100 }}
             dpr={renderQuality.profile.dpr}
             frameloop="never"
             resize={{ offsetSize: true }}
             onCreated={({ camera }) => {
-              camera.lookAt(...OFFICE_CAMERA_TARGET)
+              camera.lookAt(...cameraPose.target)
               camera.updateProjectionMatrix()
             }}
           >
@@ -981,25 +1138,34 @@ export default function OfficeView(): React.JSX.Element {
           {/* 补一盏跟随状态色调的点光,增强氛围 */}
           <pointLight position={[0, 3, 4]} intensity={isLight ? 0.22 : 0.34} color={isLight ? '#f3f5f6' : '#3c4658'} />
 
-          {/* 富场景背景层:地板/墙/落地窗/家具/休息区/会议桌/白板/机架/茶水角 */}
+          {/* 共享业务控制室:建筑外壳、中央总控、三类业务设备、审批、资产与算力设施。 */}
           {!sceneDetailEnabled && (
             <OfficeBootScene
-              ids={ids}
+              ids={visibleIds}
               positions={positions}
               activeId={activeOfficeId}
               lightMode={isLight}
+              interactive={cameraPreset !== 'facilities'}
               onSelect={selectOfficeSession}
               onOpen={focus}
             />
           )}
           {sceneAssetsEnabled && (
             <Suspense fallback={null}>
-              <OfficeScene lightMode={isLight} />
+              <OfficeScene
+                lightMode={isLight}
+                signals={{
+                  assistant: assistantSessionCount,
+                  project: projectSummary.workItems + projectSessionCount,
+                  video: mediaSummary.jobs || mediaSummary.productions,
+                  incidents: totalIncidentCount
+                }}
+              />
             </Suspense>
           )}
           {sceneDetailEnabled && (
             <>
-              {ids.map((id, i) => (
+              {visibleIds.map((id, i) => (
                 <Suspense key={id} fallback={null}>
                   <WorkstationPro
                     sessionId={id}
@@ -1025,6 +1191,8 @@ export default function OfficeView(): React.JSX.Element {
                         : stableWatercolorRole(id)
                     }
                     watercolorState={officeModel.sessions[id]?.characterState}
+                    outfitPalette={office.outfitPalette}
+                    hairStyle={office.hairStyle}
                     operatorAway={awaySessionIds.has(id)}
                     currentTask={officeModel.sessions[id]?.currentTask}
                     taskStats={officeModel.sessions[id]?.taskStats}
@@ -1050,12 +1218,13 @@ export default function OfficeView(): React.JSX.Element {
                 <FacilityHotspots
                   specs={OFFICE_FACILITY_SPECS}
                   activeKey={selectedFacility}
+                  interactive={cameraPreset === 'facilities'}
                   onSelect={selectFacility}
                 />
               )}
               {sceneAssetsEnabled && renderQuality.profile.contactShadows !== 'off' && (
                 <OfficeContactShadows
-                  key={`${renderQuality.resolvedTier}-${ids.length}`}
+                  key={`${renderQuality.resolvedTier}-${visibleIds.length}`}
                   lightMode={isLight}
                   mode={renderQuality.profile.contactShadows}
                   frames={renderQuality.profile.contactShadowFrames}
@@ -1076,4 +1245,79 @@ export default function OfficeView(): React.JSX.Element {
       )}
     </div>
   )
+}
+
+type OfficeActivitySummary = Record<OfficeSessionActivity, number> & { total: number }
+
+function OfficeBusinessSwitcher({ value, onChange }: {
+  value: OfficeBusinessView
+  onChange: (view: OfficeBusinessView) => void
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <div className="office-business-strip no-drag" role="group" aria-label={t('officeBusinessViews')}>
+      {BUSINESS_VIEWS.map((view) => (
+        <button
+          key={view}
+          type="button"
+          className={`office-business-button ${value === view ? 'active' : ''}`}
+          aria-pressed={value === view}
+          data-office-business-view-option={view}
+          onClick={() => onChange(view)}
+        >
+          {t(`officeBusiness${view[0].toUpperCase()}${view.slice(1)}`)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function OfficeCommandStrip({ businessView, activity, packetCount, realtime, projects, media }: {
+  businessView: OfficeBusinessView
+  activity: OfficeActivitySummary
+  packetCount: number
+  realtime: OfficeRealtimeSummary
+  projects: ProjectOperationalSummary
+  media: MediaOperationalSummary
+}): React.JSX.Element {
+  const t = useT()
+  const assistantMetrics: Array<[string, string | number]> = [
+    ['officeMetricSessions', activity.total], ['officeMetricWorking', activity.working],
+    ['officeMetricAwaiting', activity.awaiting], ['officeMetricCompleted', activity.completed],
+    ['officeMetricFailed', activity.error], ['officeMetricCost', moneyShort(realtime.totalCostUsd)]
+  ]
+  const projectMetrics: Array<[string, string | number]> = [
+    ['officeMetricProjects', projects.projects], ['officeMetricWorkItems', projects.workItems],
+    ['officeMetricWorking', projects.running], ['officeMetricAwaiting', projects.approvals],
+    ['officeMetricBlocked', projects.blocked], ['officeMetricFailed', projects.failed]
+  ]
+  const videoMetrics: Array<[string, string | number]> = [
+    ['officeMetricProductions', media.productions], ['officeMetricMediaJobs', media.jobs],
+    ['officeMetricWorking', media.running], ['officeMetricReconciliation', media.waitingReconciliation],
+    ['officeMetricFailed', media.failed],
+    ['officeMetricMediaCost', `${moneyShort(media.actualUsd)} / ${moneyShort(media.estimatedUsd)}`]
+  ]
+  const operationsMetrics: Array<[string, string | number]> = [
+    ['officeMetricPackets', packetCount], ['officeMetricRouted', realtime.routedSessions],
+    ['officeMetricFailover', realtime.failoverSessions], ['officeMetricWorkspace', realtime.workspaceChangedFiles],
+    ['officeMetricGit', realtime.gitDirtySessions], ['officeMetricIsolated', realtime.isolatedSessions]
+  ]
+  const metrics = businessView === 'assistant'
+    ? assistantMetrics
+    : businessView === 'project'
+      ? projectMetrics
+      : businessView === 'video'
+        ? videoMetrics
+        : [
+            ['officeMetricSessions', activity.total],
+            ['officeMetricWorkItems', projects.workItems],
+            ['officeMetricMediaJobs', media.jobs],
+            ['officeMetricWorking', activity.working + projects.running + media.running],
+            ['officeMetricAwaiting', activity.awaiting + projects.approvals],
+            ['officeMetricFailed', activity.error + projects.failed + media.failed + media.waitingReconciliation],
+            ...operationsMetrics
+          ] as Array<[string, string | number]>
+  return <div className="office-command-strip no-drag">
+    {metrics.map(([label, value], index) => <div className="office-metric" key={`${label}:${index}`}><span>{t(label)}</span><strong>{value}</strong></div>)}
+  </div>
 }

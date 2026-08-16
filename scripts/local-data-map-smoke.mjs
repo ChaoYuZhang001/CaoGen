@@ -71,6 +71,7 @@ const requiredFamilies = [
   'workflow-ledger',
   'digital-workers',
   'learning',
+  'learning-materializations',
   'project-aggregate-seals',
   'session-history',
   'active-sessions',
@@ -98,6 +99,22 @@ const requiredFamilies = [
 ]
 const missingFamilies = requiredFamilies.filter((id) => !ids.has(id))
 check(missingFamilies.length === 0, `required Store families are registered${suffix(missingFamilies)}`)
+
+const inventoryOnlyFamilies = entries.filter((entry) => entry.implementationStatus === 'inventory_only')
+  .map((entry) => entry.id)
+check(inventoryOnlyFamilies.length === 0,
+  `every registered Store family has an implemented lifecycle boundary${suffix(inventoryOnlyFamilies)}`)
+const learningMaterializations = entries.find((entry) => entry.id === 'learning-materializations')
+check(learningMaterializations?.paths?.includes('projectRoot/.caogen/skills/<skill>/SKILL.md'),
+  'Learning materialization inventory matches the production controlled path')
+check(learningMaterializations?.export?.mode === 'manifest_only' &&
+  learningMaterializations?.deletion?.externalDelete === 'external_untouched',
+'Learning materializations expose a manifest while preserving external ownership')
+const officeOutputs = entries.find((entry) => entry.id === 'office-artifact-outputs')
+check(officeOutputs?.export?.mode === 'full' && officeOutputs?.backup?.behavior === 'aggregate_export',
+  'Office output bytes are covered by Project aggregate export')
+check(officeOutputs?.deletion?.externalDelete === 'external_untouched',
+  'Office output originals remain under the external owner lifecycle')
 
 const excludedSources = new Set()
 for (const exclusion of exclusions) {

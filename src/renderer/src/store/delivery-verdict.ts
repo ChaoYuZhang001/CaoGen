@@ -34,7 +34,8 @@ export interface DeliveryVerdictDetail {
  * 这些字段仅作横幅辅助文案(见 modelReportedDone)。
  */
 export function deriveDeliveryVerdict(snapshot: StudioResultSnapshot): DeliveryVerdictDetail {
-  const acceptances = snapshot.acceptances ?? []
+  const acceptances = (snapshot.acceptances ?? [])
+    .filter((acceptance) => acceptance.deliveryScope !== 'historical')
   let passed = 0
   let waived = 0
   let failed = 0

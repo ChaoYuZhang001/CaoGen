@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
+const require = createRequire(import.meta.url)
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter)
+require('node:module').Module._initPaths()
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-local-provider-parity-build-'))
 const dataDir = mkdtempSync(path.join(tmpdir(), 'caogen-local-provider-parity-data-'))
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
@@ -151,6 +157,8 @@ try {
   assertEqual(localUnhealthy.providerId, remote.id, 'local service bypassed the common health policy')
   checks.push('local-provider-obeys-common-health-policy')
 
+  health.recordSuccess(local.id, 120)
+  for (let index = 0; index < 3; index += 1) health.recordFailure(local.id, 'ECONNREFUSED')
   for (let index = 0; index < 3; index += 1) health.recordFailure(remote.id, '503 service unavailable')
   const allUnhealthy = resolveSession(sessionRouting, {
     providers: [...providers].reverse(),

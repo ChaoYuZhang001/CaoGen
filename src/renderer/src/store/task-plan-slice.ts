@@ -1,6 +1,8 @@
 import type {
   TaskPlanApprovalInput,
+  TaskPlanDispatchResult,
   TaskPlanDraftInput,
+  TaskPlanGenerateInput,
   TaskPlanStateView,
   TaskStrategy
 } from '../../../shared/types'
@@ -10,8 +12,10 @@ export interface TaskPlanSlice {
   taskPlanBusy: Record<string, boolean | undefined>
   taskPlanErrors: Record<string, string | undefined>
   refreshTaskPlan(sessionId: string): Promise<TaskPlanStateView | undefined>
+  generateTaskPlan(sessionId: string, input: TaskPlanGenerateInput): Promise<TaskPlanStateView | undefined>
   createTaskPlanVersion(sessionId: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView | undefined>
   approveTaskPlan(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView | undefined>
+  dispatchApprovedTaskPlan(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanDispatchResult | undefined>
   revokeTaskPlanApproval(sessionId: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView | undefined>
   setTaskStrategy(strategy: TaskStrategy): Promise<void>
   setTaskPlanError(sessionId: string, error?: string): void
@@ -59,10 +63,29 @@ export function createTaskPlanSlice(
     taskPlanBusy: {},
     taskPlanErrors: {},
     refreshTaskPlan: (sessionId) => run(sessionId, () => window.agentDesk.getTaskPlan(sessionId)),
+    generateTaskPlan: (sessionId, input) =>
+      run(sessionId, () => window.agentDesk.generateTaskPlan(sessionId, input)),
     createTaskPlanVersion: (sessionId, draft) =>
       run(sessionId, () => window.agentDesk.createTaskPlanVersion(sessionId, draft)),
     approveTaskPlan: (sessionId, input) =>
       run(sessionId, () => window.agentDesk.approveTaskPlan(sessionId, input)),
+    async dispatchApprovedTaskPlan(sessionId, input) {
+      set((state) => ({
+        taskPlanBusy: { ...state.taskPlanBusy, [sessionId]: true },
+        taskPlanErrors: { ...state.taskPlanErrors, [sessionId]: undefined }
+      }))
+      try {
+        const result = await window.agentDesk.dispatchApprovedTaskPlan(sessionId, input)
+        set((state) => ({ taskPlanBusy: { ...state.taskPlanBusy, [sessionId]: false } }))
+        return result
+      } catch (error) {
+        set((state) => ({
+          taskPlanBusy: { ...state.taskPlanBusy, [sessionId]: false },
+          taskPlanErrors: { ...state.taskPlanErrors, [sessionId]: errorMessage(error) }
+        }))
+        return undefined
+      }
+    },
     revokeTaskPlanApproval: (sessionId, input) =>
       run(sessionId, () => window.agentDesk.revokeTaskPlanApproval(sessionId, input)),
     async setTaskStrategy(strategy) {

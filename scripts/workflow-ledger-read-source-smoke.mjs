@@ -16,6 +16,7 @@ const primaryRoot = path.join(tempRoot, 'primary')
 const canonicalOnlyRoot = path.join(tempRoot, 'canonical-only')
 const missingLegacyTablesRoot = path.join(tempRoot, 'missing-legacy-tables')
 const migrationRoot = path.join(tempRoot, 'v7-migration')
+const ephemeralRoot = path.join(tempRoot, 'ephemeral-user-data')
 
 try {
   compileSources()
@@ -184,6 +185,13 @@ try {
   assertEqual(readRecoveryRunId(SQL, migrationDb), 'run-2', 'v7 migration current recovery binding')
   assertEqual(countCommittedMigrationJournals(migrationRoot), 1,
     'cross-mode first open must publish exactly one committed migration journal')
+
+  mkdirSync(ephemeralRoot, { recursive: true })
+  assertEqual((await snapshotStore.listTaskSnapshots(ephemeralRoot)).length, 0,
+    'ephemeral task store must open empty')
+  rmSync(ephemeralRoot, { recursive: true, force: true })
+  assertEqual((await snapshotStore.listTaskSnapshots(ephemeralRoot)).length, 0,
+    'cached readiness must recover after the complete ephemeral userData root is removed')
 
   writeFileSync(migrationDb, Buffer.alloc(0))
   migration.clearWorkflowLedgerMigrationSingleFlightForTests()

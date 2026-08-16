@@ -20,6 +20,7 @@ import { writeSessionAuditLog } from './permission/audit-log'
 import { evaluateToolPermission, type ToolPermissionDecision } from './permission/tool-permission'
 import { classifyToolCapabilities } from './permission/tool-capabilities'
 import { taskRuntimeRegistry, type ToolIdempotencyDecision } from './task/task-runtime-registry'
+import { registerSessionProducedArtifacts } from './task/session-artifact-producer'
 import { isDisabledModeInspectionToolCall, isReadOnlyToolCall, isSideEffectingToolCall } from './task/tool-idempotency'
 import { buildEffectDescriptor, effectReplayTargetDigest } from './task/effect-reconciler'
 import { describeOfficeArtifactReplayTarget, isOfficeArtifactTool } from './agent/tools/office-artifact'
@@ -27,6 +28,7 @@ import { decideTaskStrategyTool } from './task/task-strategy'
 import { digitalWorkerToolPolicyError } from './digital-worker/tool-action-policy'
 import {
   cancelEffectExecution,
+  confirmedEffectFromArtifactProjectionError,
   completeEffectExecution,
   markEffectExecutionStarted,
   prepareEffectExecution,
@@ -604,17 +606,90 @@ export class NativeToolRuntime {
       sandboxed: exec.sandboxed,
       fallbackReason: exec.fallbackReason
     })
+    let effect
     try {
-      const effect = await completeEffectExecution(effectHandle, exec)
-      return effect ? { ...exec, effectStatus: effect.status } : exec
+      effect = await completeEffectExecution(effectHandle, exec)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      const confirmedEffect = confirmedEffectFromArtifactProjectionError(error)
+      if (confirmedEffect) {
+        return {
+          ...exec,
+          ok: false,
+          output: `${exec.output}\n\n外部操作已确认，但 Artifact/Evidence/Acceptance 登记失败:${message}`,
+          effectStatus: confirmedEffect.status
+        }
+      }
       return {
         ...exec,
         ok: false,
         output: `${exec.output}\n\n外部操作结果未能写入效果账本，已进入未知结果保护:${message}`,
         effectStatus: 'waiting_reconciliation'
       }
+    }
+    try {
+      const finalized = await this.persistProducedArtifacts(exec, effectInput)
+      return effect ? { ...finalized, effectStatus: effect.status } : finalized
+    } catch (error) {
+      const { producedArtifacts: _internal, ...publicExec } = exec
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        ...publicExec,
+        ok: false,
+        output: `${exec.output}\n\nArtifact/Evidence/Acceptance 登记失败:${message}`,
+        ...(effect ? { effectStatus: effect.status } : {})
+      }
+    }
+  }
+
+  private async persistProducedArtifacts(
+    exec: ToolExecResult,
+    effectInput: PrepareEffectExecutionInput
+  ): Promise<ToolExecResult> {
+    const { producedArtifacts, ...publicExec } = exec
+    if (!exec.ok || !producedArtifacts?.length) return publicExec
+    const projectId = this.meta.workspaceId ?? this.meta.projectId
+    if (!projectId) {
+      if (producedArtifacts.some((artifact) => artifact.requiredCanonicalRegistration)) {
+        throw new Error('artifact_register 只允许在 Project-owned Session 中使用')
+      }
+      return publicExec
+    }
+    const run = taskRuntimeRegistry.get(this.meta.id)
+    if (!run) throw new Error(`Project Session 缺少当前 TaskRun:${this.meta.id}`)
+    const bindings = await registerSessionProducedArtifacts({
+      sessionId: this.meta.id,
+      projectId,
+      creatingRunId: run.id,
+      producerInvocationId: effectInput.toolUseId,
+      artifacts: producedArtifacts.map((artifact) => ({
+        kind: artifact.kind,
+        title: artifact.title,
+        content: { storageKind: 'source_ref' as const, sourceRef: artifact.path },
+        lineageKey: artifact.lineageKey,
+        mediaType: artifact.mediaType,
+        producer: artifact.producer,
+        metadata: {
+          toolName: effectInput.toolName,
+          toolUseId: effectInput.toolUseId,
+          ...artifact.metadata
+        },
+        evidenceKind: artifact.evidenceKind,
+        evidenceSummary: artifact.evidenceSummary,
+        evidenceVerifier: artifact.evidenceVerifier,
+        acceptanceStatus: artifact.acceptanceStatus,
+        acceptanceCriterion: artifact.acceptanceCriterion
+      })),
+      rootInput: {
+        workflowRoot: app.getPath('userData'),
+        workspaceRoot: app.getPath('userData')
+      }
+    })
+    const summary = bindings.map((binding) =>
+      `${binding.artifactId} v${binding.version} / ${binding.evidenceId} / ${binding.acceptanceId}`)
+    return {
+      ...publicExec,
+      output: `${publicExec.output}\n\nCanonical delivery:\n${summary.join('\n')}`
     }
   }
 

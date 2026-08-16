@@ -1,4 +1,5 @@
-export type ExperienceMode = 'assistant' | 'studio'
+export type ExperienceMode = 'assistant' | 'studio' | 'video'
+export type SessionExperienceMode = Exclude<ExperienceMode, 'video'>
 export type StudioSurface = 'workspace' | 'result' | 'session'
 
 export interface ExperienceModeSlice {
@@ -8,7 +9,10 @@ export interface ExperienceModeSlice {
   setStudioSurface(surface: StudioSurface): void
 }
 
-type ExperienceModeState = Pick<ExperienceModeSlice, 'experienceMode' | 'studioSurface'>
+type ExperienceModeState = Pick<ExperienceModeSlice, 'experienceMode' | 'studioSurface'> & {
+  showNewSession: boolean
+  newSessionProjectId: string | null
+}
 
 export function createExperienceModeSlice(
   set: (update: Partial<ExperienceModeState>) => void,
@@ -18,7 +22,18 @@ export function createExperienceModeSlice(
     experienceMode: 'assistant',
     studioSurface: 'workspace',
     setExperienceMode: (experienceMode) => {
-      set({ experienceMode })
+      if (experienceMode === 'studio') {
+        set({
+          experienceMode,
+          studioSurface: 'workspace',
+          showNewSession: false,
+          newSessionProjectId: null
+        })
+      } else if (experienceMode === 'video') {
+        set({ experienceMode, showNewSession: false, newSessionProjectId: null })
+      } else {
+        set({ experienceMode })
+      }
       void persist?.(experienceMode)
     },
     setStudioSurface: (studioSurface) => set({ studioSurface })

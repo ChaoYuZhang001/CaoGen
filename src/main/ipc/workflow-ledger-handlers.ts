@@ -1,14 +1,16 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   createWorkflowArtifact,
+  createWorkflowArtifactAcceptance,
   createWorkflowArtifactEdge,
   createWorkflowArtifactLocation,
   createWorkflowEvidence,
   createWorkflowEvidenceLink,
   diagnoseWorkflowLedger,
   exportWorkflowLedger,
+  getProjectDeliveryWorkbench,
   listWorkflowLedger,
   listWorkflowArtifactEdges,
   listWorkflowArtifactLocations,
@@ -34,8 +36,11 @@ import {
 } from '../task/workflow-acceptance-repair-coordinator'
 import {
   materializeWorkflowAcceptanceRepair,
-  recoverWorkflowAcceptanceRepairMaterializations
+  recoverWorkflowAcceptanceRepairMaterializations,
+  autoRetestFailedAcceptanceForRepair
 } from '../task/workflow-acceptance-repair-service'
+import { sessionManager } from '../sessionManager'
+import { scheduleAcceptanceQualityFeedbackRefresh } from '../model/acceptance-quality-feedback'
 import { setupWorkflowEvidenceSchema } from '../task/workflow-evidence-store'
 import {
   linkWorkflowEvidence,
@@ -51,6 +56,21 @@ import type {
   WorkflowAcceptanceInput,
   WorkflowAcceptanceReviewInput,
   WorkflowAcceptanceReviewResult,
+  WorkflowArtifactAcceptanceCreateInput,
+  WorkflowArtifactExportInput,
+  WorkflowArtifactCompareInput,
+  WorkflowArtifactIntegrityInput,
+  WorkflowArtifactManifestExportInput,
+  WorkflowProjectDeliveryIntegrityInput,
+  WorkflowProjectDeliveryManifestExportInput,
+  WorkflowProjectDeliveryPackageExportInput,
+  WorkflowDeliveryIdentityRevokeInput,
+  WorkflowDeliveryIdentityPassphraseInput,
+  WorkflowDeliveryIdentityRotateInput,
+  WorkflowDeliveryIdentityTrustInput,
+  WorkflowDeliveryTrustPolicyUpdateInput,
+  WorkflowProjectDeliveryPackageVerificationReceiptSaveInput,
+  WorkflowProjectDeliveryPackageVerificationResult,
   WorkflowArtifactEdgeInput,
   WorkflowArtifactInput,
   WorkflowArtifactLocationInput,
@@ -65,6 +85,45 @@ import type {
   WorkflowArtifactLocationAvailability,
   WorkflowLedgerExportOptions
 } from '../../shared/workflow-types'
+import {
+  exportWorkflowArtifactToPath,
+  compareWorkflowArtifactSources,
+  resolveWorkflowArtifactExportSource
+} from '../task/workflow-artifact-export'
+import {
+  buildWorkflowArtifactDeliveryManifest,
+  buildWorkflowProjectDeliveryManifest,
+  exportWorkflowArtifactManifestToPath,
+  exportWorkflowProjectDeliveryManifestToPath,
+  exportWorkflowProjectDeliveryPackageToPath,
+  suggestedWorkflowArtifactManifestName,
+  suggestedWorkflowProjectManifestName,
+  suggestedWorkflowProjectPackageName,
+  verifyWorkflowProjectDelivery,
+  verifyWorkflowArtifactIntegrity
+} from '../task/workflow-artifact-delivery'
+import {
+  saveWorkflowProjectDeliveryPackageVerificationReceiptToPath,
+  suggestedWorkflowProjectDeliveryVerificationReceiptName,
+  verifyWorkflowProjectDeliveryPackageAtPath
+} from '../task/workflow-delivery-package-verifier'
+import {
+  exportWorkflowDeliveryIdentityTrustBundleToPath,
+  importWorkflowDeliveryIdentityTrustBundleAtPath,
+  listWorkflowDeliveryTrustedIdentities,
+  recordWorkflowDeliveryRetiredLocalIdentity,
+  revokeWorkflowDeliveryIdentity,
+  suggestedWorkflowDeliveryIdentityTrustBundleName,
+  trustWorkflowDeliveryIdentity,
+  updateWorkflowDeliveryTrustPolicy
+} from '../task/workflow-delivery-trust-store'
+import {
+  exportWorkflowDeliveryIdentityBackupToPath,
+  getWorkflowDeliveryIdentityProfile,
+  restoreWorkflowDeliveryIdentityBackupAtPath,
+  rotateWorkflowDeliveryIdentity,
+  suggestedWorkflowDeliveryIdentityBackupName
+} from '../task/workflow-delivery-identity'
 import {
   projectIdsFromMutationResult,
   verifyProductionProjectMutation
@@ -99,20 +158,24 @@ const WORKFLOW_EVIDENCE_KINDS = new Set<WorkflowEvidenceKind>([
   'research_source', 'review_result', 'test_result', 'approval', 'observation',
   'metric', 'security_scan', 'delivery_check', 'custom'
 ])
+const DELIVERY_VERIFICATION_TTL_MS = 30 * 60 * 1000
+const DELIVERY_VERIFICATION_CACHE_LIMIT = 16
+const deliveryVerificationCache = new Map<string, {
+  senderId: number
+  expiresAt: number
+  result: Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }>
+}>()
 
 export function registerWorkflowLedgerIpc(): void {
-  void recoverWorkflowAcceptanceRepairs().then((result) => {
-    if (result.failures.length > 0) {
-      console.error(`[caogen] ${result.failures.length} workflow acceptance repair(s) need manual reconciliation`)
-    }
-  }).catch((error) => {
-    console.error('[caogen] workflow acceptance repair recovery failed', error)
-  })
   ipcMain.handle('workflowLedger:list', (event, rawScope: unknown) => {
     assertTrustedWorkflowLedgerSender(event)
     return listWorkflowLedger(normalizeScope(rawScope))
   }
   )
+  ipcMain.handle('workflowLedger:projectDeliveryWorkbench', (event, rawProjectId: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    return getProjectDeliveryWorkbench(requiredString(rawProjectId, 'Project ID'))
+  })
   ipcMain.handle('workflowLedger:verify', (event) => {
     assertTrustedWorkflowLedgerSender(event)
     return verifyPersistedWorkflowLedger()
@@ -140,6 +203,309 @@ export function registerWorkflowLedgerIpc(): void {
   ipcMain.handle('workflowLedger:createArtifact', (event, rawInput: unknown) => {
     assertTrustedWorkflowLedgerSender(event)
     return verifyWorkflowMutation(createWorkflowArtifact(normalizeRecordInput<WorkflowArtifactInput>(rawInput, 'Artifact')))
+  })
+  ipcMain.handle('workflowLedger:createArtifactAcceptance', (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Artifact Acceptance input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['artifactId']), 'Artifact Acceptance input')
+    return verifyWorkflowMutation(createWorkflowArtifactAcceptance({
+      artifactId: requiredString(rawInput.artifactId, 'artifactId')
+    } satisfies WorkflowArtifactAcceptanceCreateInput))
+  })
+  ipcMain.handle('workflowLedger:exportArtifact', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Artifact export input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['artifactId']), 'Artifact export input')
+    const input = {
+      artifactId: requiredString(rawInput.artifactId, 'artifactId')
+    } satisfies WorkflowArtifactExportInput
+    const source = await resolveWorkflowArtifactExportSource(input.artifactId)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出已验证交付物',
+      defaultPath: source.suggestedFileName
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return exportWorkflowArtifactToPath(source, result.filePath)
+  })
+  ipcMain.handle('workflowLedger:compareArtifacts', (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Artifact compare input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['baseArtifactId', 'targetArtifactId']), 'Artifact compare input')
+    const input = {
+      baseArtifactId: requiredString(rawInput.baseArtifactId, 'baseArtifactId'),
+      targetArtifactId: requiredString(rawInput.targetArtifactId, 'targetArtifactId')
+    } satisfies WorkflowArtifactCompareInput
+    return compareWorkflowArtifactSources(input.baseArtifactId, input.targetArtifactId)
+  })
+  ipcMain.handle('workflowLedger:verifyArtifactIntegrity', (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Artifact integrity input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['artifactId']), 'Artifact integrity input')
+    const input = {
+      artifactId: requiredString(rawInput.artifactId, 'artifactId')
+    } satisfies WorkflowArtifactIntegrityInput
+    return verifyWorkflowArtifactIntegrity(input.artifactId)
+  })
+  ipcMain.handle('workflowLedger:exportArtifactManifest', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Artifact manifest export input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['artifactId']), 'Artifact manifest export input')
+    const input = {
+      artifactId: requiredString(rawInput.artifactId, 'artifactId')
+    } satisfies WorkflowArtifactManifestExportInput
+    const manifest = await buildWorkflowArtifactDeliveryManifest(input.artifactId)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出 Artifact 交付清单',
+      defaultPath: suggestedWorkflowArtifactManifestName(manifest.artifact.title),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return exportWorkflowArtifactManifestToPath(manifest, result.filePath)
+  })
+  ipcMain.handle('workflowLedger:verifyProjectDelivery', (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Project delivery integrity input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['projectId']), 'Project delivery integrity input')
+    const input = {
+      projectId: requiredString(rawInput.projectId, 'projectId')
+    } satisfies WorkflowProjectDeliveryIntegrityInput
+    return verifyWorkflowProjectDelivery(input.projectId)
+  })
+  ipcMain.handle('workflowLedger:exportProjectDeliveryManifest', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Project delivery manifest export input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['projectId']), 'Project delivery manifest export input')
+    const input = {
+      projectId: requiredString(rawInput.projectId, 'projectId')
+    } satisfies WorkflowProjectDeliveryManifestExportInput
+    const manifest = await buildWorkflowProjectDeliveryManifest(input.projectId)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出 Project 交付清单',
+      defaultPath: suggestedWorkflowProjectManifestName(manifest.projectId),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return exportWorkflowProjectDeliveryManifestToPath(manifest, result.filePath)
+  })
+  ipcMain.handle('workflowLedger:exportProjectDeliveryPackage', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Project delivery package export input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['projectId']), 'Project delivery package export input')
+    const input = {
+      projectId: requiredString(rawInput.projectId, 'projectId')
+    } satisfies WorkflowProjectDeliveryPackageExportInput
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出 Project 可验证交付包',
+      defaultPath: suggestedWorkflowProjectPackageName(input.projectId),
+      filters: [{ name: 'ZIP', extensions: ['zip'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return exportWorkflowProjectDeliveryPackageToPath(input.projectId, result.filePath, app.getPath('userData'))
+  })
+  ipcMain.handle('workflowLedger:verifyProjectDeliveryPackage', async (event) => {
+    assertTrustedWorkflowLedgerSender(event)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(window, {
+      title: '验证 CaoGen 交付包',
+      properties: ['openFile'],
+      filters: [{ name: 'ZIP 交付包', extensions: ['zip'] }]
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { canceled: true as const }
+    const verification = await verifyWorkflowProjectDeliveryPackageAtPath(result.filePaths[0], app.getPath('userData'))
+    rememberDeliveryVerification(event.sender.id, verification)
+    return verification
+  })
+  ipcMain.handle('workflowLedger:listDeliveryTrustedIdentities', (event) => {
+    assertTrustedWorkflowLedgerSender(event)
+    return listWorkflowDeliveryTrustedIdentities(app.getPath('userData'))
+  })
+  ipcMain.handle('workflowLedger:updateDeliveryTrustPolicy', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery trust policy input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['mode', 'expectedRevision']), 'Delivery trust policy input')
+    const mode = rawInput.mode
+    if (mode !== 'audit_only' && mode !== 'require_valid_signature' && mode !== 'require_trusted_identity') {
+      throw new Error('Delivery trust policy mode is invalid')
+    }
+    const input = {
+      mode,
+      expectedRevision: nonNegativeInteger(rawInput.expectedRevision, 'expectedRevision')
+    } satisfies WorkflowDeliveryTrustPolicyUpdateInput
+    const snapshot = await updateWorkflowDeliveryTrustPolicy(
+      app.getPath('userData'), input.mode, input.expectedRevision
+    )
+    deliveryVerificationCache.clear()
+    return { snapshot }
+  })
+  ipcMain.handle('workflowLedger:exportDeliveryIdentityTrustBundle', async (event) => {
+    assertTrustedWorkflowLedgerSender(event)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '导出交付身份信任包',
+      defaultPath: suggestedWorkflowDeliveryIdentityTrustBundleName(),
+      filters: [{ name: 'CaoGen 信任包', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return { canceled: false as const, ...await exportWorkflowDeliveryIdentityTrustBundleToPath(app.getPath('userData'), result.filePath) }
+  })
+  ipcMain.handle('workflowLedger:importDeliveryIdentityTrustBundle', async (event, rawExpectedRevision: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    const expectedRevision = nonNegativeInteger(rawExpectedRevision, 'expectedRevision')
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(window, {
+      title: '导入交付身份信任包',
+      properties: ['openFile'],
+      filters: [{ name: 'CaoGen 信任包', extensions: ['json'] }]
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { canceled: true as const }
+    const imported = await importWorkflowDeliveryIdentityTrustBundleAtPath(
+      app.getPath('userData'), result.filePaths[0], expectedRevision
+    )
+    for (const identity of imported.snapshot.identities) {
+      reclassifyCachedDeliveryIdentities(
+        identity.fingerprint,
+        identity.status === 'trusted' ? 'trusted_identity' : 'revoked_identity',
+        identity.label
+      )
+    }
+    return {
+      canceled: false as const,
+      ...imported
+    }
+  })
+  ipcMain.handle('workflowLedger:exportDeliveryIdentityBackup', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery identity backup input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['passphrase']), 'Delivery identity backup input')
+    const input = { passphrase: requiredString(rawInput.passphrase, 'passphrase') } satisfies WorkflowDeliveryIdentityPassphraseInput
+    const profile = await getWorkflowDeliveryIdentityProfile(app.getPath('userData'))
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '备份 CaoGen 交付签名身份',
+      defaultPath: suggestedWorkflowDeliveryIdentityBackupName(profile.fingerprint),
+      filters: [{ name: 'CaoGen 身份备份', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return { canceled: false as const, ...await exportWorkflowDeliveryIdentityBackupToPath(
+      app.getPath('userData'), result.filePath, input.passphrase
+    ) }
+  })
+  ipcMain.handle('workflowLedger:restoreDeliveryIdentityBackup', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery identity restore input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['passphrase']), 'Delivery identity restore input')
+    const input = { passphrase: requiredString(rawInput.passphrase, 'passphrase') } satisfies WorkflowDeliveryIdentityPassphraseInput
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(window, {
+      title: '恢复 CaoGen 交付签名身份',
+      properties: ['openFile'],
+      filters: [{ name: 'CaoGen 身份备份', extensions: ['json'] }]
+    })
+    if (result.canceled || result.filePaths.length !== 1) return { canceled: true as const }
+    const restored = await restoreWorkflowDeliveryIdentityBackupAtPath(
+      app.getPath('userData'), result.filePaths[0], input.passphrase
+    )
+    const snapshot = restored.previousFingerprint
+      ? await recordWorkflowDeliveryRetiredLocalIdentity(
+          app.getPath('userData'), restored.previousFingerprint, 'restored', Date.now(), restored.profile.fingerprint
+        )
+      : await listWorkflowDeliveryTrustedIdentities(app.getPath('userData'))
+    if (restored.previousFingerprint) reclassifyCachedDeliveryIdentities(restored.previousFingerprint, 'revoked_identity')
+    if (snapshot.localIdentity) reclassifyCachedDeliveryIdentities(snapshot.localIdentity.fingerprint, 'local_identity')
+    return {
+      canceled: false as const,
+      disposition: restored.disposition,
+      ...(restored.previousFingerprint ? { previousFingerprint: restored.previousFingerprint } : {}),
+      snapshot
+    }
+  })
+  ipcMain.handle('workflowLedger:rotateDeliveryIdentity', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery identity rotation input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['expectedFingerprint']), 'Delivery identity rotation input')
+    const input = {
+      ...(rawInput.expectedFingerprint === undefined
+        ? {}
+        : { expectedFingerprint: requiredString(rawInput.expectedFingerprint, 'expectedFingerprint') })
+    } satisfies WorkflowDeliveryIdentityRotateInput
+    const rotated = await rotateWorkflowDeliveryIdentity(app.getPath('userData'), input.expectedFingerprint)
+    const snapshot = rotated.previousFingerprint
+      ? await recordWorkflowDeliveryRetiredLocalIdentity(
+          app.getPath('userData'), rotated.previousFingerprint, 'rotated', Date.now(), rotated.profile.fingerprint
+        )
+      : await listWorkflowDeliveryTrustedIdentities(app.getPath('userData'))
+    if (rotated.previousFingerprint) reclassifyCachedDeliveryIdentities(rotated.previousFingerprint, 'revoked_identity')
+    return {
+      ...(rotated.previousFingerprint ? { previousFingerprint: rotated.previousFingerprint } : {}),
+      snapshot
+    }
+  })
+  ipcMain.handle('workflowLedger:trustDeliveryIdentity', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery identity trust input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['verificationId', 'label', 'expectedRevision']), 'Delivery identity trust input')
+    const input = {
+      verificationId: requiredString(rawInput.verificationId, 'verificationId'),
+      label: requiredString(rawInput.label, 'label'),
+      expectedRevision: nonNegativeInteger(rawInput.expectedRevision, 'expectedRevision')
+    } satisfies WorkflowDeliveryIdentityTrustInput
+    const verification = resolveDeliveryVerification(event.sender.id, input.verificationId)
+    if (verification.byteIntegrity !== 'verified' || verification.signatureStatus !== 'valid' ||
+        (verification.identityTrust !== 'unknown_identity' && verification.identityTrust !== 'revoked_identity') ||
+        !verification.signingIdentityFingerprint) {
+      throw new Error('Only a fully verified package with a valid unknown identity can be trusted')
+    }
+    const snapshot = await trustWorkflowDeliveryIdentity(app.getPath('userData'), {
+      fingerprint: verification.signingIdentityFingerprint,
+      label: input.label,
+      projectId: verification.projectId,
+      expectedRevision: input.expectedRevision,
+      verifiedAt: verification.verifiedAt,
+      at: Date.now()
+    })
+    reclassifyCachedDeliveryIdentities(verification.signingIdentityFingerprint, 'trusted_identity', input.label)
+    return {
+      snapshot,
+      verification: resolveDeliveryVerification(event.sender.id, input.verificationId)
+    }
+  })
+  ipcMain.handle('workflowLedger:revokeDeliveryIdentity', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery identity revoke input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['fingerprint', 'expectedRevision']), 'Delivery identity revoke input')
+    const input = {
+      fingerprint: requiredString(rawInput.fingerprint, 'fingerprint'),
+      expectedRevision: nonNegativeInteger(rawInput.expectedRevision, 'expectedRevision')
+    } satisfies WorkflowDeliveryIdentityRevokeInput
+    const snapshot = await revokeWorkflowDeliveryIdentity(
+      app.getPath('userData'),
+      input.fingerprint,
+      input.expectedRevision
+    )
+    const revoked = snapshot.identities.find((item) => item.fingerprint === input.fingerprint.trim().toLowerCase())
+    reclassifyCachedDeliveryIdentities(input.fingerprint, 'revoked_identity', revoked?.label)
+    return { snapshot }
+  })
+  ipcMain.handle('workflowLedger:saveProjectDeliveryPackageVerificationReceipt', async (event, rawInput: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    if (!isRecord(rawInput)) throw new Error('Delivery verification receipt input 必须是对象')
+    assertAllowedKeys(rawInput, new Set(['verificationId']), 'Delivery verification receipt input')
+    const input = {
+      verificationId: requiredString(rawInput.verificationId, 'verificationId')
+    } satisfies WorkflowProjectDeliveryPackageVerificationReceiptSaveInput
+    const verification = resolveDeliveryVerification(event.sender.id, input.verificationId)
+    const window = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(window, {
+      title: '保存交付包验证凭证',
+      defaultPath: suggestedWorkflowProjectDeliveryVerificationReceiptName(verification.fileName),
+      filters: [{ name: 'JSON 验证凭证', extensions: ['json'] }]
+    })
+    if (result.canceled || !result.filePath) return { canceled: true as const }
+    return saveWorkflowProjectDeliveryPackageVerificationReceiptToPath(verification, result.filePath)
   })
   ipcMain.handle('workflowLedger:createArtifactEdge', (event, rawInput: unknown) => {
     assertTrustedWorkflowLedgerSender(event)
@@ -196,6 +562,22 @@ export function registerWorkflowLedgerIpc(): void {
       workflowAcceptanceUserAuthority(event)
     ))
   })
+  ipcMain.handle('workflowLedger:startAcceptanceRepair', async (event, rawAcceptanceId: unknown) => {
+    assertTrustedWorkflowLedgerSender(event)
+    const acceptanceId = requiredString(rawAcceptanceId, 'Acceptance ID')
+    const rootDir = app.getPath('userData')
+    const acceptance = await readAcceptanceForRepair(acceptanceId, rootDir)
+    if (acceptance.status !== 'failed') {
+      throw new Error(`workflow acceptance ${acceptanceId} is not failed`)
+    }
+    if (!acceptance.projectId) {
+      throw new Error(`workflow acceptance ${acceptanceId} is not bound to a Project`)
+    }
+    const { repair } = await materializeWorkflowAcceptanceRepair(acceptance, rootDir)
+    await verifyProductionProjectMutation(rootDir, acceptance.projectId)
+    await sessionManager.whenInitialized()
+    return sessionManager.startWorkflowAcceptanceRepair(acceptance, repair.repairWorkItem)
+  })
   ipcMain.handle('workflowLedger:createEvidenceLink', (event, rawInput: unknown) => {
     assertTrustedWorkflowLedgerSender(event)
     return verifyWorkflowMutation(
@@ -209,6 +591,94 @@ export function registerWorkflowLedgerIpc(): void {
       return rejectLegacyWorkflowEntityWrite('workflowLedger:transitionWorkItem')
     }
   )
+}
+
+function rememberDeliveryVerification(
+  senderId: number,
+  result: Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }>
+): void {
+  pruneDeliveryVerificationCache()
+  deliveryVerificationCache.set(result.verificationId, {
+    senderId,
+    expiresAt: Date.now() + DELIVERY_VERIFICATION_TTL_MS,
+    result
+  })
+  while (deliveryVerificationCache.size > DELIVERY_VERIFICATION_CACHE_LIMIT) {
+    const oldest = deliveryVerificationCache.keys().next().value as string | undefined
+    if (!oldest) break
+    deliveryVerificationCache.delete(oldest)
+  }
+}
+
+function resolveDeliveryVerification(
+  senderId: number,
+  verificationId: string
+): Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }> {
+  pruneDeliveryVerificationCache()
+  const cached = deliveryVerificationCache.get(verificationId)
+  if (!cached || cached.senderId !== senderId) {
+    throw new Error('Delivery package verification has expired; verify the package again')
+  }
+  return cached.result
+}
+
+function pruneDeliveryVerificationCache(): void {
+  const now = Date.now()
+  for (const [verificationId, cached] of deliveryVerificationCache) {
+    if (cached.expiresAt <= now) deliveryVerificationCache.delete(verificationId)
+  }
+}
+
+function reclassifyCachedDeliveryIdentities(
+  fingerprint: string,
+  identityTrust: 'local_identity' | 'trusted_identity' | 'revoked_identity' | 'unknown_identity',
+  label?: string
+): void {
+  const normalized = fingerprint.trim().toLowerCase()
+  for (const [verificationId, cached] of deliveryVerificationCache) {
+    if (cached.result.signatureStatus !== 'valid' ||
+        cached.result.signingIdentityFingerprint?.toLowerCase() !== normalized) continue
+    cached.result = {
+      ...cached.result,
+      identityTrust,
+      ...(label ? { signingIdentityLabel: label } : {})
+    }
+    if (!label) delete cached.result.signingIdentityLabel
+    cached.result = reapplyCachedDeliveryTrustPolicy(cached.result)
+    deliveryVerificationCache.set(verificationId, cached)
+  }
+}
+
+function reapplyCachedDeliveryTrustPolicy(
+  result: Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }>
+): Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }> {
+  const blockers = result.blockers.filter((blocker) =>
+    blocker.code !== 'SIGNATURE_REQUIRED' && blocker.code !== 'IDENTITY_NOT_TRUSTED' &&
+    blocker.code !== 'IDENTITY_REVOKED' && blocker.code !== 'TRUST_POLICY_UNAVAILABLE'
+  )
+  if (result.trustPolicyMode === 'require_valid_signature' && result.signatureStatus === 'unsigned') {
+    blockers.push({ code: 'SIGNATURE_REQUIRED', message: '当前组织策略要求交付包提供有效的 Ed25519 身份签名' })
+  }
+  if (result.trustPolicyMode === 'require_trusted_identity') {
+    if (result.signatureStatus === 'unsigned') {
+      blockers.push({ code: 'SIGNATURE_REQUIRED', message: '当前组织策略要求交付包提供有效的 Ed25519 身份签名' })
+    } else if (result.identityTrust === 'revoked_identity') {
+      blockers.push({ code: 'IDENTITY_REVOKED', message: '交付包签名身份已被组织撤销' })
+    } else if (result.identityTrust !== 'local_identity' && result.identityTrust !== 'trusted_identity') {
+      blockers.push({ code: 'IDENTITY_NOT_TRUSTED', message: '交付包签名身份尚未加入组织信任列表' })
+    }
+  }
+  const trustPolicyVerdict = blockers.some((blocker) =>
+    blocker.code === 'SIGNATURE_REQUIRED' || blocker.code === 'IDENTITY_NOT_TRUSTED' ||
+    blocker.code === 'IDENTITY_REVOKED' || blocker.code === 'TRUST_POLICY_UNAVAILABLE' ||
+    blocker.code === 'SIGNATURE_INVALID'
+  ) ? 'blocked' as const : 'passed' as const
+  return {
+    ...result,
+    verdict: blockers.length === 0 ? 'verified' : 'rejected',
+    trustPolicyVerdict,
+    blockers
+  }
 }
 
 async function verifyWorkflowMutation<T>(mutation: Promise<T>): Promise<T> {
@@ -271,8 +741,16 @@ export async function reviewWorkflowAcceptance(
         }
       }
     })
+    if (persisted.acceptance.status === 'passed' || persisted.acceptance.status === 'failed') {
+      scheduleAcceptanceQualityFeedbackRefresh(rootDir)
+    }
     if (persisted.acceptance.status === 'failed') {
       const { repair } = await materializeWorkflowAcceptanceRepair(persisted.acceptance, rootDir)
+      if (!rootDir || rootDir === app.getPath('userData')) {
+        void sessionManager.whenInitialized()
+          .then(() => sessionManager.startWorkflowAcceptanceRepair(persisted.acceptance, repair.repairWorkItem))
+          .catch((error) => console.error('[caogen] workflow acceptance repair auto-start failed', error))
+      }
       return {
         ...persisted,
         repair: {
@@ -292,6 +770,13 @@ export async function reviewWorkflowAcceptance(
           failedAcceptanceRevision: retestPlan.failedAcceptanceRevision,
           disposition: 'completed'
         }
+      }
+    }
+    if (persisted.acceptance.status === 'passed' || persisted.acceptance.status === 'waived') {
+      try {
+        await autoRetestFailedAcceptanceForRepair(persisted.acceptance, rootDir)
+      } catch (error) {
+        console.error(`[caogen] workflow repair retest projection deferred:${persisted.acceptance.id}`, error)
       }
     }
     return persisted

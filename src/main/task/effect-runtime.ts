@@ -27,6 +27,8 @@ const PROCESS_OWNER_ID = `caogen:${process.pid}:${randomUUID()}`
 const sessionQueues = new Map<string, Promise<unknown>>()
 
 export interface PrepareEffectExecutionInput {
+  /** Canonical application data root for Project-owned operations. */
+  rootDir?: string
   sessionId: string
   cwd: string
   toolUseId: string
@@ -37,6 +39,22 @@ export interface PrepareEffectExecutionInput {
 export interface CompleteEffectExecutionInput {
   ok: boolean
   output: string
+}
+
+export class ConfirmedEffectArtifactProjectionError extends Error {
+  readonly effect: EffectRecord
+  readonly projectionCause: unknown
+
+  constructor(effect: EffectRecord, cause: unknown) {
+    super(`Effect ${effect.id} is confirmed, but Artifact projection failed: ${errorText(cause)}`)
+    this.name = 'ConfirmedEffectArtifactProjectionError'
+    this.effect = effect
+    this.projectionCause = cause
+  }
+}
+
+export function confirmedEffectFromArtifactProjectionError(error: unknown): EffectRecord | undefined {
+  return error instanceof ConfirmedEffectArtifactProjectionError ? error.effect : undefined
 }
 
 export async function prepareEffectExecution(
@@ -59,9 +77,9 @@ export async function prepareEffectExecution(
       descriptor,
       ownerId: PROCESS_OWNER_ID
     })
-    if (!prepared.created) return prepared.handle
-    const persisted = await persistRun(prepared.run, prepared.handle.effectId)
-    return effectHandleFromRecord(requireEffect(persisted, prepared.handle.effectId))
+    if (!prepared.created) return { ...prepared.handle, rootDir: input.rootDir }
+    const persisted = await persistRun(prepared.run, prepared.handle.effectId, input.rootDir)
+    return { ...effectHandleFromRecord(requireEffect(persisted, prepared.handle.effectId)), rootDir: input.rootDir }
   })
 }
 
@@ -83,7 +101,7 @@ export async function markEffectExecutionStarted(
     } catch (error) {
       const reason = `执行前无法重新验证效果目标:${error instanceof Error ? error.message : String(error)}`
       const abandoned = abandonPreparedEffect(run, handle, reason)
-      if (abandoned !== run) await persistRun(abandoned, handle.effectId)
+      if (abandoned !== run) await persistRun(abandoned, handle.effectId, input.rootDir ?? handle.rootDir)
       throw new Error(reason)
     }
     if (
@@ -95,11 +113,11 @@ export async function markEffectExecutionStarted(
     ) {
       const reason = '执行前目标或输入已变化，旧审批与效果意图失效；请基于当前状态重新审批'
       const abandoned = abandonPreparedEffect(run, handle, reason)
-      if (abandoned !== run) await persistRun(abandoned, handle.effectId)
+      if (abandoned !== run) await persistRun(abandoned, handle.effectId, input.rootDir ?? handle.rootDir)
       throw new Error(reason)
     }
     const next = markEffectExecuting(run, handle)
-    if (next !== run) await persistRun(next, handle.effectId)
+    if (next !== run) await persistRun(next, handle.effectId, input.rootDir ?? handle.rootDir)
   })
 }
 
@@ -121,7 +139,7 @@ export async function completeEffectExecution(
           ? '工具报告成功，正在验证目标后置条件'
           : '工具报告失败，正在查询目标是否已产生部分副作用'
       )
-      const probed = await reconcileEffect(requireEffect(observed, effect.id))
+      const probed = await reconcileEffect(requireEffect(observed, effect.id), {}, handle.rootDir)
       const reconciliation = result.ok && probed.kind === 'not_applied'
         ? {
             kind: 'unresolved' as const,
@@ -153,7 +171,7 @@ export async function completeEffectExecution(
         '不可查询工具返回失败，但可能已产生部分副作用，已按 fail-closed 等待人工对账'
       )
     }
-    const persisted = await persistRun(next, handle.effectId)
+    const persisted = await persistRun(next, handle.effectId, handle.rootDir)
     return requireEffect(persisted, handle.effectId)
   })
 }
@@ -166,14 +184,15 @@ export async function cancelEffectExecution(
   await withSessionQueueByHandle(handle, async (run) => {
     const next = abandonPreparedEffect(run, handle, reason)
     if (next !== run) {
-      await persistRun(next, handle.effectId)
+      await persistRun(next, handle.effectId, handle.rootDir)
     }
   })
 }
 
 async function reconcileStoppedTaskRunEffects(
   run: TaskRunRecord,
-  engine: TaskSnapshotRecord['engine']
+  engine: TaskSnapshotRecord['engine'],
+  rootDir?: string
 ): Promise<TaskRunRecord> {
   let next = run
   const candidates = (run.effects ?? []).filter((effect) =>
@@ -194,7 +213,7 @@ async function reconcileStoppedTaskRunEffects(
       )
       continue
     }
-    const probed = await reconcileEffect(current)
+    const probed = await reconcileEffect(current, {}, rootDir)
     const result = probed.kind === 'not_applied' && current.lease?.ownerId === PROCESS_OWNER_ID
       ? {
           kind: 'unresolved' as const,
@@ -235,13 +254,14 @@ function effectHandleFromRecord(effect: EffectRecord): EffectExecutionHandle {
 
 export async function reconcileTaskSnapshotEffects(
   snapshot: TaskSnapshotRecord,
-  options: { processStopped: true }
+  options: { processStopped: true; rootDir?: string }
 ): Promise<TaskSnapshotRecord> {
   if (options.processStopped !== true) throw new Error('外部效果只能在确认原执行进程已停止后对账')
   if (!snapshot.run?.effects?.length) return snapshot
   let run = await reconcileStoppedTaskRunEffects(
     snapshot.run,
-    snapshot.engine ?? snapshot.meta.engine
+    snapshot.engine ?? snapshot.meta.engine,
+    options.rootDir
   )
   if (hasWaitingReconciliation(run) && !isTaskRunTerminal(run.status) && run.status !== 'waiting_reconciliation') {
     run = transitionTaskRun(run, 'waiting_reconciliation', {
@@ -254,17 +274,37 @@ export async function reconcileTaskSnapshotEffects(
 }
 
 export async function reconcilePersistedTaskSnapshot(
-  candidate: TaskSnapshotRecord
+  candidate: TaskSnapshotRecord,
+  rootDir?: string
 ): Promise<TaskSnapshotRecord> {
+  const reconciled = await reconcileQueuedTaskSnapshot(candidate, false, rootDir)
+  if (!reconciled) throw new Error('任务快照在对账期间意外消失')
+  return reconciled
+}
+
+/** Reconcile a list result without recreating a snapshot deleted after that list read. */
+export function reconcileExistingPersistedTaskSnapshot(
+  candidate: TaskSnapshotRecord,
+  rootDir?: string
+): Promise<TaskSnapshotRecord | null> {
+  return reconcileQueuedTaskSnapshot(candidate, true, rootDir)
+}
+
+function reconcileQueuedTaskSnapshot(
+  candidate: TaskSnapshotRecord,
+  requireStored: boolean,
+  rootDir?: string
+): Promise<TaskSnapshotRecord | null> {
   return withSessionQueue(candidate.sessionId, async () => {
-    const stored = await getTaskSnapshot(candidate.id)
+    const stored = await getTaskSnapshot(candidate.id, rootDir)
+    if (requireStored && !stored) return null
     const base = stored && compareSnapshotFreshness(stored, candidate) >= 0 ? stored : candidate
-    const reconciled = await reconcileTaskSnapshotEffects(base, { processStopped: true })
-    const persisted = reconciled === stored ? stored : await saveTaskSnapshot(reconciled)
+    const reconciled = await reconcileTaskSnapshotEffects(base, { processStopped: true, rootDir })
+    const persisted = reconciled === stored ? stored : await saveTaskSnapshot(reconciled, rootDir)
     if (!persisted) throw new Error('任务快照在对账期间被删除')
     if (persisted.run) {
       taskRuntimeRegistry.set(persisted.run.sessionId, persisted.run)
-      await registerConfirmedRunArtifactLifecycles(persisted.run)
+      await registerConfirmedRunArtifactLifecycles(persisted.run, rootDir)
     }
     return persisted
   })
@@ -329,11 +369,36 @@ async function withSessionQueueByHandle<T>(
   handle: EffectExecutionHandle,
   task: (run: TaskRunRecord) => Promise<T>
 ): Promise<T> {
-  return withSessionQueue(handle.sessionId, () => task(requireRun(handle.sessionId)))
+  return withSessionQueue(handle.sessionId, async () => task(await requireRunForHandle(handle)))
 }
 
-async function persistRun(run: TaskRunRecord, requiredEffectId?: string): Promise<TaskRunRecord> {
-  const persisted = await saveTaskRunBarrier(run)
+async function requireRunForHandle(handle: EffectExecutionHandle): Promise<TaskRunRecord> {
+  const current = taskRuntimeRegistry.get(handle.sessionId)
+  if (current) return current
+
+  const snapshot = await getTaskSnapshot(handle.sessionId, handle.rootDir)
+  const run = snapshot?.run
+  if (!run || run.sessionId !== handle.sessionId) {
+    throw new Error('当前会话没有 TaskRun，已按 fail-closed 阻止外部副作用')
+  }
+  const effect = run.effects?.find((candidate) => candidate.id === handle.effectId)
+  const lease = effect?.lease
+  if (!effect || !lease || effect.effectKey !== handle.effectKey ||
+      effect.resourceKey !== handle.resourceKey || effect.toolUseId !== handle.toolUseId ||
+      effect.targetDigest !== handle.targetDigest || lease.id !== handle.leaseId ||
+      lease.ownerId !== handle.ownerId || lease.fencingToken !== handle.fencingToken) {
+    throw new Error('持久化 EffectRecord 与执行 handle 不一致，已按 fail-closed 阻止外部副作用')
+  }
+  taskRuntimeRegistry.set(handle.sessionId, run)
+  return taskRuntimeRegistry.get(handle.sessionId) ?? run
+}
+
+async function persistRun(
+  run: TaskRunRecord,
+  requiredEffectId?: string,
+  rootDir?: string
+): Promise<TaskRunRecord> {
+  const persisted = await saveTaskRunBarrier(run, rootDir)
   if (requiredEffectId) {
     const expected = run.effects?.find((effect) => effect.id === requiredEffectId)
     const stored = persisted.effects?.find((effect) => effect.id === requiredEffectId)
@@ -342,8 +407,22 @@ async function persistRun(run: TaskRunRecord, requiredEffectId?: string): Promis
     }
   }
   taskRuntimeRegistry.set(persisted.sessionId, persisted)
-  await registerConfirmedRunArtifactLifecycles(persisted)
+  try {
+    await registerConfirmedRunArtifactLifecycles(persisted, rootDir)
+  } catch (error) {
+    const effect = requiredEffectId
+      ? persisted.effects?.find((candidate) => candidate.id === requiredEffectId)
+      : undefined
+    if (effect?.status === 'confirmed') {
+      throw new ConfirmedEffectArtifactProjectionError(effect, error)
+    }
+    throw error
+  }
   return persisted
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function requireRun(sessionId: string): TaskRunRecord {

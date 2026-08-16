@@ -22,6 +22,7 @@ let bridge
 let snapshots
 let workflow
 let workflowQuery
+let readinessFlight
 
 try {
   compileSources()
@@ -31,7 +32,9 @@ try {
   snapshots = await importCompiled('main/task/task-snapshot.js')
   workflow = await importCompiled('main/task/workflow-ledger-store.js')
   workflowQuery = await importCompiled('main/task/workflow-ledger-query.js')
+  readinessFlight = await importCompiled('main/task/workflow-ledger-migration-readiness-flight.js')
 
+  await verifiedReadinessCanReplaceSettledFlight()
   await basicMigrationAndIdempotency()
   await sameRevisionSourceDriftFailsClosed()
   await invalidJsonRelationsFailClosed()
@@ -44,6 +47,95 @@ try {
   console.log('project workspace ledger migration smoke: PASS')
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+async function verifiedReadinessCanReplaceSettledFlight() {
+  const databasePath = path.join(scenarioRoot('readiness-cache'), 'task-snapshots.db')
+  const options = {
+    databasePath,
+    legacyJsonPath: path.join(path.dirname(databasePath), 'task-snapshots.json'),
+    supportedStoreVersion: 9,
+    targetStoreVersion: 9,
+    readMode: 'legacy',
+    buildCandidate: async () => new Uint8Array()
+  }
+  let runs = 0
+  const original = readinessResult(databasePath, 'a'.repeat(64), 1)
+  const replacement = readinessResult(databasePath, 'b'.repeat(64), 2)
+  const refreshed = readinessResult(databasePath, 'c'.repeat(64), 3)
+  const runReadiness = async () => {
+    runs += 1
+    return runs === 1 ? original : refreshed
+  }
+
+  readinessFlight.clearWorkflowLedgerMigrationSingleFlightForTests()
+  const first = await readinessFlight.ensureWorkflowLedgerTaskStoreReadySingleFlight(options, runReadiness)
+  assertEqual(first.report.sourceSha256, original.report.sourceSha256, 'initial readiness flight result')
+  readinessFlight.cacheWorkflowLedgerTaskStoreReadinessForDatabase(databasePath, replacement)
+  const cached = await readinessFlight.ensureWorkflowLedgerTaskStoreReadySingleFlight(options, runReadiness)
+  assertEqual(cached.report.sourceSha256, replacement.report.sourceSha256,
+    'verified commit must replace the settled readiness result')
+  assertEqual(runs, 1, 'verified readiness replacement must not rerun the readiness gate')
+
+  const forced = await readinessFlight.ensureWorkflowLedgerTaskStoreReadySingleFlight(
+    { ...options, forceRefresh: true },
+    runReadiness
+  )
+  assertEqual(forced.report.sourceSha256, refreshed.report.sourceSha256,
+    'force refresh must bypass the verified replacement')
+  assertEqual(runs, 2, 'force refresh must execute the readiness gate once')
+  assertThrows(
+    () => readinessFlight.cacheWorkflowLedgerTaskStoreReadinessForDatabase(
+      path.join(path.dirname(databasePath), 'other.db'),
+      replacement
+    ),
+    /workflow_ledger_readiness_cache_source_mismatch/,
+    'readiness replacement must reject a report bound to another database'
+  )
+  readinessFlight.clearWorkflowLedgerMigrationSingleFlightForTests()
+  console.log('[PASS] independently verified commits replace readiness without weakening force refresh')
+}
+
+function readinessResult(databasePath, sourceSha256, assessedAt) {
+  const report = {
+    schemaVersion: 1,
+    format: 'caogen.workflow-ledger.canonical-readiness.v1',
+    mode: 'shadow',
+    status: 'ready',
+    safeForShadowUse: true,
+    readyForCanonicalRead: true,
+    repairableAdditiveProjection: false,
+    sourceKind: 'sqlite',
+    sourcePath: databasePath,
+    sourceSha256,
+    sourceSizeBytes: 1,
+    storeVersion: 9,
+    assessedAt,
+    counts: {
+      taskSnapshots: 0,
+      taskRuns: 0,
+      workflowRuns: 0,
+      workflowRecoverySessions: 0,
+      dagFinalizations: 0,
+      snapshotsWithoutRun: 0,
+      activeRunsWithoutSnapshot: 0,
+      terminalRunsWithoutSnapshot: 0,
+      matchingRuns: 0,
+      conversationStreams: 0,
+      conversationGenerations: 0,
+      conversationEvents: 0,
+      currentConversationEvents: 0
+    },
+    digests: {
+      taskRuns: sourceSha256,
+      workflowRuns: sourceSha256,
+      taskSnapshots: sourceSha256,
+      conversationLedger: sourceSha256
+    },
+    diagnostics: [],
+    reportDigest: sourceSha256
+  }
+  return { disposition: 'ready_existing_current', report }
 }
 
 async function basicMigrationAndIdempotency() {
@@ -529,6 +621,16 @@ async function assertRejects(promise, predicate, message) {
     await promise
   } catch (error) {
     if (predicate(error)) return
+    throw new Error(`${message}: unexpected error ${error instanceof Error ? error.stack : String(error)}`)
+  }
+  throw new Error(`${message}: operation unexpectedly succeeded`)
+}
+
+function assertThrows(callback, pattern, message) {
+  try {
+    callback()
+  } catch (error) {
+    if (pattern.test(error instanceof Error ? error.message : String(error))) return
     throw new Error(`${message}: unexpected error ${error instanceof Error ? error.stack : String(error)}`)
   }
   throw new Error(`${message}: operation unexpectedly succeeded`)

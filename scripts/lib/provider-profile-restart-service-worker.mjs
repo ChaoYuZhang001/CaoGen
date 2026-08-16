@@ -125,7 +125,7 @@ async function runSameProcessConvergenceAction(context) {
     engine: 'openai',
     openaiProtocol: 'chat'
   })
-  const finalProviders = JSON.parse(readFileSync(storePath, 'utf8'))
+  const finalProviders = currentProviderStoreEntries(JSON.parse(readFileSync(storePath, 'utf8')))
   writeResult({
     initialModel,
     operationBlocked,
@@ -153,6 +153,14 @@ function capturePendingMutationCode(providers) {
     return error && typeof error === 'object' && 'code' in error ? error.code : undefined
   }
   return undefined
+}
+
+function currentProviderStoreEntries(document) {
+  if (document?.schemaVersion !== 1 || document?.format !== 'caogen.provider-store.v1' ||
+      !Array.isArray(document?.entries)) {
+    throw new Error('Provider Store did not converge to the current schema')
+  }
+  return document.entries
 }
 
 async function runPendingWriterMatrixAction(context) {

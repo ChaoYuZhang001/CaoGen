@@ -54,6 +54,17 @@ const ephemeralIpc = contract(
   'The mutation is process-local presentation state and is never replayed after restart.',
   { boundary: 'ephemeral_local' }
 )
+const directUserIpc = contract(
+  'mutation', 'direct_user', 'never',
+  'registered native dialog IPC handler owner',
+  'The operation is explicitly initiated by the user and crosses a native file dialog; it is never replayed.'
+)
+const delegatedIpc = (evidence) => contract(
+  'mutation', 'delegated', 'downstream_barrier',
+  'src/main/sessionManager.ts',
+  'The operation delegates to the canonical Session/Supervisor lifecycle, which owns durable recovery and reconciliation.',
+  { evidence }
+)
 const blockedIpc = contract(
   'mutation', 'none', 'not_applicable',
   'src/main/ipc/workflow-ledger-handlers.ts',
@@ -81,20 +92,20 @@ const opaqueToolNames = [
 ]
 
 const durableToolNames = [
-  'task_decompose_and_dispatch_dag', 'task_dispatch_dag', 'work_item_comment'
+  'artifact_register', 'project_knowledge_search', 'task_decompose_and_dispatch_dag',
+  'task_dispatch_dag', 'work_item_comment'
 ]
 
 const readOnlyIpcChannels = [
   'attachments:ocr', 'browser:listAnnotations', 'browser:observe', 'dialog:pickDirectory',
-  'engines:list', 'files:definition', 'files:diagnostics', 'files:list', 'files:read',
-  'files:search', 'files:symbols', 'files:typescriptCompletions',
-  'files:typescriptDefinitions', 'files:typescriptDiagnostics', 'files:typescriptHover',
+  'dataRetention:evaluatePurge', 'dataRetention:get', 'dataRetention:pending',
+  'engines:list', 'files:intelligence',
   'git:status', 'history:list', 'learning:list',
   'memory:layeredExport', 'memory:layeredList', 'memory:layeredSearch', 'memory:read',
   'migration:scan', 'modelAttempts:listReconciliations', 'notificationConnectors:list',
-  'plugins:reveal', 'plugins:scan', 'preview:listAnnotations', 'projectContext:read',
+  'plugins:authorize', 'plugins:reveal', 'plugins:scan', 'preview:listAnnotations', 'projectContext:read',
   'projectContext:template', 'projects:list', 'providers:fetchModels', 'providers:health',
-  'permissions:gui-grants:list', 'permissions:tool-grants:list',
+  'permissions:grants:list',
   'providers:authorization:accounts', 'providers:balance:capability',
   'providers:billing:capability', 'providers:billing:list', 'providers:billing:reconcile',
   'providers:fetchPricingCatalog', 'providers:list', 'providers:usage',
@@ -106,23 +117,27 @@ const readOnlyIpcChannels = [
   'taskSnapshots:list', 'terminals:list', 'transcripts:search', 'workflowLedger:diagnose',
   'workflowLedger:export', 'workflowLedger:list', 'workflowLedger:listArtifactEdges',
   'workflowLedger:listArtifactLocations', 'workflowLedger:listEvidence',
-  'workflowLedger:queryArtifactGraph', 'workflowLedger:queryEvidence',
+  'workflowLedger:compareArtifacts', 'workflowLedger:listDeliveryTrustedIdentities',
+  'workflowLedger:projectDeliveryWorkbench', 'workflowLedger:queryArtifactGraph', 'workflowLedger:queryEvidence',
   'workflowLedger:repairPlan', 'workflowLedger:verify',
-  'workflowLedger:verifyArtifactGraph', 'workflowLedger:verifyEvidence', 'workspace:diff',
+  'workflowLedger:verifyArtifactGraph', 'workflowLedger:verifyArtifactIntegrity',
+  'workflowLedger:verifyEvidence', 'workflowLedger:verifyProjectDelivery',
+  'workflowLedger:verifyProjectDeliveryPackage', 'workspace:diff',
   'worktrees:applyCheck', 'worktrees:conflictFiles', 'worktrees:mergeInspect',
   'worktrees:mergeReceipts', 'worktrees:summary'
 ]
 
 const durableIpcChannels = [
   'appFeatures:invoke', 'attachments:copyImage', 'attachments:saveImageBytes',
+  'dataRetention:createLegalHold', 'dataRetention:releaseLegalHold', 'dataRetention:updatePolicy',
   'browser:captureAnnotation', 'browser:captureElementAnnotation', 'digitalWorker:invoke',
   'history:delete', 'history:rename', 'history:setArchived', 'history:setPinned',
   'learning:approve', 'learning:delete', 'learning:reject', 'learning:revoke',
   'learning:rollback', 'memory:accept', 'memory:delete', 'memory:layeredArchive',
-  'memory:layeredDelete', 'memory:layeredUpdate', 'memory:propose', 'migration:apply',
-  'migration:rollback', 'modelAttempts:resolveReconciliation',
+  'memory:layeredDelete', 'memory:layeredUpdate', 'memory:propose',
+  'modelAttempts:resolveReconciliation',
   'notificationConnectors:create', 'notificationConnectors:delete',
-  'notificationConnectors:setDefault', 'preview:prepare', 'preview:prepareVisual',
+  'notificationConnectors:setDefault', 'plugins:approve', 'preview:prepare', 'preview:prepareVisual',
   'preview:saveAnnotation', 'projectContext:write', 'projects:delete', 'projects:update',
   'projectWorkspace:invoke', 'providers:activateLocalCompute', 'providers:create',
   'providers:authorization:revoke', 'providers:billing:remove', 'providers:billing:save',
@@ -132,10 +147,12 @@ const durableIpcChannels = [
   'sessions:create', 'sessions:rename', 'sessions:setModel', 'sessions:setPermissionMode',
   'settings:update', 'supervisor:invoke', 'taskSnapshots:delete', 'taskSnapshots:recover',
   'taskSnapshots:resolveDagFinalization', 'taskSnapshots:resolveEffect',
-  'workflowLedger:createArtifact', 'workflowLedger:createArtifactEdge',
+  'workflowLedger:createArtifact', 'workflowLedger:createArtifactAcceptance', 'workflowLedger:createArtifactEdge',
   'workflowLedger:createArtifactLocation', 'workflowLedger:createEvidence',
   'workflowLedger:createEvidenceLink', 'workflowLedger:reviewAcceptance',
-  'workflowLedger:saveAcceptance',
+  'workflowLedger:revokeDeliveryIdentity', 'workflowLedger:rotateDeliveryIdentity',
+  'workflowLedger:saveAcceptance', 'workflowLedger:startAcceptanceRepair',
+  'workflowLedger:trustDeliveryIdentity', 'workflowLedger:updateDeliveryTrustPolicy',
   'worktrees:exportPatch', 'worktrees:mergePatch'
 ]
 
@@ -158,40 +175,60 @@ const opaqueIpcChannels = [
 
 const ephemeralIpcChannels = [
   'browser:bounds',
-  'permissions:gui-grants:revoke', 'permissions:gui-grants:revoke-all',
-  'permissions:tool-grants:revoke', 'permissions:tool-grants:revoke-all',
+  'permissions:grants:revoke',
   'quickbar:setVisible', 'terminals:resize'
+]
+const directUserIpcChannels = [
+  'dataRetention:saveExport', 'workflowLedger:exportArtifact',
+  'workflowLedger:exportArtifactManifest', 'workflowLedger:exportDeliveryIdentityBackup',
+  'workflowLedger:exportDeliveryIdentityTrustBundle', 'workflowLedger:exportProjectDeliveryManifest',
+  'workflowLedger:exportProjectDeliveryPackage', 'workflowLedger:importDeliveryIdentityTrustBundle',
+  'workflowLedger:restoreDeliveryIdentityBackup',
+  'workflowLedger:saveProjectDeliveryPackageVerificationReceipt'
 ]
 const blockedIpcChannels = [
   'workflowLedger:createGoal', 'workflowLedger:createWorkItem', 'workflowLedger:transitionWorkItem'
 ]
 
 const readOnlyDigitalWorkerActions = [
-  'getDigitalWorker', 'getDigitalWorkerAssignment', 'getDigitalWorkerAssignmentOwnerJournal',
+  'exportDigitalWorkerHistory', 'getDigitalWorker', 'getDigitalWorkerAssignment',
+  'getDigitalWorkerAssignmentOwnerJournal', 'getDigitalWorkerHistory',
   'getDigitalWorkerLease', 'getDigitalWorkerRoleTemplate', 'getDigitalWorkerStoreSnapshot',
   'listDigitalWorkerAssignmentHistory', 'listDigitalWorkerAssignmentOwnerAudit',
   'listDigitalWorkerAssignments', 'listDigitalWorkerAuditEvents', 'listDigitalWorkerLeases',
-  'listDigitalWorkerRoleTemplates', 'listDigitalWorkers', 'verifyDigitalWorkerStore'
+  'listDigitalWorkerMemory', 'listDigitalWorkerRoleTemplates', 'listDigitalWorkers',
+  'recommendDigitalWorkerTeam', 'verifyDigitalWorkerStore'
 ]
 const durableDigitalWorkerActions = [
-  'acquireDigitalWorkerLease', 'activateDigitalWorker', 'coordinateDigitalWorkerAssignmentOwner',
+  'acquireDigitalWorkerLease', 'activateDigitalWorker', 'approveDigitalWorkerMemory',
+  'coordinateDigitalWorkerAssignmentOwner',
   'createDigitalWorker', 'createDigitalWorkerAssignment', 'createDigitalWorkerRoleTemplate',
-  'deleteDigitalWorker', 'deleteDigitalWorkerRoleTemplate', 'heartbeatDigitalWorkerLease',
-  'pauseDigitalWorker', 'reassignDigitalWorkerAssignment', 'recoverDigitalWorkerAssignmentOwners',
+  'deleteDigitalWorker', 'deleteDigitalWorkerMemory', 'deleteDigitalWorkerRoleTemplate',
+  'heartbeatDigitalWorkerLease', 'pauseDigitalWorker', 'proposeDigitalWorkerMemory',
+  'reassignDigitalWorkerAssignment', 'recoverDigitalWorkerAssignmentOwners',
+  'refreshDigitalWorkerPerformance', 'rejectDigitalWorkerMemory', 'revokeDigitalWorkerMemory',
   'releaseDigitalWorkerAssignment', 'releaseDigitalWorkerLease', 'resumeDigitalWorker',
   'retireDigitalWorker', 'updateDigitalWorker', 'updateDigitalWorkerRoleTemplate'
 ]
 
 const readOnlyProjectWorkspaceActions = [
-  'comments:list', 'comments:listProject', 'get', 'goals:get', 'goals:list', 'list',
-  'squads:get', 'squads:list', 'workItems:get', 'workItems:list'
+  'authorization:get', 'collaborationInbox:list', 'comments:list', 'comments:listProject',
+  'get', 'knowledge:preview', 'goals:get', 'goals:list', 'invitations:list', 'list',
+  'members:get', 'members:list', 'sharedApprovals:get', 'sharedApprovals:list',
+  'portfolio:get', 'squads:get', 'squads:list', 'workItems:get', 'workItems:list'
 ]
 const durableProjectWorkspaceActions = [
-  'archive', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
-  'export', 'export:data', 'goals:acceptance', 'goals:archive', 'goals:create',
-  'goals:restore', 'goals:transition', 'goals:update', 'goalTask:create', 'import:data',
-  'purge', 'restore', 'squads:archive', 'squads:create', 'squads:members:add',
-  'squads:members:remove', 'squads:restore', 'squads:update', 'update',
+  'connectors:mutate', 'knowledge:search',
+  'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
+  'export:data', 'goals:acceptance', 'goals:archive', 'goals:create',
+  'goals:restore', 'goals:transition', 'goals:update', 'goalTask:create',
+  'invitations:accept', 'invitations:create', 'invitations:revoke',
+  'members:create', 'members:revoke', 'members:restore', 'members:update',
+  'portfolio:dependencies:create', 'portfolio:dependencies:remove',
+  'portfolio:milestones:create', 'portfolio:milestones:delete', 'portfolio:milestones:update',
+  'sharedApprovals:create', 'sharedApprovals:decide', 'sharedApprovals:revoke',
+  'restore', 'squads:archive', 'squads:create', 'squads:members:add',
+  'squads:members:remove', 'squads:restore', 'squads:update', 'templates:apply', 'update',
   'workItems:acceptance', 'workItems:create', 'workItems:lease:acquire',
   'workItems:lease:release', 'workItems:lease:renew', 'workItems:reorder',
   'workItems:transfer', 'workItems:transition', 'workItems:update'
@@ -200,26 +237,54 @@ const durableProjectWorkspaceActions = [
 const readOnlySupervisorActions = ['events', 'get', 'list']
 const durableSupervisorActions = [
   'approval:request', 'approval:resolve', 'block', 'cancel', 'complete', 'create', 'fail',
-  'lease:acquire', 'lease:heartbeat', 'lease:reassign', 'lease:release', 'pause',
+  'control:lease:claim', 'lease:acquire', 'lease:heartbeat', 'lease:reassign', 'lease:release', 'pause',
   'reconcile', 'recover', 'resume', 'retry', 'start'
 ]
 
 const readOnlyAppFeatureActions = [
-  'provider-profile/backups', 'provider-profile/native-backups',
+  'session-query/query',
+  'provider-profile/backups', 'provider-profile/backup-preview', 'provider-profile/native-backups',
   'provider-profile/cc-switch-backups', 'provider-profile/cc-switch-preview',
   'provider-profile/native-codex-preview', 'provider-profile/native-config-backups',
-  'provider-profile/native-config-preview', 'provider-profile/preview', 'studio-result/export',
+  'provider-profile/native-config-preview', 'provider-profile/preview',
+  'provider-profile-sync/status', 'provider-profile-sync/preview',
+  'provider-profile-sync/webdav-config', 'provider-profile-sync/webdav-preview',
+  'provider-profile-sync/webdav-history-list', 'provider-profile-sync/webdav-history-preview',
+  'provider-profile-sync/s3-config', 'provider-profile-sync/s3-preview',
+  'provider-profile-sync/s3-history-list', 'provider-profile-sync/s3-history-preview',
+  'studio-result/export',
   'studio-result/audit', 'studio-result/get', 'task-plan/get'
 ]
 const durableAppFeatureActions = [
-  'provider-profile/apply', 'provider-profile/backup-apply', 'provider-profile/backup-preview',
   'provider-profile/cc-switch-apply', 'provider-profile/cc-switch-rollback',
   'provider-profile/export', 'provider-profile/native-codex-apply',
   'provider-profile/native-config-apply', 'provider-profile/native-config-rollback',
-  'provider-profile/native-rollback', 'provider-profile/rollback',
-  'studio-result/save', 'task-plan/approve', 'task-plan/create-version',
+  'provider-profile/native-rollback',
+  'provider-profile-sync/choose-directory', 'provider-profile-sync/disconnect',
+  'provider-profile-sync/webdav-save', 'provider-profile-sync/webdav-remove',
+  'provider-profile-sync/s3-save', 'provider-profile-sync/s3-remove',
+  'studio-result/save', 'task-plan/approve', 'task-plan/create-version', 'task-plan/generate',
   'task-plan/revoke', 'task-plan/strategy'
 ]
+const queryableAppFeatureActions = [
+  'provider-profile/apply', 'provider-profile/backup-apply', 'provider-profile/backup-delete', 'provider-profile/rollback',
+  'provider-profile-sync/publish', 'provider-profile-sync/apply',
+  'provider-profile-sync/webdav-publish', 'provider-profile-sync/webdav-apply',
+  'provider-profile-sync/webdav-history-apply',
+  'provider-profile-sync/s3-publish', 'provider-profile-sync/s3-apply',
+  'provider-profile-sync/s3-history-apply'
+]
+const opaqueAppFeatureActions = ['provider-profile-sync/webdav-test', 'provider-profile-sync/s3-test']
+const readOnlyMediaActions = ['continuity:check', 'ffmpeg:get', 'get', 'job:reconcile', 'provider:list']
+const durableMediaActions = [
+  'asset:adopt', 'asset:bind', 'asset:egress', 'asset:import', 'asset:purge',
+  'asset:retention', 'asset:voice-clone', 'bible:delete', 'bible:upsert',
+  'budget:update', 'compose', 'continuity-lock:delete', 'continuity-lock:upsert',
+  'dialogue:delete', 'dialogue:upsert', 'production:create', 'production:revise',
+  'provider:delete', 'provider:upsert', 'shot:create', 'shot:update', 'storage:update',
+  'timeline:update'
+]
+const queryableMediaActions = ['job:advance', 'job:cancel', 'job:submit']
 
 export const EFFECT_ENTRY_REGISTRY = [
   ...entries(tools(readOnlyToolNames), readOnlyTool),
@@ -247,6 +312,7 @@ export const EFFECT_ENTRY_REGISTRY = [
   ...entries(ipc(durableIpcChannels), durableIpc),
   ...entries(ipc(opaqueIpcChannels), opaqueIpc),
   ...entries(ipc(ephemeralIpcChannels), ephemeralIpc),
+  ...entries(ipc(directUserIpcChannels), directUserIpc),
   ...entries(ipc(blockedIpcChannels), blockedIpc),
   ...entries(ipc(['files:write']), queryable(['file_content'], 'src/main/ipc/renderer-mutation-handlers.ts')),
   ...entries(ipc(['git:commit']), queryable(['git_commit'], 'src/main/ipc/renderer-mutation-handlers.ts')),
@@ -256,6 +322,8 @@ export const EFFECT_ENTRY_REGISTRY = [
     queryable(['file_content'], 'src/main/ipc/renderer-mutation-handlers.ts')),
   ...entries(ipc(['worktrees:applyPatch']),
     queryable(['worktree_patch_apply'], 'src/main/ipc/worktree-operation-handlers.ts')),
+  ...entries(ipc(['migration:apply', 'migration:rollback']),
+    queryable(['migration_operation'], 'src/main/migrationEffect.ts')),
   ...entries(ipc(['worktrees:createPr']),
     queryable(['pull_request_create'], 'src/main/ipc/worktree-operation-handlers.ts')),
   ...entries(ipc(['worktrees:remove']),
@@ -265,10 +333,24 @@ export const EFFECT_ENTRY_REGISTRY = [
   ...entries(actions('digitalWorker:invoke', durableDigitalWorkerActions), durableIpc),
   ...entries(actions('projectWorkspace:invoke', readOnlyProjectWorkspaceActions), readOnlyIpc),
   ...entries(actions('projectWorkspace:invoke', durableProjectWorkspaceActions), durableIpc),
+  ...entries(actions('projectWorkspace:invoke', ['export']), directUserIpc),
+  ...entries(actions('projectWorkspace:invoke', ['import:data']),
+    queryable(['project_portable_import'], 'src/main/project-import-effect.ts')),
+  ...entries(actions('projectWorkspace:invoke', ['purge']),
+    queryable(['project_permanent_deletion'], 'src/main/project-deletion-effect.ts')),
   ...entries(actions('supervisor:invoke', readOnlySupervisorActions), readOnlyIpc),
   ...entries(actions('supervisor:invoke', durableSupervisorActions), durableIpc),
   ...entries(actions('appFeatures:invoke', readOnlyAppFeatureActions), readOnlyIpc),
   ...entries(actions('appFeatures:invoke', durableAppFeatureActions), durableIpc),
+  ...entries(actions('appFeatures:invoke', opaqueAppFeatureActions), opaqueIpc),
+  ...entries(actions('appFeatures:invoke', readOnlyMediaActions.map((action) => `media/${action}`)), readOnlyIpc),
+  ...entries(actions('appFeatures:invoke', durableMediaActions.map((action) => `media/${action}`)), durableIpc),
+  ...entries(actions('appFeatures:invoke', queryableMediaActions.map((action) => `media/${action}`)),
+    queryable(['media_job_operation'], 'src/main/media/media-runtime.ts')),
+  ...entries(actions('appFeatures:invoke', queryableAppFeatureActions),
+    queryable(['provider_profile_operation', 'media_job_operation'], 'src/main/provider/provider-profile-operation-delivery.ts and src/main/media/media-runtime.ts')),
+  ...entries(actions('appFeatures:invoke', ['task-plan/dispatch']),
+    delegatedIpc('sessionManager.dispatchApprovedTaskPlan')),
 
   ...entries(['external:connector:pull-request-create'],
     queryable(['pull_request_create'], 'src/main/git/pull-request-effect.ts')),

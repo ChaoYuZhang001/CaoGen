@@ -101,7 +101,7 @@ jobs:
       - name: Build signed and notarized Intel package
         run: |
           set -euo pipefail
-          npm run prepare:native-build
+          npm run prepare:native-build -- --arch x64
           npx electron-builder --config electron-builder.release.cjs --mac --x64 --publish never
 
       - name: Inspect signed package

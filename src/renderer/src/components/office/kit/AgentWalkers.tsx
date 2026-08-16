@@ -5,7 +5,7 @@ import type { Group } from 'three'
 import WatercolorCharacterRig from './WatercolorCharacterRig'
 import type { WatercolorCharacterRole } from '../../../../../shared/watercolor-character'
 
-export type AgentWalkReason = 'tea' | 'approval' | 'restroom' | 'dining'
+export type AgentWalkReason = 'assistant' | 'approval' | 'project' | 'video'
 
 export interface AgentWalkerSpec {
   id: string
@@ -43,28 +43,28 @@ const GAIT_FOOT_SPACING = 0.105
 const GAIT_LANDING_LEAD = GAIT_STRIDE_LENGTH * 0.54
 const TAU = Math.PI * 2
 const DWELL_SECONDS: Record<AgentWalkReason, number> = {
-  tea: 6.5,
+  assistant: 6.5,
   approval: 8.5,
-  restroom: 7.5,
-  dining: 10.5
+  project: 7.5,
+  video: 10.5
 }
 const REST_SECONDS: Record<AgentWalkReason, number> = {
-  tea: 9.5,
+  assistant: 9.5,
   approval: 12,
-  restroom: 11,
-  dining: 13
+  project: 11,
+  video: 13
 }
 const ROUTE_COLOR: Record<AgentWalkReason, string> = {
-  tea: '#5c8794',
+  assistant: '#8fb8c6',
   approval: '#6f8fa0',
-  restroom: '#5c8794',
-  dining: '#5f7f8c'
+  project: '#8ba88f',
+  video: '#c39b73'
 }
 const WALKER_ACCENT = '#59dcff'
 const WALKER_NEUTRAL = '#9fb2c2'
 
 function routeColor(reason: AgentWalkReason, accent: string): string {
-  return reason === 'tea' ? WALKER_ACCENT || accent : ROUTE_COLOR[reason]
+  return reason === 'assistant' ? WALKER_ACCENT || accent : ROUTE_COLOR[reason]
 }
 
 function WalkerRouteTrail({
@@ -152,7 +152,7 @@ function AgentStatusMarker({
             <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.18} toneMapped={false} />
           </mesh>
         </group>
-      ) : reason === 'dining' ? (
+      ) : reason === 'video' ? (
         <group position={[0, 0.036, 0]}>
           <mesh position={[-0.058, 0, 0]} rotation={[0, 0, -0.04]}>
             <boxGeometry args={[0.018, 0.22, 0.014]} />
@@ -173,7 +173,7 @@ function AgentStatusMarker({
             <meshStandardMaterial color={WALKER_NEUTRAL} emissive={color} emissiveIntensity={0.14} toneMapped={false} />
           </mesh>
         </group>
-      ) : reason === 'restroom' ? (
+      ) : reason === 'project' ? (
         <group position={[0, 0.036, 0]}>
           {[-0.065, 0.065].map((x) => (
             <group key={x} position={[x, 0, 0]}>
@@ -366,7 +366,6 @@ function OneAgentWalker({
     e.stopPropagation()
     onOpen?.(spec.sessionId)
   }
-
   useEffect(() => {
     return () => {
       if (awayRef.current) onAwayChange?.(spec.sessionId, false)

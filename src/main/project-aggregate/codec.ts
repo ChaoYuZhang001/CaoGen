@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { redactSensitiveText } from '../security/secret-redaction'
 
 const SENSITIVE_KEY = /(?:apikey|accesskey|accesstoken|authtoken|authorization|clientsecret|credential|cookie|password|privatekey|refreshtoken|secretaccesskey|securitytoken|sessioncookie|signature|webhooksecret)|(?:token|secret|password|credential|cookie)$/i
 
@@ -36,7 +37,7 @@ function canonicalize(value: unknown): unknown {
 }
 
 function sanitize(value: unknown, key: string | undefined, seen: WeakSet<object>): unknown {
-  if (isSensitiveKey(key)) return '[REDACTED]'
+  if (isSensitiveKey(key) && !isPortableConnectorAuthorization(key, value)) return '[REDACTED]'
   if (typeof value === 'string') return sanitizeString(value)
   if (value === null || typeof value !== 'object') return value
   if (seen.has(value)) return '[REDACTED_CYCLIC_VALUE]'
@@ -56,7 +57,7 @@ function sanitize(value: unknown, key: string | undefined, seen: WeakSet<object>
 }
 
 function sanitizeString(value: string): string {
-  return value
+  return redactSensitiveText(value)
     .replace(/([?&](?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|authorization)=)[^&#\s]+/gi, '$1[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
@@ -70,7 +71,7 @@ function isSensitiveKey(key: string | undefined): boolean {
 }
 
 function inspectForCredentials(value: unknown, key: string | undefined, seen: WeakSet<object>): void {
-  if (isSensitiveKey(key) && value !== '[REDACTED]') {
+  if (isSensitiveKey(key) && value !== '[REDACTED]' && !isPortableConnectorAuthorization(key, value)) {
     throw new Error(`Project aggregate contains unredacted credential field ${key}`)
   }
   if (typeof value === 'string') {
@@ -90,4 +91,45 @@ function inspectForCredentials(value: unknown, key: string | undefined, seen: We
     inspectForCredentials(childValue, childKey, seen)
   }
   seen.delete(value)
+}
+
+function isPortableConnectorAuthorization(key: string | undefined, value: unknown): boolean {
+  if (!isAuthorizationKey(key) || !isRecord(value)) return false
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record)
+  const allowed = new Set(['subject', 'principalId', 'scopes', 'status', 'grantedAt', 'revokedAt'])
+  return [
+    keys.every((child) => allowed.has(child)),
+    ['personal', 'shared'].includes(String(record.subject)),
+    nonEmptyString(record.principalId),
+    stringArray(record.scopes),
+    ['active', 'revoked'].includes(String(record.status)),
+    optionalFiniteTimestamp(record.grantedAt),
+    optionalFiniteTimestamp(record.revokedAt),
+    connectorRevocationTimestampValid(record)
+  ].every(Boolean)
+}
+
+function optionalFiniteTimestamp(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+}
+
+function isAuthorizationKey(key: string | undefined): boolean {
+  return key?.replace(/[^a-z0-9]/gi, '').toLowerCase() === 'authorization'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function nonEmptyString(value: unknown): boolean {
+  return typeof value === 'string' && Boolean(value.trim())
+}
+
+function stringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function connectorRevocationTimestampValid(record: Record<string, unknown>): boolean {
+  return record.status !== 'revoked' || typeof record.revokedAt === 'number'
 }

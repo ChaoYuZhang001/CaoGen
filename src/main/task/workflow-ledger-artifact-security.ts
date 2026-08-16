@@ -3,6 +3,7 @@ import {
   looksLikeProviderCredentialValue
 } from '../providerCredentialBroker'
 import { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
+import { containsKnownCredential } from '../security/secret-redaction'
 
 /**
  * Artifact metadata is user supplied but is persisted into the immutable
@@ -229,7 +230,7 @@ function inspectString(
   surface: WorkflowArtifactSecuritySurface,
   inspectEmbeddedUrls: boolean
 ): void {
-  if (looksLikeCredentialText(value) || CREDENTIAL_ASSIGNMENT.test(value)) {
+  if (containsKnownCredential(value) || looksLikeCredentialText(value) || CREDENTIAL_ASSIGNMENT.test(value)) {
     throw securityError(surface, 'credential-value')
   }
   if (inspectEmbeddedUrls && URL_SCHEME.test(value)) inspectLocator(value, surface === 'artifact metadata' ? 'artifact URI' : 'graph location URI')

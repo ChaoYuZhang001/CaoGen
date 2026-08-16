@@ -34,6 +34,7 @@ import {
   saveProviderProfileS3Config,
   testProviderProfileS3Connection
 } from '../provider/providerProfileS3Sync'
+import { executeProviderProfileOperationDelivery } from '../provider/provider-profile-operation-delivery'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 
 type ProviderProfileSyncAction =
@@ -60,11 +61,23 @@ export function handleProviderProfileSyncIpc(
   if (action === 'disconnect') return disconnectProviderProfileSync()
   if (action === 'preview') return previewProviderProfileSync()
   if (action === 'publish') {
-    return publishProviderProfileSync(typeof args[0] === 'string' ? args[0] : '', args[1] === true)
+    return executeProviderProfileOperationDelivery({
+      operation: 'sync_publish',
+      transport: 'folder',
+      title: 'Publish Provider Profile folder sync',
+      objective: '发布无凭据 Provider Profile 文件夹同步版本并生成脱敏、可验收的操作报告',
+      execute: () => publishProviderProfileSync(typeof args[0] === 'string' ? args[0] : '', args[1] === true)
+    })
   }
   const previewId = typeof args[0] === 'string' ? args[0] : ''
   const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-  return applyProviderProfileSync(previewId, decisions)
+  return executeProviderProfileOperationDelivery({
+    operation: 'sync_apply',
+    transport: 'folder',
+    title: 'Apply Provider Profile folder sync',
+    objective: '应用无凭据 Provider Profile 文件夹同步版本并生成脱敏、可验收的操作报告',
+    execute: () => applyProviderProfileSync(previewId, decisions)
+  })
 }
 
 type ProviderProfileWebDavAction =
@@ -90,11 +103,26 @@ function handleWebDavAction(action: ProviderProfileWebDavAction, args: unknown[]
     return saveProviderProfileWebDavConfig(args[0] as ProviderProfileWebDavConfigInput)
   }
   if (action === 'webdav-publish') {
-    return publishProviderProfileWebDavSync(typeof args[0] === 'string' ? args[0] : '', args[1] === true)
+    return executeProviderProfileOperationDelivery({
+      operation: 'sync_publish',
+      transport: 'webdav',
+      title: 'Publish Provider Profile WebDAV sync',
+      objective: '发布无凭据 Provider Profile WebDAV 同步版本并生成脱敏、可验收的操作报告',
+      execute: () => publishProviderProfileWebDavSync(
+        typeof args[0] === 'string' ? args[0] : '',
+        args[1] === true
+      )
+    })
   }
   const previewId = typeof args[0] === 'string' ? args[0] : ''
   const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-  return applyProviderProfileWebDavSync(previewId, decisions)
+  return executeProviderProfileOperationDelivery({
+    operation: 'sync_apply',
+    transport: 'webdav',
+    title: 'Apply Provider Profile WebDAV sync',
+    objective: '应用无凭据 Provider Profile WebDAV 同步版本并生成脱敏、可验收的操作报告',
+    execute: () => applyProviderProfileWebDavSync(previewId, decisions)
+  })
 }
 
 function handleWebDavHistoryAction(action: ProviderProfileWebDavAction, args: unknown[]) {
@@ -104,7 +132,13 @@ function handleWebDavHistoryAction(action: ProviderProfileWebDavAction, args: un
   }
   const previewId = typeof args[0] === 'string' ? args[0] : ''
   const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-  return applyProviderProfileWebDavHistory(previewId, decisions)
+  return executeProviderProfileOperationDelivery({
+    operation: 'sync_apply',
+    transport: 'webdav',
+    title: 'Restore Provider Profile WebDAV history',
+    objective: '恢复无凭据 Provider Profile WebDAV 历史版本并生成脱敏、可验收的操作报告',
+    execute: () => applyProviderProfileWebDavHistory(previewId, decisions)
+  })
 }
 
 type ProviderProfileS3Action =
@@ -130,11 +164,26 @@ function handleS3Action(action: ProviderProfileS3Action, args: unknown[]) {
     return saveProviderProfileS3Config(args[0] as ProviderProfileS3ConfigInput)
   }
   if (action === 's3-publish') {
-    return publishProviderProfileS3Sync(typeof args[0] === 'string' ? args[0] : '', args[1] === true)
+    return executeProviderProfileOperationDelivery({
+      operation: 'sync_publish',
+      transport: 's3',
+      title: 'Publish Provider Profile S3 sync',
+      objective: '发布无凭据 Provider Profile S3 同步版本并生成脱敏、可验收的操作报告',
+      execute: () => publishProviderProfileS3Sync(
+        typeof args[0] === 'string' ? args[0] : '',
+        args[1] === true
+      )
+    })
   }
   const previewId = typeof args[0] === 'string' ? args[0] : ''
   const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-  return applyProviderProfileS3Sync(previewId, decisions)
+  return executeProviderProfileOperationDelivery({
+    operation: 'sync_apply',
+    transport: 's3',
+    title: 'Apply Provider Profile S3 sync',
+    objective: '应用无凭据 Provider Profile S3 同步版本并生成脱敏、可验收的操作报告',
+    execute: () => applyProviderProfileS3Sync(previewId, decisions)
+  })
 }
 
 function handleS3HistoryAction(action: ProviderProfileS3Action, args: unknown[]) {
@@ -144,7 +193,13 @@ function handleS3HistoryAction(action: ProviderProfileS3Action, args: unknown[])
   }
   const previewId = typeof args[0] === 'string' ? args[0] : ''
   const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-  return applyProviderProfileS3History(previewId, decisions)
+  return executeProviderProfileOperationDelivery({
+    operation: 'sync_apply',
+    transport: 's3',
+    title: 'Restore Provider Profile S3 history',
+    objective: '恢复无凭据 Provider Profile S3 历史版本并生成脱敏、可验收的操作报告',
+    execute: () => applyProviderProfileS3History(previewId, decisions)
+  })
 }
 
 async function chooseSyncDirectory(sender: WebContents) {

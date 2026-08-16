@@ -6,6 +6,20 @@
   background: var(--bg);
 }
 
+.dws-template-market {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.dws-template-market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
 .dws-header {
   min-height: 88px;
   display: flex;
@@ -541,6 +555,33 @@
   margin-top: 16px;
 }
 
+.dws-advanced {
+  margin-top: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.dws-advanced > summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.dws-advanced > p {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.dws-advanced:not([open]) > :not(summary) {
+  display: none;
+}
+
+.dws-advanced[open] > p { margin-bottom: 12px; }
+
 .dws-current-assignment,
 .dws-inline-empty {
   color: var(--yellow);
@@ -719,6 +760,18 @@
 .dws-assignment-list {
   max-height: 72px;
   overflow: auto;
+}
+
+.dws-assignment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+.dws-assignment-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .dws-worker-actions,

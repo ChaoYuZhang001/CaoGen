@@ -112,6 +112,7 @@ const ALLOWED_MANAGED_CREDENTIAL_HEADER_NAMES = new Set([
   'x-auth-key',
   'x-auth-token',
   'x-access-token',
+  'x-figma-token',
   'x-goog-api-key',
   'x-rapidapi-key',
   'ocp-apim-subscription-key'

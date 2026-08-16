@@ -29,7 +29,8 @@ try {
   mkdirSync(userData, { recursive: true })
   const manifest = fixtureManifest()
   writeFileSync(path.join(workspace, 'package.json'), JSON.stringify(manifest, null, 2))
-  for (const name of ['Cargo.toml', 'go.mod', 'gradlew.bat']) writeFileSync(path.join(workspace, name), 'fixture\n')
+  const gradleWrapper = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'
+  for (const name of ['Cargo.toml', 'go.mod', gradleWrapper]) writeFileSync(path.join(workspace, name), 'fixture\n')
   writeFileSync(path.join(workspace, 'pyproject.toml'), '[tool.pytest.ini_options]\n')
   compileRunner(compiled)
 
@@ -71,7 +72,12 @@ try {
   equal(passed.exitCode, 0, 'passing command preserves exit code zero')
   check('passing output is captured', passed.stdout.includes('fixture-pass'))
 
-  const failed = await runner.runProjectTest(workspace, 'fail-session', command(fresh, 'npm run test:fail').id)
+  const failed = await runner.runProjectTest(
+    workspace,
+    'fail-session',
+    command(fresh, 'npm run test:fail').id,
+    'project-test-fixture'
+  )
   equal(failed.status, 'failed', 'failing command has a structured failed status')
   equal(failed.exitCode, 3, 'failing command preserves its exit code')
   check('workspace paths are normalized in renderer output', !failed.stderr.includes(workspace) && failed.stderr.includes('<workspace>'))
@@ -151,7 +157,9 @@ function verifyEvidence(root, cwd, result) {
   const serialized = readFileSync(evidencePath, 'utf8')
   const record = JSON.parse(serialized)
   equal(record.kind, 'caogen-project-test-evidence', 'evidence schema is explicit')
-  equal(record.schemaVersion, 1, 'evidence schema version is explicit')
+  equal(record.schemaVersion, 2, 'evidence schema version is explicit')
+  equal(record.sessionId, 'fail-session', 'evidence binds the owning Session')
+  equal(record.projectId, 'project-test-fixture', 'evidence binds the owning Project')
   equal(record.status, 'failed', 'evidence records the terminal status')
   check('evidence excludes absolute workspace paths', !serialized.includes(cwd))
   check('evidence redacts sensitive failure text', !serialized.includes('sensitive-canary-value'))

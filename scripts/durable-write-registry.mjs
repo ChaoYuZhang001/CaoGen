@@ -113,6 +113,20 @@ export const DURABLE_WRITE_REGISTRY = [
     'caogen.project-deletion-proof', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists a digest-bound terminal proof for completed permanent Project deletion.'
   ),
+  exempt(
+    'src/main/data-lifecycle/data-lifecycle-mutation-lock.ts', 'ephemeral_runtime', 'ephemeral',
+    'Creates the private parent directory used by the cross-process data-lifecycle mutation lock.',
+    'The lock and its directory are process coordination state recovered through owner liveness, not domain data.'
+  ),
+  implemented(
+    'src/main/data-lifecycle/project-effect-artifact-portability.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Materializes and removes digest-bound app-private Git index Effect artifacts under Project import and deletion journals.'
+  ),
+  domain(
+    'src/main/data-lifecycle/retention-authority-store.ts',
+    'caogen.data-retention-authority', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists CAS retention policy, immutable legal-hold history, and a monotonic mutation audit chain.'
+  ),
   journal(
     'src/main/data-lifecycle/project-import-journal.ts',
     'caogen.project-import-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
@@ -126,7 +140,23 @@ export const DURABLE_WRITE_REGISTRY = [
   domain(
     'src/main/data-lifecycle/project-session-purge.ts',
     'versioned Project-owned session stores', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Rewrites History, Active Session, Session Creation, and Task Plan stores only through their versioned codecs and durable publication.'
+    'Rewrites versioned Session stores and removes only terminal worktree projections/receipts under the Project deletion journal.'
+  ),
+  domain(
+    'src/main/data-lifecycle/project-session-portability.ts',
+    'Project Session portable projection set', '1', 'delegated_atomic', 'implemented_unverified',
+    'Imports versioned Session stores and owned files under the resumable Project import journal.',
+    { delegate: 'src/main/data-lifecycle/project-import-journal.ts' }
+  ),
+  implemented(
+    'src/main/data-lifecycle/project-test-evidence.ts', 'user_artifact', 'delegated_atomic',
+    'Removes Project-owned test evidence only through the shared Project Session purge boundary.',
+    { delegate: 'src/main/data-lifecycle/project-session-purge.ts' }
+  ),
+  journal(
+    'src/main/data-lifecycle/session-deletion-journal.ts',
+    'caogen.session-deletion-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Records the frozen Session identity and resumable deletion phases before destructive boundaries.'
   ),
   domain(
     'src/main/data-lifecycle/workflow-project-purge.ts',
@@ -202,8 +232,12 @@ export const DURABLE_WRITE_REGISTRY = [
     'src/main/indexer/index.ts', 'Project code-index SQLite metadata', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Exports the rebuildable sql.js code index durably and rejects unsupported schema metadata.'
   ),
+  implemented(
+    'src/main/ipc/data-retention-handlers.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Publishes a user-selected redacted retention authority audit export with durable replacement.'
+  ),
   exempt(
-    'src/main/ipc/unassigned-session.ts', 'workspace_effect', 'effect_guarded_workspace',
+    'src/main/project-workspace/managed-personal-workspace.ts', 'workspace_effect', 'effect_guarded_workspace',
     'Creates the app-owned personal workspace root for unassigned sessions.',
     'The empty directory is a workspace boundary and contains no domain record by itself.'
   ),
@@ -277,6 +311,34 @@ export const DURABLE_WRITE_REGISTRY = [
     'caogen.project-aggregate-seals', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists digest-sealed Project aggregate revisions and object counts.'
   ),
+  domain(
+    'src/main/project-portfolio/store.ts',
+    'caogen.project-portfolio', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists cross-Project dependencies and Project-owned milestones with revision checks and cycle validation.'
+  ),
+  domain(
+    'src/main/media/media-store.ts',
+    'caogen.media-studio', '2', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists versioned Project-owned video productions, shots, assets, MediaJobs and canonical operation bindings.'
+  ),
+  implemented(
+    'src/main/media/media-ffmpeg.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Publishes digest-addressed imported and composed media bytes after file and directory synchronization.'
+  ),
+  implemented(
+    'src/main/media/media-provider-runtime.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Publishes bounded remote Provider media outputs by digest after resumable streaming and directory synchronization.'
+  ),
+  implemented(
+    'src/main/media/media-runtime.ts', 'user_artifact', 'delegated_atomic',
+    'Removes managed media source bytes only inside the Media Store purge state machine.',
+    { delegate: 'src/main/media/media-store.ts' }
+  ),
+  domain(
+    'src/main/remote/store.ts',
+    'caogen.remote-continuation', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists device bindings, signed command queue, approval records, runner leases and redacted audit metadata; private key material is never accepted by the store.'
+  ),
   audit(
     'src/main/projectTestRunner.ts',
     'caogen-project-test-evidence', '1', 'atomic_fsync_rename', 'implemented_unverified',
@@ -291,6 +353,11 @@ export const DURABLE_WRITE_REGISTRY = [
     'src/main/project-workspace/persistence.ts',
     'caogen.project-workspace', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists Project, Goal, WorkItem, Squad, and Comment state under a file lock.'
+  ),
+  derived(
+    'src/main/project-workspace/project-connector-cache.ts',
+    'caogen.project-connector-cache', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Publishes rebuildable connector content and citation metadata with content digests and durable replacement.'
   ),
   exempt(
     'src/main/project-workspace/workspace-session-cwd.ts', 'workspace_effect', 'effect_guarded_workspace',
@@ -413,6 +480,24 @@ export const DURABLE_WRITE_REGISTRY = [
   implemented(
     'src/main/task/artifact-lifecycle-content.ts', 'user_artifact', 'atomic_fsync_rename',
     'Publishes immutable digest-addressed Artifact blobs after file fsync and digest verification.'
+  ),
+  implemented(
+    'src/main/task/workflow-artifact-delivery.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Publishes verified delivery manifests and ZIP packages after byte verification, file fsync, atomic rename, and directory sync.'
+  ),
+  implemented(
+    'src/main/task/workflow-artifact-export.ts', 'user_artifact', 'atomic_fsync_rename',
+    'Copies verified canonical Artifact bytes to user-selected paths with file and directory durability.'
+  ),
+  domain(
+    'src/main/task/workflow-delivery-identity.ts',
+    'caogen.workflow-delivery-identity and encrypted backup', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists the encrypted local Ed25519 delivery identity and publishes passphrase-encrypted user backups durably.'
+  ),
+  domain(
+    'src/main/task/workflow-delivery-trust-store.ts',
+    'caogen.workflow-delivery-identity-trust-store', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists bounded trusted/revoked delivery identities and organization trust policy with CAS revision, signed portable trust bundles, fsync, atomic publication, and byte readback.'
   ),
   exempt(
     'src/main/task/effect-reconciler.ts', 'ephemeral_runtime', 'ephemeral',

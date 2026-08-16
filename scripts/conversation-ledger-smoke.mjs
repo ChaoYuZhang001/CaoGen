@@ -573,7 +573,7 @@ try {
       rootDir: invalidArchiveRoot,
       reason: 'checkpoint_restore'
     }),
-    'directory',
+    /(?:eexist|directory)/i,
     'Conversation Ledger DB archive failure must propagate to the caller'
   )
 
@@ -802,12 +802,15 @@ function rows(db, sql, values = []) {
   return result
 }
 
-async function expectReject(promise, messageFragment, label) {
+async function expectReject(promise, expectedMessage, label) {
   try {
     await promise
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    assert(message.toLowerCase().includes(messageFragment.toLowerCase()), `${label}: ${message}`)
+    const matches = typeof expectedMessage === 'string'
+      ? message.toLowerCase().includes(expectedMessage.toLowerCase())
+      : expectedMessage.test(message)
+    assert(matches, `${label}: ${message}`)
     return
   }
   throw new Error(`${label}: operation unexpectedly succeeded`)

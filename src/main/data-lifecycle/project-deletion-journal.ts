@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import type { DataPurgeTarget, DataRetentionSubject } from '../../shared/data-lifecycle-types'
 import { acquireFileLock, enqueueMutation, releaseFileLock } from '../digital-worker/persistence'
 import type { ProjectDeletionExternalResourceBoundary } from './project-deletion-proof-store'
+import { normalizeDataPurgeTargets } from './retention-authority'
+import { normalizeDataRetentionSubjects } from './retention-authority-store'
+import { withDataLifecycleMutation } from './data-lifecycle-mutation-lock'
 
 export const PROJECT_DELETION_PHASES = [
   'prepared',
@@ -29,6 +33,10 @@ export interface ProjectDeletionJournalEntry {
   sessionIds: string[]
   sdkSessionIds: string[]
   artifactBlobDigests: string[]
+  retentionTargets?: DataPurgeTarget[]
+  legalHoldSubjects?: DataRetentionSubject[]
+  /** App-private content-addressed Effect artifact directories captured before destructive phases. */
+  effectArtifactRefs?: string[]
   externalResources?: ProjectDeletionExternalResourceBoundary[]
   backupPath?: string
   backupDigest?: string
@@ -46,12 +54,21 @@ interface JournalDocument {
   entries: ProjectDeletionJournalEntry[]
 }
 
+export type ProjectDeletionJournalBeginInput = Omit<
+  ProjectDeletionJournalEntry,
+  'schemaVersion' | 'operationId' | 'phase' | 'createdAt' | 'updatedAt'
+> & {
+  operationId?: string
+}
+
 export class ProjectDeletionJournal {
   readonly filePath: string
   private readonly lockPath: string
+  private readonly userDataRoot: string
 
   constructor(userDataRoot: string) {
-    this.filePath = join(requiredRoot(userDataRoot), 'private', 'project-deletion-journal.json')
+    this.userDataRoot = requiredRoot(userDataRoot)
+    this.filePath = join(this.userDataRoot, 'private', 'project-deletion-journal.json')
     this.lockPath = `${this.filePath}.lock`
   }
 
@@ -69,21 +86,34 @@ export class ProjectDeletionJournal {
     return clone(readDocument(this.filePath).entries.find((entry) => entry.operationId === id))
   }
 
-  async begin(input: Omit<ProjectDeletionJournalEntry, 'schemaVersion' | 'operationId' | 'phase' | 'createdAt' | 'updatedAt'>): Promise<ProjectDeletionJournalEntry> {
+  async begin(input: ProjectDeletionJournalBeginInput): Promise<ProjectDeletionJournalEntry> {
     const projectId = requiredId(input.projectId, 'projectId')
+    const operationId = input.operationId === undefined ? randomUUID() : requiredId(input.operationId, 'operationId')
     return this.mutate((document) => {
+      const existing = document.entries.find((entry) => entry.operationId === operationId)
+      if (existing) {
+        if (existing.projectId !== projectId) throw new Error('project deletion operation identity conflicts with its Project')
+        return existing
+      }
       const pending = document.entries.find((entry) => entry.projectId === projectId && entry.phase !== 'completed')
       if (pending) return pending
       const now = Date.now()
       const entry: ProjectDeletionJournalEntry = {
         schemaVersion: 1,
-        operationId: randomUUID(),
+        operationId,
         projectId,
         expectedWorkspaceRevision: input.expectedWorkspaceRevision,
         phase: 'prepared',
         sessionIds: normalizedIds(input.sessionIds),
         sdkSessionIds: normalizedIds(input.sdkSessionIds),
         artifactBlobDigests: normalizedDigests(input.artifactBlobDigests),
+        retentionTargets: normalizeDataPurgeTargets(input.retentionTargets ?? [
+          { subject: { kind: 'project', id: projectId }, retentionAnchorAt: Date.now() }
+        ]),
+        legalHoldSubjects: normalizeDataRetentionSubjects(input.legalHoldSubjects ?? [
+          { kind: 'project', id: projectId }
+        ]),
+        effectArtifactRefs: normalizedEffectArtifactRefs(input.effectArtifactRefs ?? []),
         ...(input.externalResources
           ? { externalResources: normalizedExternalResources(input.externalResources) }
           : {}),
@@ -119,7 +149,7 @@ export class ProjectDeletionJournal {
   }
 
   private async mutate<T>(operation: (document: JournalDocument) => T): Promise<T> {
-    return enqueueMutation(this.filePath, async () => {
+    return withDataLifecycleMutation(this.userDataRoot, () => enqueueMutation(this.filePath, async () => {
       mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 })
       const lock = acquireFileLock(this.lockPath)
       try {
@@ -131,7 +161,7 @@ export class ProjectDeletionJournal {
       } finally {
         releaseFileLock(this.lockPath, lock)
       }
-    })
+    }))
   }
 }
 
@@ -192,11 +222,35 @@ function assertJournalEntry(entry: ProjectDeletionJournalEntry): void {
     Array.isArray(entry.sdkSessionIds),
     Array.isArray(entry.artifactBlobDigests),
     entry.artifactBlobDigests.every(isDigest),
+    optionalRetentionTargets(entry.retentionTargets),
+    optionalLegalHoldSubjects(entry.legalHoldSubjects),
+    entry.effectArtifactRefs === undefined || Array.isArray(entry.effectArtifactRefs) &&
+      entry.effectArtifactRefs.every(isEffectArtifactRef),
     optionalExternalResources(entry.externalResources),
     typeof entry.createdAt === 'number',
     typeof entry.updatedAt === 'number'
   ].every(Boolean)
   if (!fieldsValid) throw new Error('project deletion journal entry is invalid')
+}
+
+function optionalRetentionTargets(value: unknown): boolean {
+  if (value === undefined) return true
+  try {
+    normalizeDataPurgeTargets(value as DataPurgeTarget[])
+    return true
+  } catch {
+    return false
+  }
+}
+
+function optionalLegalHoldSubjects(value: unknown): boolean {
+  if (value === undefined) return true
+  try {
+    normalizeDataRetentionSubjects(value as DataRetentionSubject[])
+    return true
+  } catch {
+    return false
+  }
 }
 
 function assertPhaseReceipts(entry: ProjectDeletionJournalEntry): void {
@@ -254,6 +308,17 @@ function normalizedIds(values: readonly string[]): string[] {
 function normalizedDigests(values: readonly string[]): string[] {
   if (!values.every(isDigest)) throw new Error('artifact blob digest is invalid')
   return [...new Set(values)].sort()
+}
+
+function normalizedEffectArtifactRefs(values: readonly string[]): string[] {
+  if (!Array.isArray(values) || !values.every(isEffectArtifactRef)) {
+    throw new Error('effect artifact reference list is invalid')
+  }
+  return [...new Set(values)].sort()
+}
+
+function isEffectArtifactRef(value: unknown): value is string {
+  return typeof value === 'string' && /^git-index\/[a-f0-9]{64}$/.test(value)
 }
 
 function isDigest(value: unknown): value is string {

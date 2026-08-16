@@ -10,6 +10,7 @@ import Quickbar from './components/Quickbar'
 import AppListView from './components/AppListView'
 import { APP_ICON_URL, APP_NAME } from './brand'
 import { loadOfficeView, preloadOfficeView } from './components/office/loadOffice'
+import type { ExperienceMode } from './store/experience-mode'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(loadOfficeView)
@@ -29,11 +30,19 @@ function useStudioPrewarm(visited: boolean, setVisited: (value: boolean) => void
   }, [setVisited, visited])
 }
 
-function useStudioVisited(experienceMode: 'assistant' | 'studio'): boolean {
+function useStudioVisited(experienceMode: ExperienceMode): boolean {
   const [visited, setVisited] = useState(experienceMode === 'studio')
   useStudioPrewarm(visited, setVisited)
   useEffect(() => {
     if (experienceMode === 'studio') setVisited(true)
+  }, [experienceMode])
+  return visited
+}
+
+function useVideoVisited(experienceMode: ExperienceMode): boolean {
+  const [visited, setVisited] = useState(experienceMode === 'video')
+  useEffect(() => {
+    if (experienceMode === 'video') setVisited(true)
   }, [experienceMode])
   return visited
 }
@@ -57,6 +66,7 @@ export default function App(): React.JSX.Element {
   const setExperienceMode = useStore((s) => s.setExperienceMode)
   const [mobileSidebarOpen, closeMobileSidebar, toggleMobileSidebar] = useMobileSidebar()
   const studioVisited = useStudioVisited(experienceMode)
+  const videoVisited = useVideoVisited(experienceMode)
 
   useThemeEffect()
 
@@ -178,6 +188,7 @@ export default function App(): React.JSX.Element {
           mobileSidebarOpen={mobileSidebarOpen}
           showNewSession={showNewSession}
           studioVisited={studioVisited}
+          videoVisited={videoVisited}
           onCloseMobileSidebar={closeMobileSidebar}
           onExperienceModeChange={setExperienceMode}
           onToggleMobileSidebar={toggleMobileSidebar}

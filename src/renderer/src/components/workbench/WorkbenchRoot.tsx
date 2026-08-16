@@ -99,6 +99,13 @@ function startWorkbenchDockResize(
   window.addEventListener('pointerup', stop, { once: true })
 }
 
+function workbenchDimensions(sideWidth: number, dockHeight: number): React.CSSProperties {
+  return {
+    '--workbench-side-width': `${sideWidth}px`,
+    '--workbench-dock-height': `${dockHeight}px`
+  } as React.CSSProperties
+}
+
 function WorkbenchRoot(): React.JSX.Element {
   const t = useT()
   const [routineEditor, setRoutineEditor] = useState<RoutineEditorState | null>(null)
@@ -318,10 +325,7 @@ function WorkbenchRoot(): React.JSX.Element {
   return (
     <div
       className={`workbench ${sideOpen ? 'workbench-split' : ''} ${terminalOpen ? 'workbench-dock-open' : ''}`}
-      style={{
-        '--workbench-side-width': `${sideWidth}px`,
-        '--workbench-dock-height': `${dockHeight}px`
-      } as React.CSSProperties}
+      style={workbenchDimensions(sideWidth, dockHeight)}
     >
       <DeskControlRail
         sideOpen={sideOpen}

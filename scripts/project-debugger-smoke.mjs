@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -36,6 +36,11 @@ try {
   ].join('\n'))
   writeFileSync(path.join(workspace, 'server.js'), "setInterval(() => {}, 1000)\n")
   compileRunner(compiled)
+  symlinkSync(
+    path.join(repoRoot, 'node_modules'),
+    path.join(compiled, 'node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
 
   process.env.CAOGEN_PROJECT_DEBUG_SMOKE = '1'
   const require = createRequire(import.meta.url)

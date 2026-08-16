@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -720,8 +720,14 @@ function compile() {
 }
 
 function installElectronStub() {
-  const root = path.join(outDir, 'node_modules', 'electron')
+  const modulesRoot = path.join(outDir, 'node_modules')
+  const root = path.join(modulesRoot, 'electron')
   mkdirSync(root, { recursive: true })
+  symlinkSync(
+    path.join(repoRoot, 'node_modules', 'sql.js'),
+    path.join(modulesRoot, 'sql.js'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
   mkdirSync(userData, { recursive: true })
   writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'electron', version: '0.0.0', main: 'index.js' }))
   writeFileSync(path.join(root, 'index.js'), `'use strict'

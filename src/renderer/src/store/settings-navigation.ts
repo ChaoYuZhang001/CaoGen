@@ -8,6 +8,7 @@ export type SettingsTab =
   | 'providers'
   | 'notifications'
   | 'plugins'
+  | 'data'
   | 'migrate'
 
 export type SettingsContext = 'welcome-provider-recovery' | 'provider-recovery-exhausted'

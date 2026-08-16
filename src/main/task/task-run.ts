@@ -576,10 +576,16 @@ function isTaskRunOptionalFields(record: Record<string, unknown>): boolean {
 function isTaskRunContinuation(value: unknown): value is TaskRunContinuation {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
-  return record.schemaVersion === 1 && record.kind === 'conversation_fork' &&
-    isNonEmptyString(record.sourceSessionId) && isNonEmptyString(record.sourceRunId) &&
-    isNonEmptyString(record.sourceSdkSessionId) &&
-    (record.sourceCheckpointId === undefined || isNonEmptyString(record.sourceCheckpointId))
+  if (record.schemaVersion !== 1) return false
+  if (record.kind === 'conversation_fork') {
+    return isNonEmptyString(record.sourceSessionId) && isNonEmptyString(record.sourceRunId) &&
+      isNonEmptyString(record.sourceSdkSessionId) &&
+      (record.sourceCheckpointId === undefined || isNonEmptyString(record.sourceCheckpointId))
+  }
+  return record.kind === 'work_item_transfer' &&
+    isNonEmptyString(record.requestId) && isNonEmptyString(record.assignmentId) &&
+    (record.sourceSessionId === undefined || isNonEmptyString(record.sourceSessionId)) &&
+    (record.sourceRunId === undefined || isNonEmptyString(record.sourceRunId))
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -682,7 +688,13 @@ const interactiveOperationKinds = new Set<InteractiveOperationKind>([
   'pull_request_create',
   'issue_create',
   'checkpoint_restore',
-  'provider_operation'
+  'provider_operation',
+  'migration_apply',
+  'migration_rollback',
+  'project_export',
+  'project_import',
+  'project_delete',
+  'media_generation'
 ])
 
 function isTaskRunOperationMetadata(value: unknown): value is TaskRunOperationMetadata {

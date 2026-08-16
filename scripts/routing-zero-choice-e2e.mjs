@@ -253,15 +253,16 @@ try {
     const persisted = await page.evaluate(() => window.localStorage.getItem('caogen.welcome-draft.v1'))
     assert(persisted, 'welcome draft was not persisted before reload')
     const payload = JSON.parse(persisted)
-    assert(payload.schemaVersion === 3, `unexpected welcome draft schema: ${payload.schemaVersion}`)
+    assert(payload.schemaVersion === 4, `unexpected welcome draft schema: ${payload.schemaVersion}`)
+    assert(!Object.prototype.hasOwnProperty.call(payload.draft, 'experienceModeOverride'), 'welcome draft persisted the removed projection override')
     assert(!persisted.includes('test-only'), 'welcome draft storage leaked the Provider API key')
     assert(!persisted.includes(mock.baseUrl), 'welcome draft storage leaked the Provider Base URL')
 
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
-    await waitForApp(page)
-    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await waitForAppShell(page)
     await clickMode(page, 'studio')
     await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
     await page.waitForFunction(
       () => Array.from(document.querySelectorAll('[data-welcome-routing-control="provider"] option'))
         .some((option) => option.textContent?.includes('Zero Choice Local Service')),
@@ -281,10 +282,10 @@ try {
     const beforeDeletion = await readWelcomeDraft(page)
     await page.evaluate((id) => window.agentDesk.deleteProvider(id), providerId)
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 })
-    await waitForApp(page)
-    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
+    await waitForAppShell(page)
     await clickMode(page, 'studio')
     await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 20_000 })
     await page.waitForFunction(
       () => document.querySelector('[data-welcome-routing-control="provider"]')?.value === '',
       { timeout: 10_000 }
@@ -600,10 +601,14 @@ async function openCommandPalette(targetPage) {
 }
 
 async function waitForApp(targetPage) {
+  await waitForAppShell(targetPage)
+  await targetPage.waitForSelector('.welcome-composer-input', { visible: true, timeout: 15_000 })
+}
+
+async function waitForAppShell(targetPage) {
   await targetPage.waitForSelector('.app', { timeout: 20_000 })
   await targetPage.waitForFunction(() => typeof window.agentDesk?.createProvider === 'function', { timeout: 15_000 })
   await targetPage.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
-  await targetPage.waitForSelector('.welcome-composer-input', { visible: true, timeout: 15_000 })
 }
 
 async function waitForText(targetPage, text, timeoutMs) {

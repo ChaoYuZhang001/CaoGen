@@ -50,6 +50,7 @@ const dagSchedulerSource = read('src/main/agent/dag-scheduler.ts')
 const routineExecutorSource = read('src/main/routines/routine-executor.ts')
 const openaiToolsSource = read('src/main/openaiTools.ts')
 const rendererStoreSource = read('src/renderer/src/store.ts')
+const pluginRegistryActionsSource = read('src/renderer/src/store/plugin-registry-actions.ts')
 const terminalActionsSource = read('src/renderer/src/store/terminal-actions.ts')
 const browserActionsSource = read('src/renderer/src/store/browser-actions.ts')
 const operationGatewaySource = read('src/main/task/operation-effect-gateway.ts')
@@ -97,6 +98,19 @@ assert(
   rendererMutationSource.includes("from '../git/git-helper'") &&
     !ipcSource.includes('commit as gitCommit'),
   'Renderer commit must use the hook-disabled Git helper behind the Gateway'
+)
+assert(
+  rendererMutationSource.includes("const workspaceId = meta.workspaceId?.trim()") &&
+    rendererMutationSource.includes("...(workspaceId ? { projectId: workspaceId, workspaceId } : {})") &&
+    !rendererMutationSource.includes('projectId: session.meta.projectId') &&
+    (rendererMutationSource.match(/\.\.\.rendererOperationOwnership\(context\)/g)?.length ?? 0) === 7 &&
+    attachmentEffectSource.includes('workspaceId: context.workspaceId') &&
+    attachmentEffectSource.includes('goalId: context.goalId') &&
+    attachmentEffectSource.includes('workItemId: context.workItemId') &&
+    interactiveMutationSource.includes("app.getPath('userData')") &&
+    attachmentMutationIpcSource.includes("app.getPath('userData')") &&
+    attachmentEffectSource.includes('rootDir: context.rootDir'),
+  'Renderer mutations must preserve canonical ownership and exclude legacy directory Project IDs'
 )
 assert(
   effectTypesSource.includes("| 'file_write'") &&
@@ -227,8 +241,9 @@ assert(
 assert(
   taskRecoveryActionsSource.includes("outcome.effectStatus === 'waiting_reconciliation'") &&
     taskRecoveryActionsSource.includes('await refreshRecovery()') &&
-    rendererStoreSource.includes('requireMcpProbeResults(await window.agentDesk.probeMcpServers') &&
-    rendererStoreSource.includes('get().refreshTaskSnapshots') &&
+    pluginRegistryActionsSource.includes('requireMcpProbeResults(') &&
+    pluginRegistryActionsSource.includes('await window.agentDesk.probeMcpServers') &&
+    pluginRegistryActionsSource.includes('get().refreshTaskSnapshots') &&
     settingsModalSource.includes('requireMcpProbeResults(await window.agentDesk.probeMcpServers') &&
     settingsModalSource.includes('useStore.getState().refreshTaskSnapshots()'),
   'unknown MCP probe outcomes must refresh both visible recovery surfaces'
@@ -295,7 +310,10 @@ assertManagedSessionCreateBarrier()
 assert(
     ipcSource.includes('return sessionManager.createManaged({ ...opts, cwd })') &&
     ipcSource.includes('return sessionManager.createManaged(opts)') &&
-    unassignedSessionSource.includes('return sessionManager.createManaged({ ...options, cwd, isolated: false, unassigned: true })') &&
+    unassignedSessionSource.includes('return sessionManager.createManaged({') &&
+    unassignedSessionSource.includes('isolated: false') &&
+    unassignedSessionSource.includes('unassigned: true') &&
+    unassignedSessionSource.includes('personalWorkspaceId: managed.workspace.id') &&
     routineExecutorSource.includes('await sessionManager.createManaged(') &&
     openaiToolsSource.includes('const result = await manager.dispatchTaskDag(') &&
     openaiToolsSource.includes('const dispatch = await manager.dispatchTaskDag('),

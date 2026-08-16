@@ -246,10 +246,7 @@ export function classifyFailure(text: string | undefined): FailureClass {
     )
   )
     return { kind: 'model_unavailable', switchable: true, label: '模型不可用' }
-  if (
-    /(?:responses?\s*(?:api|endpoint|protocol).{0,32}(?:not.?support|not.?found|unavailable|unknown)|(?:unsupported|unknown).{0,24}responses?)/i.test(value) ||
-    (/\b(?:404|405|501)\b/.test(value) && /protocol\s*:\s*responses/i.test(value))
-  )
+  if (isResponsesProtocolUnavailable(value))
     return { kind: 'protocol_unavailable', switchable: true, label: 'Responses 协议不可用' }
   if (/unauthorized|authentication|invalid.{0,12}(api.?key|token)|\b401\b|鉴权/i.test(value))
     return { kind: 'auth', switchable: true, label: '鉴权失败' }
@@ -264,6 +261,12 @@ export function classifyFailure(text: string | undefined): FailureClass {
   return value && value !== '未知错误'
     ? { kind: 'execution', switchable: false, label: '执行错误' }
     : { kind: 'unknown', switchable: false, label: '未知错误' }
+}
+
+function isResponsesProtocolUnavailable(value: string): boolean {
+  const explicit = /(?:responses?\s*(?:api|endpoint|protocol).{0,32}(?:not.?support|not.?found|unavailable|unknown)|(?:unsupported|unknown).{0,24}responses?)/i
+  const status = /\b(?:404|405|501)\b/
+  return explicit.test(value) || (status.test(value) && /protocol\s*:\s*responses/i.test(value))
 }
 
 export function _resetProviderHealthCacheForTest(): void {

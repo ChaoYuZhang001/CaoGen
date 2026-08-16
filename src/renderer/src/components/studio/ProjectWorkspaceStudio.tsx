@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { Goal, GoalPatch, ProjectSquad, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem, WorkItemComment, WorkItemOwner } from '../../../../shared/types'
+import type { AcceptanceResult, Goal, GoalPatch, ProjectSquad, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem, WorkItemComment, WorkItemOwner } from '../../../../shared/types'
 import {
   GoalCreateForm,
   ProjectCreateForm,
@@ -8,6 +8,8 @@ import {
 import { GoalsView, WorkItemsView } from './ProjectWorkspaceStudioViews'
 import { ProjectCollaborationView } from './ProjectCollaborationView'
 import { ProjectInbox } from './ProjectInbox'
+import { ProjectPortfolioView } from './ProjectPortfolioView'
+import { ProjectSupervisorView } from './ProjectSupervisorView'
 import ProjectWorkspaceLifecycle from './ProjectWorkspaceLifecycle'
 import {
   projectKindLabel,
@@ -25,6 +27,10 @@ import {
   useWorkspaceSelection
 } from './useProjectWorkspaceStudio'
 import './ProjectWorkspaceStudio.css'
+import './remote-continuation.css'
+import { RemoteContinuationPanel } from './RemoteContinuationPanel'
+import { ProjectDeliveryWorkbench } from './ProjectDeliveryWorkbench'
+import { useStore } from '../../store'
 
 export interface ProjectWorkspaceStudioProps {
   active?: boolean
@@ -49,6 +55,10 @@ type ProjectContentsState = ReturnType<typeof useProjectContents>
 type StudioCreateActions = ReturnType<typeof useStudioCreateActions>
 type GoalTaskStarterState = ReturnType<typeof useProjectGoalTaskStart>
 
+function activeProjectContentsId(project: ProjectWorkspace | null, selectedProjectId: string): string {
+  return project?.status === 'active' ? selectedProjectId : ''
+}
+
 export function ProjectWorkspaceStudio({
   active = true,
   className,
@@ -62,7 +72,7 @@ export function ProjectWorkspaceStudio({
   const [form, setForm] = useState<StudioCreateForm>(null)
   const [view, setView] = useState<StudioView>(() => readStoredStudioView())
   const workspace = useWorkspaceSelection(active, initialProjectId, onProjectChange)
-  const contents = useProjectContents(active, workspace.selectedProjectId)
+  const contents = useProjectContents(active, activeProjectContentsId(workspace.selectedProject, workspace.selectedProjectId))
   const closeForm = useCallback(() => setForm(null), [])
   const actions = useStudioCreateActions({
     onSuccess: closeForm,
@@ -125,6 +135,7 @@ export function ProjectWorkspaceStudio({
         selectedProjectId={workspace.selectedProjectId}
         goalCount={contents.goals.length}
         workItemCount={contents.workItems.length}
+        authorization={contents.authorization}
         disabled={loading}
         importing={actions.busy === 'import'}
         refreshing={workspace.loading || contents.loading}
@@ -144,6 +155,12 @@ export function ProjectWorkspaceStudio({
         onRetry={retry}
         workspace={workspace}
       />
+      <ProjectPortfolioView
+        active={active}
+        refreshToken={`${workspace.projects.map((project) => `${project.id}:${project.revision}`).join('|')}|${contents.goals.map((goal) => `${goal.id}:${goal.revision}`).join('|')}|${contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}`}
+        onSelectProject={workspace.selectProject}
+      />
+      <RemoteContinuationPanel active={active} projectId={workspace.selectedProjectId} />
       {workspace.selectedProject && (
         <ProjectWorkspaceLifecycle
           project={workspace.selectedProject}
@@ -160,6 +177,7 @@ export function ProjectWorkspaceStudio({
         onOpenForm={openForm}
         onGoalControl={controls.controlGoal}
         onGoalUpdate={controls.updateGoal}
+        onWorkItemAcceptance={controls.setWorkItemAcceptance}
         onWorkItemControl={controls.controlWorkItem}
         onWorkItemReorder={controls.reorderWorkItem}
         onWorkItemTransfer={controls.transferWorkItem}
@@ -175,6 +193,7 @@ export function ProjectWorkspaceStudio({
 function useStudioEntityActions(refreshContents: () => Promise<void>): {
   controlGoal: (goal: Goal, action: GoalControlAction) => Promise<void>
   controlWorkItem: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  setWorkItemAcceptance: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   reorderWorkItem: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   transferWorkItem: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   updateGoal: (goal: Goal, patch: GoalPatch) => Promise<void>
@@ -195,6 +214,10 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
     }
     await refreshContents()
   }, [refreshContents])
+  const setWorkItemAcceptance = useCallback(async (item: WorkItem, result: AcceptanceResult): Promise<void> => {
+    await window.agentDesk.setProjectWorkItemAcceptance(item.id, result, { expectedRevision: item.revision })
+    await refreshContents()
+  }, [refreshContents])
   const reorderWorkItem = useCallback(async (item: WorkItem, targetId: string, placement: 'before' | 'after'): Promise<void> => {
     await window.agentDesk.reorderProjectWorkItem(item.id, targetId, placement, { expectedRevision: item.revision })
     await refreshContents()
@@ -205,13 +228,17 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
     reason: string,
     requestId: string
   ): Promise<void> => {
-    await window.agentDesk.transferProjectWorkItem({
+    const result = await window.agentDesk.transferProjectWorkItem({
       requestId,
       workItemId: item.id,
       target,
       reason,
       expectedRevision: item.revision
     })
+    const successorSessionId = result.continuation?.successorSessionId
+    if (successorSessionId && await useStore.getState().syncSession(successorSessionId)) {
+      useStore.getState().selectSession(successorSessionId)
+    }
     await refreshContents()
   }, [refreshContents])
   const updateGoal = useCallback(async (goal: Goal, patch: GoalPatch): Promise<void> => {
@@ -228,7 +255,7 @@ function useStudioEntityActions(refreshContents: () => Promise<void>): {
     }
     await refreshContents()
   }, [refreshContents])
-  return { controlGoal, controlWorkItem, reorderWorkItem, transferWorkItem, updateGoal }
+  return { controlGoal, controlWorkItem, setWorkItemAcceptance, reorderWorkItem, transferWorkItem, updateGoal }
 }
 
 function WorkspaceStatus({
@@ -279,6 +306,7 @@ function ProjectContents({
   onGoalUpdate,
   onOpenForm,
   onWorkItemControl,
+  onWorkItemAcceptance,
   onWorkItemReorder,
   onWorkItemTransfer,
   onViewChange,
@@ -295,6 +323,7 @@ function ProjectContents({
   onGoalUpdate: (goal: Goal, patch: GoalPatch) => Promise<void>
   onOpenForm: (form: Exclude<StudioCreateForm, null>) => void
   onWorkItemControl: (item: WorkItem, action: WorkItemControlAction) => Promise<void>
+  onWorkItemAcceptance: (item: WorkItem, result: AcceptanceResult) => Promise<void>
   onWorkItemReorder: (item: WorkItem, targetId: string, placement: 'before' | 'after') => Promise<void>
   onWorkItemTransfer: (item: WorkItem, target: WorkItemOwner, reason: string, requestId: string) => Promise<void>
   onViewChange: (view: StudioView) => void
@@ -325,12 +354,29 @@ function ProjectContents({
             <WorkItemCreateForm projectId={project.id} goals={contents.goals.filter((goal) => goal.status !== 'archived')} workItems={contents.workItems} busy={actions.busy} onCancel={onCloseForm} onSubmit={actions.createWorkItem} />
           )}
           <GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} />
-          <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} />
+          <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} />
+          <ProjectDeliveryWorkbench
+            active={active}
+            projectId={project.id}
+            refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
+          />
+          <ProjectSupervisorView
+            active={active}
+            projectId={project.id}
+            refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
+            workItems={contents.workItems}
+            onRefreshProject={contents.refreshContents}
+          />
           <ProjectCollaborationView
             projectId={project.id}
             workItems={contents.workItems}
             squads={contents.squads}
+            members={contents.members}
+            invitations={contents.invitations}
             comments={contents.comments}
+            sharedApprovals={contents.sharedApprovals}
+            inboxItems={contents.collaborationInbox}
+            authorization={contents.authorization}
             onRefresh={contents.refreshContents}
           />
         </>
@@ -386,6 +432,7 @@ function StudioHeader({
   refreshing,
   selectedProject,
   selectedProjectId,
+  authorization,
   titleId,
   workItemCount
 }: {
@@ -400,6 +447,7 @@ function StudioHeader({
   refreshing: boolean
   selectedProject: ProjectWorkspace | null
   selectedProjectId: string
+  authorization: import('../../../../shared/types').ProjectAuthorizationView | null
   titleId: string
   workItemCount: number
 }): React.JSX.Element {
@@ -416,7 +464,7 @@ function StudioHeader({
       <div className="pws-heading">
         <h1 id={titleId}>{TEXT.title}</h1>
         {selectedProject && (
-          <p>{TEXT.projectKindSummary(projectKindLabel(selectedProject.kind))} · {TEXT.projectSummary(goalCount, workItemCount)}</p>
+          <p>{TEXT.projectKindSummary(projectKindLabel(selectedProject.kind))} · {TEXT.projectSummary(goalCount, workItemCount)}{authorization && ` · 角色：${authorization.role} · 权限：${authorization.capabilities.length}`}</p>
         )}
       </div>
       <div className="pws-project-controls">

@@ -23,6 +23,7 @@ import type {
 } from '../shared/types'
 import { applyTranscriptRestorePlan, planTranscriptRestore } from './checkpointRestorePlan'
 import type { TranscriptRestorePlan } from './checkpointRestorePlan'
+import { redactSensitiveValue } from './security/secret-redaction'
 
 /**
  * Provider 无关的耐久会话事件。
@@ -195,7 +196,11 @@ function sealEntry(entry: TranscriptEntry, previousDigest?: string): TranscriptE
 function sealEntries(path: string, entries: TranscriptEntry[]): TranscriptEntry[] {
   let previousDigest: string | undefined
   return entries.map((entry) => {
-    const sealed = sealEntry(normalizeEntry(path, entry), previousDigest)
+    const normalized = normalizeEntry(path, entry)
+    const sealed = sealEntry({
+      ...normalized,
+      event: redactTranscriptEvent(normalized.event)
+    }, previousDigest)
     previousDigest = sealed.digest
     return sealed
   })
@@ -502,22 +507,23 @@ export class TranscriptWriter {
 
   /** 生成稳定事件身份;引擎将整个 entry 交给 SessionManager。 */
   nextEntry(event: AgentEvent): TranscriptEntry & AgentEventIdentity {
-    if (event.kind === 'init' && event.sdkSessionId) this.bind(event.sdkSessionId)
+    const safeEvent = redactTranscriptEvent(event)
+    if (safeEvent.kind === 'init' && safeEvent.sdkSessionId) this.bind(safeEvent.sdkSessionId)
     const seq = ++this.seq
     const eventId = randomUUID()
     const occurredAt = Date.now()
-    const identity = this.identityFor(event, eventId, seq, occurredAt)
-    const entry: TranscriptEntry & AgentEventIdentity = { ...identity, event }
-    if (PERSIST_KINDS.has(event.kind)) {
+    const identity = this.identityFor(safeEvent, eventId, seq, occurredAt)
+    const entry: TranscriptEntry & AgentEventIdentity = { ...identity, event: safeEvent }
+    if (PERSIST_KINDS.has(safeEvent.kind)) {
       if (this.sdkSessionId) this.append(entry)
       else this.buffer.push(entry)
     }
-    if (event.kind !== 'text-delta' && event.kind !== 'thinking-delta') {
+    if (safeEvent.kind !== 'text-delta' && safeEvent.kind !== 'thinking-delta') {
       const receipt = receiptFor(entry)
       if (this.sdkSessionId) this.appendReceipt(receipt)
       else this.receiptBuffer.push(receipt)
     }
-    this.rememberLinks(event, entry)
+    this.rememberLinks(safeEvent, entry)
     return entry
   }
 
@@ -786,6 +792,31 @@ export class TranscriptWriter {
   }
 }
 
+/**
+ * Anthropic's assistant-side replay signatures are opaque protocol state, not
+ * credentials. They must remain in the private local conversation ledger
+ * so a resumed Messages request is valid. Generic log redaction still applies
+ * to every other field and all other event kinds.
+ */
+function redactTranscriptEvent(event: AgentEvent): AgentEvent {
+  const redacted = redactSensitiveValue(event)
+  if (event.kind !== 'assistant-message' || redacted.kind !== 'assistant-message') return redacted
+  return {
+    ...redacted,
+    blocks: redacted.blocks.map((block, index) => {
+      const original = event.blocks[index]
+      if (
+        (original?.type === 'thinking' || original?.type === 'tool_use') &&
+        original.signature &&
+        (block.type === 'thinking' || block.type === 'tool_use')
+      ) {
+        return { ...block, signature: original.signature }
+      }
+      return block
+    })
+  }
+}
+
 /** 启动时清理:不在历史列表里的转录文件已不可达,删除 */
 export function cleanupTranscripts(keepSdkSessionIds: Set<string>): void {
   for (const dir of [transcriptsDir(), eventReceiptsDir()]) {
@@ -989,9 +1020,7 @@ function isRetryableFileReplaceError(err: unknown): boolean {
   return isRecord(err) && (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY')
 }
 
-function isRecord(value: unknown): value is { code?: unknown } {
-  return typeof value === 'object' && value !== null
-}
+function isRecord(value: unknown): value is { code?: unknown } { return typeof value === 'object' && value !== null }
 
 function conversationLedgerPersistenceError(action: string, error: unknown): ConversationLedgerPersistenceError {
   if (error instanceof ConversationLedgerPersistenceError) return error
@@ -999,6 +1028,4 @@ function conversationLedgerPersistenceError(action: string, error: unknown): Con
   return new ConversationLedgerPersistenceError(`${action}: ${detail}`)
 }
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
+function sleepSync(ms: number): void { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }

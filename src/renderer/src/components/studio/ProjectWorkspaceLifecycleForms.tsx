@@ -8,10 +8,12 @@ import {
 } from 'react'
 import type {
   ProjectAggregateExportBundle,
+  ProviderAuthorizationAccountView,
   ProjectResourceInput,
   ProjectWorkspace,
   ProjectWorkspacePatch
 } from '../../../../shared/types'
+import { PROJECT_CONNECTOR_CATALOG } from '../../../../shared/types'
 import {
   PROJECT_KIND_OPTIONS,
   PROJECT_RESOURCE_OPTIONS,
@@ -91,10 +93,12 @@ export function ProjectResourceForm({
     dataClass: 'S2',
     egressPolicy: 'allow',
     connectorUsage: ['resource'],
+    connectorId: 'generic',
     connectorCapabilities: 'resource:read',
     connectorDataDirection: 'read',
     connectorAuthorizationSubject: 'personal',
     connectorPrincipalId: '',
+    connectorCredentialRef: '',
     connectorScopes: 'read',
     connectorVersion: '1',
     connectorReconciliation: 'manual_only'
@@ -125,53 +129,7 @@ export function ProjectResourceForm({
               {PROJECT_RESOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </LifecycleField>
-          {draft.kind === 'connector' && (
-            <>
-              <LifecycleField id={`${baseId}-connector-usage`} label="用途">
-                <select
-                  id={`${baseId}-connector-usage`}
-                  className="select select-block"
-                  value={draft.connectorUsage[0] ?? 'resource'}
-                  onChange={(event) => update('connectorUsage', [event.target.value as ProjectResourceDraft['connectorUsage'][number]])}
-                >
-                  <option value="resource">Project Resource</option>
-                  <option value="knowledge_source">知识源</option>
-                  <option value="tool">Tool</option>
-                </select>
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-direction`} label="数据方向">
-                <select id={`${baseId}-connector-direction`} className="select select-block" value={draft.connectorDataDirection} onChange={(event) => update('connectorDataDirection', event.target.value as ProjectResourceDraft['connectorDataDirection'])}>
-                  <option value="read">只读</option>
-                  <option value="write">只写</option>
-                  <option value="bidirectional">双向</option>
-                </select>
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-capabilities`} label="能力清单（逗号分隔）">
-                <input id={`${baseId}-connector-capabilities`} className="input" value={draft.connectorCapabilities} onChange={(event) => update('connectorCapabilities', event.target.value)} required />
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-subject`} label="授权主体">
-                <select id={`${baseId}-connector-subject`} className="select select-block" value={draft.connectorAuthorizationSubject} onChange={(event) => update('connectorAuthorizationSubject', event.target.value as ProjectResourceDraft['connectorAuthorizationSubject'])}>
-                  <option value="personal">个人授权</option>
-                  <option value="shared">共享授权</option>
-                </select>
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-principal`} label="授权账户/组织 ID">
-                <input id={`${baseId}-connector-principal`} className="input" value={draft.connectorPrincipalId} onChange={(event) => update('connectorPrincipalId', event.target.value)} required />
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-scopes`} label="授权作用域（逗号分隔）">
-                <input id={`${baseId}-connector-scopes`} className="input" value={draft.connectorScopes} onChange={(event) => update('connectorScopes', event.target.value)} required />
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-version`} label="连接器版本">
-                <input id={`${baseId}-connector-version`} className="input" value={draft.connectorVersion} onChange={(event) => update('connectorVersion', event.target.value)} required />
-              </LifecycleField>
-              <LifecycleField id={`${baseId}-connector-reconciliation`} label="写操作对账">
-                <select id={`${baseId}-connector-reconciliation`} className="select select-block" value={draft.connectorReconciliation} onChange={(event) => update('connectorReconciliation', event.target.value as ProjectResourceDraft['connectorReconciliation'])}>
-                  <option value="queryable">可查询对账</option>
-                  <option value="manual_only">不透明/仅手动确认</option>
-                </select>
-              </LifecycleField>
-            </>
-          )}
+          {draft.kind === 'connector' && <ProjectConnectorFields baseId={baseId} draft={draft} update={update} />}
           <LifecycleField id={`${baseId}-label`} label={TEXT.resourceLabel}>
             <input id={`${baseId}-label`} name="resourceLabel" className="input" value={draft.label} onChange={(event) => update('label', event.target.value)} autoFocus />
           </LifecycleField>
@@ -215,6 +173,143 @@ export function ProjectResourceForm({
       </fieldset>
     </form>
   )
+}
+
+type ProjectResourceDraftUpdater = <K extends keyof ProjectResourceDraft>(
+  field: K,
+  value: ProjectResourceDraft[K]
+) => void
+
+function ProjectConnectorFields({
+  baseId,
+  draft,
+  update
+}: {
+  baseId: string
+  draft: ProjectResourceDraft
+  update: ProjectResourceDraftUpdater
+}): React.JSX.Element {
+  const [authorizationAccounts, setAuthorizationAccounts] = useState<Array<{ providerId: string; account: ProviderAuthorizationAccountView }>>([])
+  useEffect(() => {
+    let cancelled = false
+    void window.agentDesk.listProviders()
+      .then(async (providers) => {
+        const entries = await Promise.all(providers.map(async (provider) => {
+          try {
+            const accounts = await window.agentDesk.listProviderAuthorizationAccounts(provider.id)
+            return accounts.map((account) => ({ providerId: provider.id, account }))
+          } catch {
+            return []
+          }
+        }))
+        if (!cancelled) setAuthorizationAccounts(entries.flat())
+      })
+      .catch(() => {
+        if (!cancelled) setAuthorizationAccounts([])
+      })
+    return () => { cancelled = true }
+  }, [])
+  const selectedAccountValue = authorizationAccounts.find(({ providerId, account }) =>
+    draft.connectorCredentialRef === `oauth:${providerId}/${account.id}`)
+  return (
+    <>
+      <LifecycleField id={`${baseId}-connector-catalog`} label="连接器目录">
+        <select
+          id={`${baseId}-connector-catalog`}
+          name="connectorCatalog"
+          className="select select-block"
+          value={draft.connectorId}
+          onChange={(event) => {
+            const entry = PROJECT_CONNECTOR_CATALOG.find((candidate) => candidate.id === event.target.value) ?? PROJECT_CONNECTOR_CATALOG[PROJECT_CONNECTOR_CATALOG.length - 1]
+            updateConnectorFromCatalog(entry, update)
+          }}
+        >
+          {PROJECT_CONNECTOR_CATALOG.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+        </select>
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-usage`} label="用途">
+        <select
+          id={`${baseId}-connector-usage`}
+          className="select select-block"
+          value={draft.connectorUsage[0] ?? 'resource'}
+          onChange={(event) => update('connectorUsage', [event.target.value as ProjectResourceDraft['connectorUsage'][number]])}
+        >
+          <option value="resource">Project Resource</option>
+          <option value="knowledge_source">知识源</option>
+          <option value="tool">Tool</option>
+        </select>
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-direction`} label="数据方向">
+        <select id={`${baseId}-connector-direction`} className="select select-block" value={draft.connectorDataDirection} onChange={(event) => update('connectorDataDirection', event.target.value as ProjectResourceDraft['connectorDataDirection'])}>
+          <option value="read">只读</option>
+          <option value="write">只写</option>
+          <option value="bidirectional">双向</option>
+        </select>
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-capabilities`} label="能力清单（逗号分隔）">
+        <input id={`${baseId}-connector-capabilities`} className="input" value={draft.connectorCapabilities} onChange={(event) => update('connectorCapabilities', event.target.value)} required />
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-subject`} label="授权主体">
+        <select id={`${baseId}-connector-subject`} className="select select-block" value={draft.connectorAuthorizationSubject} onChange={(event) => update('connectorAuthorizationSubject', event.target.value as ProjectResourceDraft['connectorAuthorizationSubject'])}>
+          <option value="personal">个人授权</option>
+          <option value="shared">共享授权</option>
+        </select>
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-account`} label="已授权账户">
+        <select
+          id={`${baseId}-connector-account`}
+          className="select select-block"
+          value={selectedAccountValue ? `${selectedAccountValue.providerId}/${selectedAccountValue.account.id}` : ''}
+          onChange={(event) => {
+            const [providerId, accountId] = event.target.value.split('/', 2)
+            const selected = authorizationAccounts.find(({ providerId: candidateProviderId, account }) => candidateProviderId === providerId && account.id === accountId)
+            if (!selected) return
+            update('connectorPrincipalId', selected.account.id)
+            update('connectorCredentialRef', `oauth:${selected.providerId}/${selected.account.id}`)
+          }}
+        >
+          <option value="">手动填写账户或普通 Provider 凭据</option>
+          {authorizationAccounts.map(({ providerId, account }) => (
+            <option key={`${providerId}/${account.id}`} value={`${providerId}/${account.id}`} disabled={account.requiresReauth}>
+              {account.label} · {providerId}{account.requiresReauth ? ' · 需要重新授权' : ''}
+            </option>
+          ))}
+        </select>
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-principal`} label="授权账户/组织 ID">
+        <input id={`${baseId}-connector-principal`} className="input" value={draft.connectorPrincipalId} onChange={(event) => update('connectorPrincipalId', event.target.value)} required />
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-credential`} label="凭据引用（不填入令牌）">
+        <input id={`${baseId}-connector-credential`} className="input" value={draft.connectorCredentialRef} onChange={(event) => update('connectorCredentialRef', event.target.value)} placeholder="credential://..." />
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-scopes`} label="授权作用域（逗号分隔）">
+        <input id={`${baseId}-connector-scopes`} className="input" value={draft.connectorScopes} onChange={(event) => update('connectorScopes', event.target.value)} required />
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-version`} label="连接器版本">
+        <input id={`${baseId}-connector-version`} className="input" value={draft.connectorVersion} onChange={(event) => update('connectorVersion', event.target.value)} required />
+      </LifecycleField>
+      <LifecycleField id={`${baseId}-connector-reconciliation`} label="写操作对账">
+        <select id={`${baseId}-connector-reconciliation`} className="select select-block" value={draft.connectorReconciliation} onChange={(event) => update('connectorReconciliation', event.target.value as ProjectResourceDraft['connectorReconciliation'])}>
+          <option value="queryable">可查询对账</option>
+          <option value="manual_only">不透明/仅手动确认</option>
+        </select>
+      </LifecycleField>
+    </>
+  )
+}
+
+function updateConnectorFromCatalog(
+  entry: (typeof PROJECT_CONNECTOR_CATALOG)[number],
+  update: ProjectResourceDraftUpdater
+): void {
+  update('connectorId', entry.id)
+  update('location', entry.defaultUri)
+  update('connectorUsage', [...entry.usage])
+  update('connectorCapabilities', entry.capabilities.join(', '))
+  update('connectorDataDirection', entry.dataDirection)
+  update('connectorScopes', entry.scopes.join(', '))
+  update('connectorVersion', entry.version)
+  update('connectorReconciliation', entry.reconciliation)
 }
 
 export function ProjectDeleteDialog({

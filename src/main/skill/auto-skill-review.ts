@@ -95,7 +95,7 @@ export async function runAutoSkillReview(
     actor: {
       type: 'agent',
       id: 'auto-skill-review',
-      source: `session:${input.meta.id}`
+      source: `session-ref:${input.meta.id}`
     },
     now: options.now
   })

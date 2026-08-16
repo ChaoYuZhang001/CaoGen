@@ -61,6 +61,7 @@ export interface ProjectDeletionProof {
     sessionIds: string[]
     sdkSessionIds: string[]
     artifactBlobDigests: string[]
+    effectArtifactRefs?: string[]
   }
   authorizedPurge: {
     seq: number
@@ -102,6 +103,7 @@ export class ProjectDeletionProofStore {
     sessionIds: readonly string[]
     sdkSessionIds: readonly string[]
     artifactBlobDigests: readonly string[]
+    effectArtifactRefs: readonly string[]
     authorizedPurge: WorkflowLedgerAuthorizedPurgeRecord
     residuals: Readonly<Record<string, number>>
     externalResourcesBefore: readonly ProjectDeletionExternalResourceBoundary[]
@@ -146,7 +148,8 @@ export class ProjectDeletionProofStore {
       scope: {
         sessionIds: normalizedIds(input.sessionIds, 'sessionId'),
         sdkSessionIds: normalizedIds(input.sdkSessionIds, 'sdkSessionId'),
-        artifactBlobDigests: normalizedDigests(input.artifactBlobDigests)
+        artifactBlobDigests: normalizedDigests(input.artifactBlobDigests),
+        effectArtifactRefs: normalizedEffectArtifactRefs(input.effectArtifactRefs)
       },
       authorizedPurge: {
         seq: input.authorizedPurge.seq,
@@ -237,6 +240,10 @@ function assertProof(value: unknown, operationId: string, projectId: string): as
   const { proofDigest, ...body } = proof as ProjectDeletionProof
   if (projectAggregateDigest(body) !== proofDigest) throw new Error('project deletion proof digest mismatch')
   assertZeroResiduals(normalizedResiduals(proof.residuals ?? {}))
+  normalizedIds(proof.scope.sessionIds ?? [], 'sessionId')
+  normalizedIds(proof.scope.sdkSessionIds ?? [], 'sdkSessionId')
+  normalizedDigests(proof.scope.artifactBlobDigests ?? [])
+  normalizedEffectArtifactRefs(proof.scope.effectArtifactRefs ?? [])
   const before = normalizedExternalBoundaries(proof.externalResources.before ?? [])
   const after = normalizedExternalBoundaries(proof.externalResources.after ?? [])
   if (projectAggregateCanonicalJson(before) !== projectAggregateCanonicalJson(after)) {
@@ -304,6 +311,14 @@ function normalizedIds(values: readonly string[], label: string): string[] {
 function normalizedDigests(values: readonly string[]): string[] {
   if (!Array.isArray(values) || !values.every((value) => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value))) {
     throw new Error('artifact blob digest list is invalid')
+  }
+  return [...new Set(values)].sort()
+}
+
+function normalizedEffectArtifactRefs(values: readonly string[]): string[] {
+  if (!Array.isArray(values) || !values.every((value) =>
+    typeof value === 'string' && /^git-index\/[a-f0-9]{64}$/.test(value))) {
+    throw new Error('effect artifact reference list is invalid')
   }
   return [...new Set(values)].sort()
 }

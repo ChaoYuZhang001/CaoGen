@@ -8,6 +8,7 @@ import { writeDurableFileSync } from '../durable-file'
 import chokidar, { type FSWatcher } from 'chokidar'
 import initSqlJs from 'sql.js'
 import { languageForFile, parseCodeFile, type CodeSymbolKind } from './parsers/languages'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 type SqlValue = number | string | Uint8Array | null
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
@@ -708,9 +709,7 @@ function runRipgrepBinary(root: string, query: string, glob: string | undefined,
 }
 
 function isolatedRipgrepEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env }
-  delete env.RIPGREP_CONFIG_PATH
-  return env
+  return buildMinimalSubprocessEnv()
 }
 
 function fuzzyMatch(target: string, query: string): boolean {

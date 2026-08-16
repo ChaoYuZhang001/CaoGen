@@ -27,8 +27,9 @@ export default function TaskPlanWorkbench({
   const refresh = useStore((store) => store.refreshTaskPlan)
   const createVersion = useStore((store) => store.createTaskPlanVersion)
   const approve = useStore((store) => store.approveTaskPlan)
+  const dispatchApproved = useStore((store) => store.dispatchApprovedTaskPlan)
   const revoke = useStore((store) => store.revokeTaskPlanApproval)
-  const setTaskStrategy = useStore((store) => store.setTaskStrategy)
+  const execution = useStore((store) => store.sessions[sessionId]?.taskDagExecution)
   const [expanded, setExpanded] = useState(strategy === 'plan')
   const [loadedVersionId, setLoadedVersionId] = useState<string>()
   const [form, setForm] = useState(emptyPlanForm)
@@ -61,11 +62,8 @@ export default function TaskPlanWorkbench({
   }
   const approveAndExecute = async (): Promise<void> => {
     if (!await approveCurrent()) return
-    try {
-      await setTaskStrategy('execute')
-    } catch {
-      // The store already exposes the manager rejection in this workbench.
-    }
+    if (!current) return
+    await dispatchApproved(sessionId, { version: current.version, digest: current.digest })
   }
   const revokeCurrent = (): void => {
     if (current) void revoke(sessionId, { version: current.version, digest: current.digest })
@@ -73,7 +71,13 @@ export default function TaskPlanWorkbench({
 
   return (
     <section className="task-plan-workbench no-drag" data-task-plan-status={state?.approvalStatus ?? 'not_created'}>
-      <TaskPlanSummary t={t} state={state} expanded={expanded} onToggle={() => setExpanded((value) => !value)} />
+      <TaskPlanSummary
+        t={t}
+        state={state}
+        executionStatus={execution?.status}
+        expanded={expanded}
+        onToggle={() => setExpanded((value) => !value)}
+      />
       {state?.approvalStatus === 'approved' && state.projection && (
         <div className={`task-plan-projection task-plan-projection-${state.projection.mode}`}
           data-task-plan-projection={state.projection.mode}>
@@ -106,11 +110,12 @@ export default function TaskPlanWorkbench({
 interface TaskPlanSummaryProps {
   t: ReturnType<typeof useT>
   state?: TaskPlanStateView
+  executionStatus?: 'waiting' | 'running' | 'success' | 'failed'
   expanded: boolean
   onToggle(): void
 }
 
-function TaskPlanSummary({ t, state, expanded, onToggle }: TaskPlanSummaryProps): React.JSX.Element {
+function TaskPlanSummary({ t, state, executionStatus, expanded, onToggle }: TaskPlanSummaryProps): React.JSX.Element {
   const current = state?.currentVersion
   const statusLabel = state?.approvalStatus === 'approved'
     ? t('taskPlanApproved')
@@ -118,6 +123,13 @@ function TaskPlanSummary({ t, state, expanded, onToggle }: TaskPlanSummaryProps)
       ? t('taskPlanPending')
       : t('taskPlanNotCreated')
   const digest = current?.digest.slice(7, 19)
+  const executionLabel = executionStatus === 'waiting' || executionStatus === 'running'
+    ? t('taskPlanExecuting')
+    : executionStatus === 'success'
+      ? t('taskPlanExecutionComplete')
+      : executionStatus === 'failed'
+        ? t('taskPlanExecutionFailed')
+        : undefined
   return (
     <div className="task-plan-summary">
       <button type="button" className="task-plan-toggle" aria-expanded={expanded}
@@ -127,7 +139,7 @@ function TaskPlanSummary({ t, state, expanded, onToggle }: TaskPlanSummaryProps)
       <strong>{t('taskPlanTitle')}</strong>
       <span className="task-plan-version">v{current?.version ?? 0}{digest ? ` · ${digest}` : ''}</span>
       <span className={`task-plan-status task-plan-status-${state?.approvalStatus ?? 'not_created'}`}>
-        {statusLabel}
+        {statusLabel}{executionLabel ? ` · ${executionLabel}` : ''}
       </span>
     </div>
   )

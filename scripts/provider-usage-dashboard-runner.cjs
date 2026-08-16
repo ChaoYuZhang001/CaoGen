@@ -200,7 +200,19 @@ function installDashboardFixtures(alpha, beta, attempts) {
 async function verifyInitialDashboard(win) {
   await waitForRenderer(win, `document.querySelectorAll('.provider-usage-request-table tbody tr').length === 3`)
   await settleRenderer(win)
-  const ui = await rendererValue(win, `(() => {
+  const ui = await readInitialDashboard(win)
+  assertInitialOperationalSurface(ui)
+  assertInitialMetrics(ui)
+  check('request content and credential canaries never reach the DOM', !ui.privateCanary)
+  check('initial queries keep request pages bounded', queries.length >= 2 && queries.every((query) => query.limit <= 25 && query.offset === 0))
+  await capture(win, 'provider-settings-overview.png')
+  await rendererValue(win, `document.querySelector('[data-provider-usage-dashboard]')?.scrollIntoView({ block: 'start' })`)
+  await settleRenderer(win)
+  await capture(win, 'provider-usage-dashboard.png')
+}
+
+function readInitialDashboard(win) {
+  return rendererValue(win, `(() => {
     const dashboard = document.querySelector('[data-provider-usage-dashboard]');
     return {
       present: Boolean(dashboard),
@@ -226,38 +238,45 @@ async function verifyInitialDashboard(win) {
         || document.body.innerText.includes(${JSON.stringify(contentCanary)})
     };
   })()`)
+}
+
+function assertInitialOperationalSurface(ui) {
+  const labels = ['真实消耗 Token', '缓存命中率', '成功率', '平均延迟', '计价覆盖率', '最近请求', '来源', '价格来源']
+  const conditions = [
+    ui.present,
+    labels.every((text) => ui.text.includes(text)),
+    ui.aggregateTables === 0,
+    ui.viewTabs === 4,
+    ui.activeView === 'requests',
+    ui.trend,
+    ui.trendSeries === 5,
+    ui.costSources.length === 3,
+    ui.costSources.map((item) => item.label).join(',') === 'Provider \u4e0a\u62a5,\u914d\u7f6e\u5b9a\u4ef7,\u5185\u7f6e\u5b9a\u4ef7',
+    ui.costSources.map((item) => item.amount).join(',') === '$0.05,$0.01,$0.0010',
+    ui.costDisclosure.includes('\u4e0d\u4ee3\u66ff Provider \u6700\u7ec8\u8d26\u5355'),
+    !ui.costWarning,
+    ui.trendAxes.length === 2,
+    ui.trendAxes.every((axis) => axis.length === 5),
+    ui.trendAxes[1].every((value) => value.startsWith('$')),
+    ui.requestRows === 3
+  ]
   check('usage dashboard renders the complete operational surface',
-    ui.present
-      && ['真实消耗 Token', '缓存命中率', '成功率', '平均延迟', '计价覆盖率', '最近请求', '来源', '价格来源'].every((text) => ui.text.includes(text))
-      && ui.aggregateTables === 0
-      && ui.viewTabs === 4
-      && ui.activeView === 'requests'
-      && ui.trend
-      && ui.trendSeries === 5
-      && ui.costSources.length === 3
-      && ui.costSources.map((item) => item.label).join(',') === 'Provider \u4e0a\u62a5,\u914d\u7f6e\u5b9a\u4ef7,\u5185\u7f6e\u5b9a\u4ef7'
-      && ui.costSources.map((item) => item.amount).join(',') === '$0.05,$0.01,$0.0010'
-      && ui.costDisclosure.includes('\u4e0d\u4ee3\u66ff Provider \u6700\u7ec8\u8d26\u5355')
-      && !ui.costWarning
-      && ui.trendAxes.length === 2
-      && ui.trendAxes.every((axis) => axis.length === 5)
-      && ui.trendAxes[1].every((value) => value.startsWith('$'))
-      && ui.requestRows === 3,
+    conditions.every(Boolean),
     JSON.stringify({ totalTokens: ui.totalTokens, heroSummary: ui.heroSummary, kpis: ui.kpis, trendSeries: ui.trendSeries, trendAxes: ui.trendAxes, requestRows: ui.requestRows }))
+}
+
+function assertInitialMetrics(ui) {
+  const conditions = [
+    ui.totalTokens === '8.1k',
+    ui.heroSummary[0] === '3',
+    ui.heroSummary[1] === '$0.07',
+    ui.kpis[0] === '100%',
+    ui.kpis[1] === '210ms',
+    ui.kpis[2] === '100%'
+  ]
   check('initial metrics use full-range aggregates',
-    ui.totalTokens === '8.1k'
-      && ui.heroSummary[0] === '3'
-      && ui.heroSummary[1] === '$0.07'
-      && ui.kpis[0] === '100%'
-      && ui.kpis[1] === '210ms'
-      && ui.kpis[2] === '100%',
+    conditions.every(Boolean),
     JSON.stringify({ totalTokens: ui.totalTokens, heroSummary: ui.heroSummary, kpis: ui.kpis }))
-  check('request content and credential canaries never reach the DOM', !ui.privateCanary)
-  check('initial queries keep request pages bounded', queries.length >= 2 && queries.every((query) => query.limit <= 25 && query.offset === 0))
-  await capture(win, 'provider-settings-overview.png')
-  await rendererValue(win, `document.querySelector('[data-provider-usage-dashboard]')?.scrollIntoView({ block: 'start' })`)
-  await settleRenderer(win)
-  await capture(win, 'provider-usage-dashboard.png')
 }
 
 async function verifyUsageViews(win) {
@@ -429,6 +448,18 @@ async function verifyRangeFilter(win) {
 }
 
 async function verifyBillingReconciliation(win, alphaId) {
+  const storeFile = path.join(userDataDir, 'provider-billing-statements.json')
+  await createBillingStatement(win, storeFile)
+  await verifyBillingStatementRestoration(win, alphaId)
+  await verifyBillingCompactLayout(win)
+  await deleteBillingStatement(win, storeFile)
+  const firstSyncStore = await verifyOfficialBillingSync(win, storeFile)
+  await verifyIdempotentBillingSync(win, storeFile, firstSyncStore)
+  await capture(win, 'provider-billing-api-sync.png')
+  await deleteBillingStatement(win, storeFile)
+}
+
+async function createBillingStatement(win, storeFile) {
   await waitForRenderer(win, `document.querySelector('.provider-billing-actions button:last-child')?.disabled === false`)
   const opened = await rendererValue(win, `(() => {
     const button = document.querySelector('.provider-billing-actions button:last-child');
@@ -466,10 +497,11 @@ async function verifyBillingReconciliation(win, alphaId) {
   check('saved statement renders an incomplete result instead of a false match without complete local data',
     saved.status === 'incomplete' && saved.values.length === 4 && saved.reasonCount >= 1 && !saved.secretCanary,
     JSON.stringify(saved))
-  const storeFile = path.join(userDataDir, 'provider-billing-statements.json')
   check('billing statement is durably written to the isolated user-data store',
     fs.existsSync(storeFile) && JSON.parse(fs.readFileSync(storeFile, 'utf8')).statements.length === 1)
+}
 
+async function verifyBillingStatementRestoration(win, alphaId) {
   await rendererValue(win, `document.querySelector('[data-provider-surface="configuration"]')?.click()`)
   await waitForRenderer(win, `!document.querySelector('[data-provider-usage-dashboard]')`)
   await rendererValue(win, `document.querySelector('[data-provider-surface="usage"]')?.click()`)
@@ -478,7 +510,9 @@ async function verifyBillingReconciliation(win, alphaId) {
   await waitForRenderer(win, `Boolean(document.querySelector('.provider-billing-row'))`, 15_000)
   check('billing statement is restored after closing and reopening the usage surface',
     await rendererValue(win, `document.querySelectorAll('.provider-billing-row').length === 1`))
+}
 
+async function verifyBillingCompactLayout(win) {
   win.setSize(760, 700)
   await settleRenderer(win)
   await rendererValue(win, `document.querySelector('[data-provider-billing-reconciliation]')?.scrollIntoView({ block: 'start' })`)
@@ -498,7 +532,9 @@ async function verifyBillingReconciliation(win, alphaId) {
     JSON.stringify(compact))
   await capture(win, 'provider-billing-reconciliation.png')
   win.setSize(1200, 800)
+}
 
+async function deleteBillingStatement(win, storeFile) {
   await rendererValue(win, `(() => {
     window.confirm = () => true;
     document.querySelector('.provider-billing-remove')?.click();
@@ -507,7 +543,9 @@ async function verifyBillingReconciliation(win, alphaId) {
   const afterDelete = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
   check('billing statement can be deleted through the UI and stays deleted in the store',
     afterDelete.statements.length === 0)
+}
 
+async function verifyOfficialBillingSync(win, storeFile) {
   await waitForRenderer(win, `document.querySelector('.provider-billing-sync')?.disabled === false`)
   await rendererValue(win, `document.querySelector('.provider-billing-sync')?.click()`)
   await waitForRenderer(win, `document.querySelectorAll('.provider-billing-row').length === 1`, 15_000)
@@ -537,7 +575,10 @@ async function verifyBillingReconciliation(win, alphaId) {
       && Number(billingRequests[0].end) > Number(billingRequests[0].start)
       && !JSON.stringify(billingRequests[0]).includes(secretCanary),
     JSON.stringify(billingRequests[0]))
+  return firstSyncStore
+}
 
+async function verifyIdempotentBillingSync(win, storeFile, firstSyncStore) {
   const firstStatementId = firstSyncStore.statements[0].id
   await rendererValue(win, `document.querySelector('.provider-billing-sync')?.click()`)
   await waitFor(() => billingRequests.length === 2, 5_000)
@@ -545,13 +586,6 @@ async function verifyBillingReconciliation(win, alphaId) {
   const secondSyncStore = JSON.parse(fs.readFileSync(storeFile, 'utf8'))
   check('repeated same-period official sync updates idempotently',
     secondSyncStore.statements.length === 1 && secondSyncStore.statements[0].id === firstStatementId)
-  await capture(win, 'provider-billing-api-sync.png')
-
-  await rendererValue(win, `(() => {
-    window.confirm = () => true;
-    document.querySelector('.provider-billing-remove')?.click();
-  })()`)
-  await waitForRenderer(win, `document.querySelectorAll('.provider-billing-row').length === 0`, 15_000)
 }
 
 async function verifyCompactLayout(win) {
@@ -620,6 +654,19 @@ async function verifyProviderInformationOrder(win) {
 }
 
 async function verifyProviderConnectionDiagnostic(win, provider) {
+  installConnectionDiagnosticFixture(provider)
+  await triggerConnectionDiagnostic(win, provider)
+  await verifyProviderEditorNavigation(win)
+  await verifyAuthorizationRouting(win)
+  await updateAuthorizationRouting(win, provider)
+  await verifyConnectionDiagnosticDetails(win)
+  await verifyConnectionDiagnosticRepairAction(win)
+  await verifyRuntimeConfigPanel(win)
+  await verifyBillingQueryConfigPanel(win)
+  win.setSize(1200, 800)
+}
+
+function installConnectionDiagnosticFixture(provider) {
   ipcMain._invokeHandlers.set('providers:fetchModels', async () => ({
     ok: false,
     providerId: provider.id,
@@ -636,13 +683,23 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
       reasonCode: 'base_url_or_credentials_mismatch',
       suggestedAction: 'review_base_url_and_credentials',
       credentialStyle: { authMode: 'api-key', headerNames: ['Authorization'] },
+      diagnosticContext: {
+        engine: 'openai',
+        generationProtocol: 'openai-chat-completions',
+        generationEndpointPath: '/v1/chat/completions',
+        credentialSource: 'stored-active',
+        credentialLabel: 'Primary account',
+        catalogProbeOnly: true
+      },
       attempts: [
         { endpointPath: '/v1/models', result: 'auth', status: 401 },
         { endpointPath: '/models', result: 'not_found', status: 404 }
       ]
     }
   }))
+}
 
+async function triggerConnectionDiagnostic(win, provider) {
   const probeClicked = await rendererValue(win, `(() => {
     const row = [...document.querySelectorAll('.provider-row')]
       .find((candidate) => candidate.querySelector('.provider-row-name')?.textContent.includes(${JSON.stringify(provider.name)}));
@@ -654,7 +711,9 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
   await waitForRenderer(win, `Boolean(document.querySelector('.provider-probe-bad button'))`)
   await rendererValue(win, `document.querySelector('.provider-probe-bad button')?.click()`)
   await waitForRenderer(win, `Boolean(document.querySelector('[data-provider-connection-diagnostic]'))`)
+}
 
+async function verifyProviderEditorNavigation(win) {
   const editorNavigation = await rendererValue(win, `({
     items: document.querySelectorAll('.provider-editor-section-nav button').length,
     pricingTarget: Boolean(document.querySelector('[data-provider-model-catalog]')),
@@ -663,7 +722,9 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
   check('Provider editor exposes direct authorization, connection, model, pricing, and reliability navigation',
     editorNavigation.items === 5 && editorNavigation.pricingTarget && editorNavigation.reliabilityTarget,
     JSON.stringify(editorNavigation))
+}
 
+async function verifyAuthorizationRouting(win) {
   await waitForRenderer(win, `document.querySelectorAll('[data-provider-authorization-routing] .provider-authorization-routing-account').length === 2`)
   const authorizationRouting = await rendererValue(win, `(() => {
     const routing = document.querySelector('[data-provider-authorization-routing]');
@@ -686,7 +747,9 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
   await rendererValue(win, `document.querySelector('[data-provider-authorization-routing]')?.scrollIntoView({ block: 'start' })`)
   await settleRenderer(win)
   await capture(win, 'provider-authorization-routing.png')
+}
 
+async function updateAuthorizationRouting(win, provider) {
   await rendererValue(win, `(async () => {
     await window.agentDesk.bindProviderAuthorizationAccount(
       ${JSON.stringify(provider.id)}, '', { kind: 'routing-mode', mode: 'automatic' }
@@ -699,7 +762,9 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
   check('OAuth routing mode and account priority save through real renderer IPC',
     authorizationRoutingMode === 'automatic'
       && authorizationPolicies.get('account-alpha-primary')?.priority === 7)
+}
 
+async function verifyConnectionDiagnosticDetails(win) {
   const diagnostic = await rendererValue(win, `(() => {
     const panel = document.querySelector('[data-provider-connection-diagnostic]');
     return {
@@ -716,9 +781,15 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
   check('401 diagnostics do not expose credential values', !diagnostic.bodyHasSecret)
 
   await capture(win, 'provider-connection-diagnostic.png')
+}
+
+async function verifyConnectionDiagnosticRepairAction(win) {
   await rendererValue(win, `document.querySelector('[data-provider-connection-diagnostic] button')?.click()`)
   const focusedField = await rendererValue(win, `document.activeElement?.getAttribute('data-provider-field')`)
   check('diagnostic action focuses the Base URL field for repair', focusedField === 'base-url', String(focusedField))
+}
+
+async function verifyRuntimeConfigPanel(win) {
   await rendererValue(win, `document.querySelector('[data-provider-runtime-config]')?.scrollIntoView({ block: 'start' })`)
   await settleRenderer(win)
   const runtimePanel = await rendererValue(win, `(() => {
@@ -737,7 +808,9 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
       && !runtimePanel.overflow,
     JSON.stringify(runtimePanel))
   await capture(win, 'provider-runtime-config.png')
+}
 
+async function verifyBillingQueryConfigPanel(win) {
   await rendererValue(win, `document.querySelector('[data-provider-billing-query]')?.scrollIntoView({ block: 'start' })`)
   await settleRenderer(win)
   win.setSize(760, 700)
@@ -764,7 +837,6 @@ async function verifyProviderConnectionDiagnostic(win, provider) {
       && !billingConfig.bodyHasSecret,
     JSON.stringify(billingConfig))
   await capture(win, 'provider-billing-api-config.png')
-  win.setSize(1200, 800)
 }
 
 function accountPolicy(priority) {

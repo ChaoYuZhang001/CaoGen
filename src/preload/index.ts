@@ -35,6 +35,8 @@ import type {
 import { resolveTaskDagFinalization } from './task-dag-finalization'
 import { workflowLedgerApi } from './workflow-ledger'
 import { projectWorkspaceApi } from './project-workspace'
+import { remoteContinuationApi } from './remote-continuation'
+import { dataRetentionApi } from './data-retention'
 import { projectTestApi } from './project-test'
 import { projectDebugApi } from './project-debug'
 import { projectRefactorApi } from './project-refactor'
@@ -45,9 +47,12 @@ import { supervisorApi } from './supervisor'
 import { taskPlanApi } from './task-plan'
 import { migrationApi } from './migration'
 import { studioResultApi } from './studio-result'
+import { mediaApi } from './media'
+import { sessionQueryApi } from './session-query'
 
 const api: AgentDeskApi = {
   listSessions: () => ipcRenderer.invoke('sessions:list'),
+  ...sessionQueryApi,
   listPendingPermissions: (sessionId: string) =>
     ipcRenderer.invoke('sessions:pendingPermissions', sessionId),
   getTranscript: (sessionId: string) => ipcRenderer.invoke('sessions:transcript', sessionId),
@@ -71,6 +76,8 @@ const api: AgentDeskApi = {
   listTaskSnapshots: () => ipcRenderer.invoke('taskSnapshots:list'),
   ...workflowLedgerApi,
   ...projectWorkspaceApi,
+  ...remoteContinuationApi,
+  ...dataRetentionApi,
   ...projectTestApi,
   ...projectDebugApi,
   ...projectRefactorApi,
@@ -80,6 +87,7 @@ const api: AgentDeskApi = {
   ...supervisorApi,
   ...taskPlanApi,
   ...studioResultApi,
+  ...mediaApi,
   recoverTaskSnapshot: (snapshotId: string) =>
     ipcRenderer.invoke('taskSnapshots:recover', snapshotId),
   resolveTaskEffect: (
@@ -129,12 +137,12 @@ const api: AgentDeskApi = {
   deleteHistory: (id: string) => ipcRenderer.invoke('history:delete', id),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke('settings:update', patch),
-  listGuiAutomationGrants: () => ipcRenderer.invoke('permissions:gui-grants:list'),
-  revokeGuiAutomationGrant: (grantId) => ipcRenderer.invoke('permissions:gui-grants:revoke', grantId),
-  revokeAllGuiAutomationGrants: () => ipcRenderer.invoke('permissions:gui-grants:revoke-all'),
-  listToolCapabilityGrants: () => ipcRenderer.invoke('permissions:tool-grants:list'),
-  revokeToolCapabilityGrant: (grantId) => ipcRenderer.invoke('permissions:tool-grants:revoke', grantId),
-  revokeAllToolCapabilityGrants: () => ipcRenderer.invoke('permissions:tool-grants:revoke-all'),
+  listGuiAutomationGrants: () => invokeMain('permissions:grants:list', 'gui'),
+  revokeGuiAutomationGrant: (grantId) => invokeMain('permissions:grants:revoke', 'gui', grantId),
+  revokeAllGuiAutomationGrants: () => invokeMain('permissions:grants:revoke', 'gui'),
+  listToolCapabilityGrants: () => invokeMain('permissions:grants:list', 'tool'),
+  revokeToolCapabilityGrant: (grantId) => invokeMain('permissions:grants:revoke', 'tool', grantId),
+  revokeAllToolCapabilityGrants: () => invokeMain('permissions:grants:revoke', 'tool'),
   queryProviderUsage: (query) => ipcRenderer.invoke('providers:usage', query ?? {}),
   getProviderGatewayStatus: () => ipcRenderer.invoke('providers:gateway:status'),
   updateProviderGateway: (input) => ipcRenderer.invoke('providers:gateway:update', input),
@@ -200,6 +208,8 @@ const api: AgentDeskApi = {
     invokeMain('appFeatures:invoke', 'provider-profile', 'backup-apply', previewId),
   rollbackProviderProfileBackup: (backupId: string) =>
     invokeMain('appFeatures:invoke', 'provider-profile', 'rollback', backupId),
+  deleteProviderProfileBackup: (backupId: string) =>
+    invokeMain('appFeatures:invoke', 'provider-profile', 'backup-delete', backupId),
   getProviderProfileSyncStatus: () =>
     invokeMain('appFeatures:invoke', 'provider-profile-sync', 'status'),
   chooseProviderProfileSyncDirectory: () =>
@@ -328,16 +338,22 @@ const api: AgentDeskApi = {
     ipcRenderer.invoke('worktrees:createPr', sessionId),
   removeWorktree: (sessionId: string, opts?: { deleteBranch?: boolean; force?: boolean }) =>
     ipcRenderer.invoke('worktrees:remove', sessionId, opts),
-  listProjectFiles: (sessionId: string) => ipcRenderer.invoke('files:list', sessionId),
-  searchProjectText: (sessionId: string, query: string) => ipcRenderer.invoke('files:search', sessionId, query),
-  listProjectDiagnostics: (sessionId: string) => ipcRenderer.invoke('files:diagnostics', sessionId),
-  searchProjectSymbols: (sessionId: string, query: string, limit?: number) => ipcRenderer.invoke('files:symbols', sessionId, query, limit),
-  resolveProjectDefinition: (sessionId: string, path: string, symbol: string) => ipcRenderer.invoke('files:definition', sessionId, path, symbol),
-  getTypeScriptCompletions: (sessionId, input) => ipcRenderer.invoke('files:typescriptCompletions', sessionId, input),
-  getTypeScriptHover: (sessionId, input) => ipcRenderer.invoke('files:typescriptHover', sessionId, input),
-  getTypeScriptDefinitions: (sessionId, input) => ipcRenderer.invoke('files:typescriptDefinitions', sessionId, input),
-  getTypeScriptDiagnostics: (sessionId, input) => ipcRenderer.invoke('files:typescriptDiagnostics', sessionId, input),
-  readTextFile: (sessionId: string, path: string) => ipcRenderer.invoke('files:read', sessionId, path),
+  listProjectFiles: (sessionId: string) => invokeMain('files:intelligence', 'list', sessionId),
+  searchProjectText: (sessionId: string, query: string) => invokeMain('files:intelligence', 'search', sessionId, query),
+  listProjectDiagnostics: (sessionId: string) => invokeMain('files:intelligence', 'diagnostics', sessionId),
+  searchProjectSymbols: (sessionId: string, query: string, limit?: number) =>
+    invokeMain('files:intelligence', 'symbols', sessionId, query, limit),
+  resolveProjectDefinition: (sessionId: string, path: string, symbol: string) =>
+    invokeMain('files:intelligence', 'definition', sessionId, path, symbol),
+  getTypeScriptCompletions: (sessionId, input) =>
+    invokeMain('files:intelligence', 'typescriptCompletions', sessionId, input),
+  getTypeScriptHover: (sessionId, input) =>
+    invokeMain('files:intelligence', 'typescriptHover', sessionId, input),
+  getTypeScriptDefinitions: (sessionId, input) =>
+    invokeMain('files:intelligence', 'typescriptDefinitions', sessionId, input),
+  getTypeScriptDiagnostics: (sessionId, input) =>
+    invokeMain('files:intelligence', 'typescriptDiagnostics', sessionId, input),
+  readTextFile: (sessionId: string, path: string) => invokeMain('files:intelligence', 'read', sessionId, path),
   writeTextFile: (sessionId: string, path: string, content: string) =>
     ipcRenderer.invoke('files:write', sessionId, path, content),
   preparePreview: (sessionId: string, path: string) => ipcRenderer.invoke('preview:prepare', sessionId, path),

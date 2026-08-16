@@ -5,6 +5,7 @@ import type { Engine } from './engine'
 import { registerBuiltinEngines } from './engines'
 import { fixPathForGuiLaunch } from './pathFix'
 import { configureModelStatsDir } from './modelStats'
+import { configureAcceptanceQualityFeedback } from './model/acceptance-quality-feedback'
 import { configureProviderHealthDir } from './providerHealth'
 import { upsertHistory, listHistory } from './history'
 import { getSettings } from './settings'
@@ -20,7 +21,7 @@ import {
   transcriptForkSeedEntries
 } from './transcript'
 import { touchProject } from './projects'
-import { managedWorktreeRecordForSession } from './worktrees'
+import { inspectManagedWorktreeRegistryRecord, managedWorktreeRecordForSession } from './worktrees'
 import {
   assertTaskSnapshotWorktreeProjection,
   managedSessionPlacement, prepareSessionCreationDraft,
@@ -48,7 +49,7 @@ import {
 } from './session-active-registry'
 import {
   buildTaskSnapshotReplayPrompts, canTrackCost, cleanOneLine, effectiveBudgetUsd, estimateTurnCostUsd,
-  managedSessionSendGateError, mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, rejectSessionSend, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
+  managedSessionSendGateError, managedTaskRunSendGateError, mapWithConcurrencyInOrder, normalizePositiveNumber, normalizeTaskId, rejectSessionSend, requireDagPromptAccepted, sendableSession, shouldDispatchChildResult,
   shouldPersistActiveRegistry, shouldResumeDagFinalization, subagentCwd, subtaskStatusFromDag,
   subtaskStatusFromSession, withSessionCreationJournalBarrier, SessionWorkflowRuntime,
   type ManagedSessionCreationOptions
@@ -72,6 +73,7 @@ import { ModelAttemptRecoveryGate } from './task/model-attempt-recovery-gate'
 import { TaskSnapshotReplayCoordinator } from './task/task-snapshot-replay'
 import { SubagentOrchestrationCoordinator } from './task/subagent-orchestration-coordinator'
 import {
+  createTaskRun,
   createSessionTaskRun,
   isTaskRunTerminal,
   transitionTaskRun
@@ -80,7 +82,7 @@ import { recoverTaskExecutionState } from './task/task-execution'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { reconcileSnapshotWithReceipts } from './task/task-recovery'
 import {
-  reconcilePersistedTaskSnapshot,
+  reconcileExistingPersistedTaskSnapshot,
   resolvePersistedTaskEffect,
   runHasUnresolvedEffects
 } from './task/effect-runtime'
@@ -103,7 +105,9 @@ import {
 import { buildDagTaskPrompt, TaskDagScheduler, type TaskDagSchedulerCallbacks } from './agent/dag-scheduler'
 import { TaskDagFinalizationCoordinator } from './task/dag-finalization-coordinator'
 import { requirePlanningTaskStrategy } from './task/task-strategy'
+import { redactSensitiveValue } from './security/secret-redaction'
 import { TaskPlanSessionCoordinator } from './task/task-plan-session-coordinator'
+import { approvedTaskPlanToDag, taskDagToPlanDraft } from './task/task-plan-dag'
 import { ModelCrossValidationRuntime } from './model/cross-validation-runtime'
 import type {
   AgentEvent,
@@ -131,12 +135,19 @@ import type {
   TaskSnapshotSubtaskState,
   TaskPlanApprovalInput,
   TaskPlanDraftInput,
+  TaskPlanDispatchResult,
+  TaskPlanGenerateInput,
   TaskPlanStateView,
   TaskRunRecord,
   TranscriptEntry
 } from '../shared/types'
+import type { SupervisorRunRecord } from '../shared/supervisor-types'
 import type { ModelAttemptReconciliationResolution } from '../shared/model-attempt-types'
-import { resumeProjectDeletions } from './data-lifecycle/project-deletion-coordinator'
+import { resumeProjectPermanentDeletionEffects } from './project-deletion-effect'
+import {
+  deleteStandaloneSession,
+  resumeSessionDeletions
+} from './data-lifecycle/session-deletion-coordinator'
 import {
   archiveConversationLedgerFromJsonl,
   backfillConversationLedgerArchives,
@@ -146,6 +157,28 @@ import {
   conversationLedgerArchiveIdentity,
   type ConversationLedgerArchiveIdentity
 } from './task/conversation-ledger-store'
+import { resolveWorkspaceSessionCwd } from './project-workspace/workspace-session-cwd'
+import type {
+  WorkItemTransferRuntimeContinueInput,
+  WorkItemTransferRuntimePreparation,
+  WorkItemTransferRuntimePrepareInput
+} from './project-workspace/work-item-transfer-service'
+import type { WorkItemTransferContinuation } from '../shared/project-workspace-types'
+import { queryWorkflowEvidence } from './task/workflow-ledger-api'
+import {
+  buildWorkflowAcceptanceRepairPrompt,
+  startWorkflowAcceptanceRepair
+} from './task/workflow-acceptance-repair-runtime'
+import {
+  markWorkflowAcceptanceRepairTerminalFailure,
+  markWorkflowAcceptanceRepairVerifying
+} from './task/workflow-acceptance-repair-service'
+import type {
+  WorkflowAcceptanceRecord,
+  WorkflowAcceptanceRepairStartResult
+} from '../shared/workflow-types'
+import type { WorkItem } from '../shared/project-workspace-types'
+import type { WorkflowAcceptanceFailureResult } from './task/workflow-acceptance-failure-ingress'
 
 const TASK_SNAPSHOT_RECONCILIATION_CONCURRENCY = 4
 
@@ -176,6 +209,9 @@ class SessionManager {
   private readonly dagSchedulers = new Map<string, TaskDagScheduler>()
   /** DAG 最新执行视图:用于恢复/快照保留已经完成或已从调度器移除的 DAG 状态。 */
   private readonly dagExecutionSnapshots = new Map<string, TaskDagExecutionView>()
+  /** Serializes repeated approval clicks before the deterministic DAG becomes observable. */
+  private readonly approvedPlanDispatches = new Map<string, Promise<TaskPlanDispatchResult>>()
+  private readonly workflowAcceptanceRepairStarts = new Map<string, Promise<WorkflowAcceptanceRepairStartResult>>()
   /** DAG 完成后执行的显式自动合并配置;默认不写主工作区。 */
   private readonly dagAutoMergeOptions = new Map<string, { enabled: boolean; verificationCommand?: string }>()
   private readonly dagRuntimeMergeSessions = new Map<string, TaskDagRuntimeMergeSession[]>()
@@ -209,7 +245,8 @@ class SessionManager {
     getMeta: (sessionId) => this.sessions.get(sessionId)?.meta,
     getTranscript: (sessionId) => this.sessions.get(sessionId)?.getTranscript() ?? [], getRun: (sessionId) => this.taskRuns.get(sessionId),
     send: (sessionId, prompt) => this.send(sessionId, prompt),
-    dispatch: (sessionId, event) => this.dispatch(sessionId, event, 0)
+    dispatch: (sessionId, event) => this.dispatch(sessionId, event, 0),
+    onAcceptanceFailure: async (failure) => { await this.startWorkflowAcceptanceRepairFromFailure(failure) }
   })
   private readonly workflow = new SessionWorkflowRuntime({
     sessions: this.sessions,
@@ -217,7 +254,8 @@ class SessionManager {
     snapshotState: (sessionId, seq) => this.snapshotCounts.get(sessionId) ?? { total: 0, lastSeq: seq },
     subtasks: (sessionId) => this.snapshotSubtasksFor(sessionId),
     dagExecutions: (sessionId) => this.snapshotDagExecutionsFor(sessionId),
-    dagRuntimes: (sessionId) => this.snapshotDagRuntimesFor(sessionId)
+    dagRuntimes: (sessionId) => this.snapshotDagRuntimesFor(sessionId),
+    onAcceptanceFailure: async (failure) => { await this.startWorkflowAcceptanceRepairFromFailure(failure) }
   }, { userDataRoot: app.getPath('userData') })
   /** 非 Claude 引擎由 SessionManager 统一托管防休眠;Claude AgentSession 内部已有同等保护。 */
   private readonly enginePowerBlockers = new Map<string, number>()
@@ -244,6 +282,60 @@ class SessionManager {
 
   list(): SessionMeta[] { return [...this.sessions.values()].map((s) => ({ ...s.meta })) }
   get(id: string): Engine | undefined { return this.sessions.get(id) }
+
+  async deleteHistorySession(idInput: string): Promise<boolean> {
+    await this.whenInitialized()
+    const id = idInput.trim()
+    if (!id) return false
+    const history = listHistory().find((entry) => entry.id === id)
+    if (!history) return false
+    const active = [...this.sessions.values()].find((session) =>
+      session.meta.id === history.id || session.meta.sdkSessionId === history.sdkSessionId)
+    if (active) throw new Error('活动会话不能删除；请先停止并关闭会话。')
+
+    await this.workflow.flush(history.id)
+    this.workflow.assertRecoveryResolved(history.id)
+    const snapshot = await getTaskSnapshot(history.id)
+    if (snapshot) await this.modelAttemptRecoveryGate.assertSnapshotDeletable(snapshot, app.getPath('userData'))
+    const operationWaiting = snapshot?.run?.operation && snapshot.run.status === 'waiting_reconciliation'
+    if (runHasUnresolvedEffects(snapshot?.run) || operationWaiting) {
+      throw new Error('waiting_reconciliation 效果尚未处置，不能删除会话；请先确认已执行或未执行。')
+    }
+    if (this.dagFinalizationCoordinator.hasIncomplete(history.id)) {
+      throw new Error('DAG finalizer 尚未完成，不能删除父任务会话。')
+    }
+
+    const worktree = inspectManagedWorktreeRegistryRecord(history.id)
+    if ('error' in worktree) throw new Error(worktree.error)
+    if (worktree.record?.state === 'active') {
+      throw new Error('managed worktree 尚未移除；请先完成现有 remove Effect。')
+    }
+    if (!worktree.record && history.worktreeState === 'active') {
+      throw new Error('历史记录仍声明 active managed worktree，但 registry 记录缺失；已阻止删除。')
+    }
+
+    await deleteStandaloneSession(
+      history.id,
+      history.sdkSessionId,
+      app.getPath('userData'),
+      {
+        retentionAnchorAt: history.updatedAt,
+        relatedLegalHoldSubjects: [
+          history.workspaceId,
+          history.projectId,
+          history.personalWorkspaceId
+        ].filter((id): id is string => Boolean(id)).map((id) => ({ kind: 'project', id }))
+      }
+    )
+    this.snapshotCounts.delete(history.id)
+    this.recentEventIds.delete(history.id)
+    this.effectRecoveryPreservedSessions.delete(history.id)
+    this.recoveredPendingSessions.delete(history.id)
+    this.blockedPendingDagSessions.delete(history.id)
+    this.retainedSessionCreationJournals.delete(history.id)
+    this.modelAttemptRecoveryGate.clearSession(history.id)
+    return true
+  }
 
   async rewindFiles(id: string, messageId: string, dryRun: boolean): Promise<RewindResult> {
     const session = this.sessions.get(id)
@@ -412,20 +504,106 @@ class SessionManager {
     return this.taskPlans.get(id)
   }
 
-  createTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+  createTaskPlanVersion(id: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView> {
     return this.taskPlans.createManualVersion(id, draft)
   }
 
-  createAgentTaskPlanVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+  createAgentTaskPlanVersion(id: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView> {
     return this.taskPlans.createAgentVersion(id, draft)
   }
 
-  approveTaskPlan(id: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView> {
-    return this.taskPlans.approve(id, input)
+  async generateTaskPlan(id: string, input: TaskPlanGenerateInput): Promise<TaskPlanStateView> {
+    const session = this.sessions.get(id)
+    if (!session) throw new Error('会话不存在')
+    const objective = typeof input?.objective === 'string' ? input.objective.replace(/\s+/g, ' ').trim() : ''
+    if (!objective || objective.length > 20_000) throw new Error('工作流目标无效')
+    const existing = this.taskPlans.get(id)
+    if (existing.currentVersion) {
+      const current = await this.taskPlans.createGeneratedVersion(id, { ...existing.currentVersion, objective })
+      this.recordPlanningObjective(session, objective)
+      return current
+    }
+    this.recordPlanningObjective(session, objective)
+    const decomposed = await decomposeTask({
+      request: objective,
+      cwd: session.meta.sourceCwd ?? session.meta.cwd,
+      useModel: false
+    })
+    return await this.taskPlans.createGeneratedVersion(id, taskDagToPlanDraft(decomposed.dag, {
+      reason: decomposed.reason,
+      warnings: decomposed.warnings
+    }))
   }
 
-  revokeTaskPlanApproval(id: string, input: TaskPlanApprovalInput): TaskPlanStateView {
-    return this.taskPlans.revoke(id, input)
+  private recordPlanningObjective(session: Engine, objective: string): void {
+    const messageId = `plan-objective-${createHash('sha256')
+      .update(`caogen.plan-objective.v1\0${session.meta.id}\0${objective}`)
+      .digest('hex')
+      .slice(0, 32)}`
+    if (session.getTranscript().some((entry) =>
+      entry.event.kind === 'user-message' && entry.event.messageId === messageId)) return
+    if (!session.emitSyntheticEvent) throw new Error('会话引擎不支持本地目标记录')
+    session.emitSyntheticEvent({ kind: 'user-message', text: objective, messageId })
+  }
+
+  approveTaskPlan(id: string, input: TaskPlanApprovalInput, actorId = 'local-user'): Promise<TaskPlanStateView> {
+    return this.taskPlans.approve(id, input, actorId)
+  }
+
+  async dispatchApprovedTaskPlan(
+    id: string,
+    input: TaskPlanApprovalInput
+  ): Promise<TaskPlanDispatchResult> {
+    const dispatchKey = `${id}:${input.version}:${input.digest}`
+    const pending = this.approvedPlanDispatches.get(dispatchKey)
+    if (pending) return pending
+    const operation = this.dispatchApprovedTaskPlanOnce(id, input)
+    this.approvedPlanDispatches.set(dispatchKey, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.approvedPlanDispatches.get(dispatchKey) === operation) {
+        this.approvedPlanDispatches.delete(dispatchKey)
+      }
+    }
+  }
+
+  private async dispatchApprovedTaskPlanOnce(
+    id: string,
+    input: TaskPlanApprovalInput
+  ): Promise<TaskPlanDispatchResult> {
+    const approved = this.taskPlans.requireApprovedVersion(id, input)
+    const dag = approvedTaskPlanToDag(id, approved.version, approved.projection)
+    const existing = this.currentTaskDagExecution(dag.id)
+    await this.taskPlans.setStrategy(id, 'execute')
+    const result = existing
+      ? { execution: this.assertMatchingTaskDag(id, dag, existing), children: [] }
+      : await this.dispatchTaskDag(id, { dag, isolated: this.sessions.get(id)?.meta.isolated === true })
+    return {
+      executionId: result.execution.id,
+      status: result.execution.status,
+      taskCount: result.execution.tasks.length,
+      reused: Boolean(existing)
+    }
+  }
+
+  private currentTaskDagExecution(executionId: string): TaskDagExecutionView | undefined {
+    return this.dagExecutionSnapshots.get(executionId) ?? this.dagSchedulers.get(executionId)?.view()
+  }
+
+  private assertMatchingTaskDag(
+    parentSessionId: string,
+    dag: TaskDagDispatchInput['dag'],
+    execution: TaskDagExecutionView
+  ): TaskDagExecutionView {
+    if (execution.parentSessionId !== parentSessionId || JSON.stringify(execution.dag) !== JSON.stringify(dag)) {
+      throw new Error('已有同 ID 的 DAG 与当前批准版本不一致，已阻止重复执行')
+    }
+    return execution
+  }
+
+  revokeTaskPlanApproval(id: string, input: TaskPlanApprovalInput, actorId = 'local-user'): Promise<TaskPlanStateView> {
+    return this.taskPlans.revoke(id, input, actorId)
   }
 
   assertInteractiveExecutionAuthorized(id: string, action: string): void {
@@ -458,6 +636,206 @@ class SessionManager {
       true
     )
     return this.getTaskRun(sessionId)
+  }
+
+  async prepareWorkItemTransfer(
+    input: WorkItemTransferRuntimePrepareInput
+  ): Promise<WorkItemTransferRuntimePreparation> {
+    await this.whenInitialized()
+    const candidates = [...this.sessions.values()]
+      .filter((session) =>
+        session.meta.workspaceId === input.projectId &&
+        session.meta.workItemId === input.workItemId)
+      .sort((left, right) => right.meta.createdAt - left.meta.createdAt)
+    const frozen = await Promise.all(candidates.map((session) =>
+      withSessionOperationQueue(
+        session.meta.id,
+        () => this.supervisor.freezeForWorkItemTransfer(session.meta.id)
+      ).then((run) => ({ sessionId: session.meta.id, run }))
+    ))
+    const predecessor = frozen.find((candidate) => candidate.run && !isTaskRunTerminal(candidate.run.status)) ??
+      frozen.find((candidate) => candidate.run) ?? frozen[0]
+    return {
+      pausedSessionIds: frozen.map((candidate) => candidate.sessionId),
+      pausedRunIds: frozen.flatMap((candidate) => candidate.run ? [candidate.run.id] : []),
+      ...(predecessor ? { predecessorSessionId: predecessor.sessionId } : {}),
+      ...(predecessor?.run ? { predecessorRunId: predecessor.run.id } : {})
+    }
+  }
+
+  async blockRevokedConnectorSource(
+    projectId: string,
+    resourceId: string
+  ): Promise<{ pausedSessionIds: string[]; pausedRunIds: string[] }> {
+    await this.whenInitialized()
+    const evidence = []
+    let cursor: string | undefined
+    do {
+      const page = await queryWorkflowEvidence({
+        projectId,
+        kind: 'research_source',
+        limit: 500,
+        ...(cursor ? { cursor } : {})
+      }, app.getPath('userData'))
+      evidence.push(...page.items)
+      cursor = page.nextCursor
+    } while (cursor)
+    const matching = evidence.filter((record) => record.metadata?.resourceId === resourceId)
+    const referencedRunIds = new Set(matching.flatMap((record) => record.runId ? [record.runId] : []))
+    const referencedWorkItemIds = new Set(matching.flatMap((record) => record.workItemId ? [record.workItemId] : []))
+    const candidates = [...this.sessions.values()]
+      .map((session) => ({ session, run: this.taskRuns.get(session.meta.id) }))
+      .filter(({ session, run }) =>
+        session.meta.workspaceId === projectId &&
+        Boolean(run && !isTaskRunTerminal(run.status)) &&
+        Boolean(
+          (run && referencedRunIds.has(run.id)) ||
+          (session.meta.workItemId && referencedWorkItemIds.has(session.meta.workItemId))
+        ))
+      .sort((left, right) => left.session.meta.id.localeCompare(right.session.meta.id))
+    for (const candidate of candidates) {
+      this.supervisor.blockForSourceRevocation(candidate.session.meta.id)
+    }
+    const unresolved = candidates.find(({ run }) => runHasUnresolvedEffects(run) || run?.status === 'waiting_reconciliation')
+    if (unresolved?.run) {
+      throw new Error(`run ${unresolved.run.id} has unresolved outcomes; reconcile before connector source revocation`)
+    }
+    const frozen: Array<{ sessionId: string; run?: TaskRunRecord }> = []
+    for (const candidate of candidates) {
+      const run = await withSessionOperationQueue(
+        candidate.session.meta.id,
+        () => this.supervisor.freezeForSourceRevocation(candidate.session.meta.id)
+      )
+      frozen.push({ sessionId: candidate.session.meta.id, ...(run ? { run } : {}) })
+    }
+    return {
+      pausedSessionIds: frozen.map((candidate) => candidate.sessionId),
+      pausedRunIds: frozen.flatMap((candidate) => candidate.run ? [candidate.run.id] : [])
+    }
+  }
+
+  async continueWorkItemTransfer(
+    input: WorkItemTransferRuntimeContinueInput
+  ): Promise<WorkItemTransferContinuation> {
+    return withSessionOperationQueue(
+      `work-item-transfer:${input.requestId}`,
+      () => this.performWorkItemTransferContinuation(input)
+    )
+  }
+
+  private async performWorkItemTransferContinuation(
+    input: WorkItemTransferRuntimeContinueInput
+  ): Promise<WorkItemTransferContinuation> {
+    await this.whenInitialized()
+    const existing = await this.findWorkItemTransferSuccessor(input.requestId, input.assignmentId)
+    if (existing) {
+      return {
+        status: 'successor_created',
+        pausedSessionIds: input.preparation?.pausedSessionIds ?? [],
+        pausedRunIds: input.preparation?.pausedRunIds ?? [],
+        releasedWorkerLeaseIds: [],
+        ...(existing.continuation?.kind === 'work_item_transfer' && existing.continuation.sourceSessionId
+          ? { predecessorSessionId: existing.continuation.sourceSessionId }
+          : {}),
+        ...(existing.continuation?.kind === 'work_item_transfer' && existing.continuation.sourceRunId
+          ? { predecessorRunId: existing.continuation.sourceRunId }
+          : {}),
+        successorSessionId: existing.sessionId,
+        successorRunId: existing.id
+      }
+    }
+    if (input.target.type === 'human') {
+      return {
+        status: 'paused_for_human',
+        pausedSessionIds: input.preparation?.pausedSessionIds ?? [],
+        pausedRunIds: input.preparation?.pausedRunIds ?? [],
+        releasedWorkerLeaseIds: [],
+        ...(input.preparation?.predecessorSessionId
+          ? { predecessorSessionId: input.preparation.predecessorSessionId }
+          : {}),
+        ...(input.preparation?.predecessorRunId
+          ? { predecessorRunId: input.preparation.predecessorRunId }
+          : {})
+      }
+    }
+
+    const predecessor = input.preparation?.predecessorSessionId
+      ? this.sessions.get(input.preparation.predecessorSessionId)?.meta
+      : undefined
+    const cwd = predecessor?.cwd ?? predecessor?.sourceCwd ??
+      await resolveWorkspaceSessionCwd(input.projectId, app.getPath('userData'))
+    let successorRun: TaskRunRecord | undefined
+    let successorSessionId: string | undefined
+    let meta: SessionMeta
+    try {
+      meta = await this.createManaged({
+        cwd,
+        workspaceId: input.projectId,
+        ...(input.goalId ? { goalId: input.goalId } : {}),
+        workItemId: input.workItemId,
+        isolated: false,
+        ...(predecessor?.driveMode ? { driveMode: predecessor.driveMode } : {}),
+        ...(predecessor?.model ? { model: predecessor.model } : {}),
+        ...(predecessor?.providerId ? { providerId: predecessor.providerId } : {}),
+        ...(predecessor?.routingScope ? { routingScope: predecessor.routingScope } : {}),
+        ...(predecessor?.taskStrategy ? { taskStrategy: predecessor.taskStrategy } : {}),
+        experienceModeOverride: predecessor?.experienceModeOverride ?? 'studio',
+        title: input.workItemTitle
+      }, {
+        beforeStart: async (created) => {
+          successorSessionId = created.id
+          successorRun = createTaskRun({
+            sessionId: created.id,
+            taskId: input.workItemId,
+            digitalWorkerBinding: created.digitalWorkerBinding,
+            continuation: {
+              schemaVersion: 1,
+              kind: 'work_item_transfer',
+              requestId: input.requestId,
+              assignmentId: input.assignmentId,
+              ...(input.preparation?.predecessorSessionId
+                ? { sourceSessionId: input.preparation.predecessorSessionId }
+                : {}),
+              ...(input.preparation?.predecessorRunId
+                ? { sourceRunId: input.preparation.predecessorRunId }
+                : {})
+            }
+          })
+          this.taskRuns.set(created.id, successorRun)
+          await this.writeTaskSnapshot(created.id, 'created', 0, undefined, undefined, true)
+        }
+      })
+    } catch (error) {
+      if (successorSessionId) this.taskRuns.delete(successorSessionId)
+      throw error
+    }
+    if (!successorRun) throw new Error('WorkItem transfer successor TaskRun was not created')
+    return {
+      status: 'successor_created',
+      pausedSessionIds: input.preparation?.pausedSessionIds ?? [],
+      pausedRunIds: input.preparation?.pausedRunIds ?? [],
+      releasedWorkerLeaseIds: [],
+      ...(input.preparation?.predecessorSessionId
+        ? { predecessorSessionId: input.preparation.predecessorSessionId }
+        : {}),
+      ...(input.preparation?.predecessorRunId
+        ? { predecessorRunId: input.preparation.predecessorRunId }
+        : {}),
+      successorSessionId: meta.id,
+      successorRunId: successorRun.id
+    }
+  }
+
+  private async findWorkItemTransferSuccessor(
+    requestId: string,
+    assignmentId: string
+  ): Promise<TaskRunRecord | undefined> {
+    const active = [...this.sessions.keys()]
+      .map((sessionId) => this.taskRuns.get(sessionId))
+      .find((run) => workItemTransferContinuationMatches(run, requestId, assignmentId))
+    if (active) return active
+    return (await listPersistedTaskRuns())
+      .find((run) => workItemTransferContinuationMatches(run, requestId, assignmentId))
   }
 
   /** Compatibility entrypoint for resume, non-Git and non-isolated sessions. */
@@ -664,19 +1042,11 @@ class SessionManager {
       session.rejectSend(modelAttemptDecision.error ?? 'ModelAttempt 恢复门禁拒绝发送')
       return false
     }
-    if (session.meta.workspaceId && !session.meta.workItemId) {
-      session.rejectSend('当前会话已关联 Workspace，但未指定 WorkItem；已阻止创建脱离业务任务的 Run。')
-      return false
-    }
-    if (runHasUnresolvedEffects(currentRun)) {
-      session.rejectSend('当前任务存在尚未完成真实状态对账的外部副作用，已阻止继续发送；请先完成效果对账。')
-      return false
-    }
-    const budgetError = this.budgetError(session)
-    if (budgetError) {
-      session.rejectSend(budgetError)
-      return false
-    }
+    const runGateError = managedTaskRunSendGateError(session.meta,
+      runHasUnresolvedEffects(currentRun),
+      this.budgetError(session)
+    )
+    if (runGateError) return rejectSessionSend(session, runGateError)
     if (!sendableSession(session)) return false
     try {
       await this.supervisor.authorizeSend(session, nextRun, {
@@ -717,6 +1087,14 @@ class SessionManager {
     request: SupervisorSessionControlRequest
   ): Promise<SupervisorSessionControlResult | null> {
     return this.supervisor.control(store, request)
+  }
+
+  async claimSupervisorControlLease(
+    store: SupervisorStateStore,
+    runId: string,
+    expectedRevision: number
+  ): Promise<SupervisorRunRecord> {
+    return this.supervisor.claimControlLease(store, runId, expectedRevision)
   }
 
   async interrupt(id: string): Promise<void> {
@@ -902,7 +1280,8 @@ class SessionManager {
           parentSessionId,
           orchestrationId: input.dag.id,
           childTaskId: task.id,
-          childRole: task.role
+          childRole: task.role,
+          ...(task.workItemId ? { workItemId: task.workItemId } : {})
         }, { retainJournal: true })
         const item = { taskId: task.id, prompt, meta }
         children.push(item)
@@ -962,7 +1341,8 @@ class SessionManager {
           parentSessionId,
           orchestrationId: input.dag.id,
           childTaskId: task.id,
-          childRole: task.role
+          childRole: task.role,
+          ...(task.workItemId ? { workItemId: task.workItemId } : {})
         }, { retainJournal: true })
         const item = { taskId: task.id, prompt, meta }
         children?.push(item)
@@ -1165,28 +1545,27 @@ class SessionManager {
       async (snapshot): Promise<TaskSnapshotRecord | null> => {
         if (blockedSessionIds.has(snapshot.sessionId)) return snapshot
         // Helper 内部执行 isInteractiveOperationActive(snapshot)，并保持“交互操作快照只能进行效果对账”恢复边界。
-        if (isInteractiveOperationSnapshot(snapshot)) return this.reconcileOperationSnapshot(snapshot)
-        if (this.sessions.has(snapshot.sessionId)) {
-          return snapshot
-        }
+        if (isInteractiveOperationSnapshot(snapshot)) return this.reconcileOperationSnapshot(snapshot, true)
+        if (this.sessions.has(snapshot.sessionId)) return snapshot
         const reconciled = reconcileSnapshotWithReceipts(snapshot)
         if (reconciled.terminalRun) {
           if (this.dagFinalizationCoordinator.hasIncomplete(snapshot.sessionId)) {
-            return reconcilePersistedTaskSnapshot(reconciled.snapshot)
+            return reconcileExistingPersistedTaskSnapshot(reconciled.snapshot)
           }
-          const persisted = await reconcilePersistedTaskSnapshot(reconciled.snapshot)
+          const persisted = await reconcileExistingPersistedTaskSnapshot(reconciled.snapshot)
+          if (!persisted) return null
           await this.workflow.bindSnapshot(persisted)
           await deleteTaskSnapshot(snapshot.id, undefined, persisted.run)
           return null
         }
-        return reconcilePersistedTaskSnapshot(reconciled.snapshot)
+        return reconcileExistingPersistedTaskSnapshot(reconciled.snapshot)
       }
     )
     return reconciled.filter((snapshot): snapshot is TaskSnapshotRecord => snapshot !== null)
   }
 
-  private async reconcileOperationSnapshot(snapshot: TaskSnapshotRecord): Promise<TaskSnapshotRecord | null> {
-    const reconciled = await reconcileInteractiveOperationSnapshot(snapshot)
+  private async reconcileOperationSnapshot(snapshot: TaskSnapshotRecord, requireStored = false): Promise<TaskSnapshotRecord | null> {
+    const reconciled = await reconcileInteractiveOperationSnapshot(snapshot, { requireStored })
     for (const effect of snapshot.run?.effects ?? []) {
       const target = effect.target
       if (target.kind !== 'git_worktree_create' && target.kind !== 'git_worktree_remove') continue
@@ -1454,10 +1833,13 @@ class SessionManager {
     // Dock 启动的应用 PATH 极简,先补全以便后续工具调用找到用户安装的 CLI。
     fixPathForGuiLaunch()
     configureModelStatsDir(app.getPath('userData'))
+    configureAcceptanceQualityFeedback(app.getPath('userData'))
     configureProviderHealthDir(app.getPath('userData'), getSettings().providerCircuitBreaker)
     registerBuiltinEngines()
-    await resumeProjectDeletions(app.getPath('userData'))
+    await resumeProjectPermanentDeletionEffects(app.getPath('userData'))
+    await resumeSessionDeletions(app.getPath('userData'))
     await this.modelAttemptRecoveryGate.initialize(app.getPath('userData'))
+    await this.taskPlans.reconcileLedger()
     await this.dagFinalizationCoordinator.load()
     const persistedTaskRuns = await listPersistedTaskRuns()
     this.taskRuns.hydrateHistory(persistedTaskRuns)
@@ -1506,6 +1888,7 @@ class SessionManager {
       preservedActiveRegistrySessionIds
     )
     await this.restorePendingSessionCreations(recoverable)
+    await this.recoverAndStartWorkflowAcceptanceRepairs()
     await this.dagFinalizationCoordinator.autoRecoverParents(recoverable)
     for (const session of this.sessions.values()) {
       await this.dagFinalizationCoordinator.resumeForParent(session.meta.id)
@@ -1536,6 +1919,75 @@ class SessionManager {
         sessionId: 'task-snapshot'
       })
     }
+  }
+
+  async startWorkflowAcceptanceRepair(
+    acceptance: WorkflowAcceptanceRecord,
+    repair: WorkItem
+  ): Promise<WorkflowAcceptanceRepairStartResult> {
+    const pending = this.workflowAcceptanceRepairStarts.get(repair.id)
+    if (pending) return pending
+    const operation = startWorkflowAcceptanceRepair({
+      rootDir: app.getPath('userData'),
+      activeSessionForWorkItem: (workItemId) => {
+        const session = [...this.sessions.values()].find((candidate) =>
+          candidate.meta.workItemId === workItemId && candidate.meta.status !== 'closed')
+        return session ? { id: session.meta.id, status: session.meta.status } : undefined
+      },
+      snapshots: () => listTaskSnapshots(),
+      createManaged: (options, lifecycle) => this.createManaged(options, {
+        beforeStart: async (meta) => lifecycle.beforeStart({ id: meta.id })
+      }),
+      send: (sessionId, prompt) => this.send(sessionId, prompt)
+    }, acceptance, repair, buildWorkflowAcceptanceRepairPrompt(acceptance, repair))
+    this.workflowAcceptanceRepairStarts.set(repair.id, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.workflowAcceptanceRepairStarts.get(repair.id) === operation) {
+        this.workflowAcceptanceRepairStarts.delete(repair.id)
+      }
+    }
+  }
+
+  private async startWorkflowAcceptanceRepairFromFailure(
+    failure: WorkflowAcceptanceFailureResult
+  ): Promise<WorkflowAcceptanceRepairStartResult> {
+    const workItem = await (await import('./project-workspace/store.js'))
+      .openProjectWorkspaceStore(app.getPath('userData'))
+      .then((store) => store.getWorkItem(failure.repair.workItemId))
+    if (!workItem) throw new Error(`workflow repair WorkItem was not found:${failure.repair.workItemId}`)
+    return this.startWorkflowAcceptanceRepair(failure.acceptance, workItem)
+  }
+
+  private async recoverAndStartWorkflowAcceptanceRepairs(): Promise<void> {
+    const { recoverWorkflowAcceptanceRepairMaterializations } = await import('./task/workflow-acceptance-repair-service.js')
+    const result = await recoverWorkflowAcceptanceRepairMaterializations(app.getPath('userData'))
+    for (const candidate of result.recovered) {
+      try {
+        const started = await this.startWorkflowAcceptanceRepair(
+          await this.readWorkflowAcceptance(candidate.acceptanceId),
+          candidate.repairWorkItem
+        )
+        if (started.disposition === 'blocked') {
+          console.error(`[caogen] workflow repair ${candidate.repairWorkItemId} remains blocked: ${started.reason ?? 'unknown'}`)
+        }
+      } catch (error) {
+        console.error(`[caogen] workflow repair auto-start failed:${candidate.repairWorkItemId}`, error)
+      }
+    }
+  }
+
+  private async readWorkflowAcceptance(acceptanceId: string): Promise<WorkflowAcceptanceRecord> {
+    const { readTaskSnapshotDatabase } = await import('./task/task-snapshot.js')
+    const { setupWorkflowLedgerSchema } = await import('./task/workflow-ledger-store.js')
+    const { findWorkflowAcceptance } = await import('./task/workflow-ledger-query.js')
+    return readTaskSnapshotDatabase(app.getPath('userData'), (db) => {
+      setupWorkflowLedgerSchema(db)
+      const acceptance = findWorkflowAcceptance(db, acceptanceId)
+      if (!acceptance) throw new Error(`workflow acceptance was not found:${acceptanceId}`)
+      return acceptance
+    })
   }
 
   private async restoreDagRuntimesFromSnapshot(
@@ -1665,7 +2117,8 @@ class SessionManager {
     const identity = this.normalizeEventIdentity(sessionId, seq, sourceIdentity)
     if (!identity) return
     const session = this.sessions.get(sessionId)
-    const event = session ? this.normalizeTurnResultCost(session, rawEvent) : rawEvent
+    const normalizedEvent = session ? this.normalizeTurnResultCost(session, rawEvent) : rawEvent
+    const event = redactSensitiveValue(normalizedEvent)
     const runBeforeEvent = this.taskRuns.get(sessionId)
     handleSessionTaskRunEvent(this.taskRuns, sessionId, event, identity, {
       cwd: session?.meta.cwd ?? '',
@@ -1695,6 +2148,20 @@ class SessionManager {
     this.notifications.handle(sessionId, event)
     this.handleAutoSkillReview(sessionId, event)
     this.workflow.handleEvent(sessionId, event, identity)
+    if (session && session.meta.workItemId &&
+        (event.kind === 'turn-result' || (event.kind === 'status' && event.status === 'error'))) {
+      const failed = event.kind === 'turn-result' ? event.isError : true
+      const projection = failed
+        ? markWorkflowAcceptanceRepairTerminalFailure(
+            session.meta.workItemId,
+            runAfterEvent?.status === 'cancelled' ? 'cancelled' : 'failed',
+            app.getPath('userData')
+          )
+        : markWorkflowAcceptanceRepairVerifying(session.meta.workItemId, app.getPath('userData'))
+      void projection.catch((error) => {
+        console.error(`[caogen] workflow repair terminal projection failed:${session.meta.workItemId}`, error)
+      })
+    }
     if (session && shouldPersistConversationLedgerEvent(event.kind)) {
       const archiveIdentity = conversationLedgerArchiveIdentity(session.meta)
       if (archiveIdentity) {
@@ -2234,6 +2701,15 @@ function supervisorSendError(error: unknown): string {
     return `Supervisor 发送门禁拒绝请求：${error.message}`
   }
   return `Supervisor 发送前检查失败，已按失败关闭处理：${error instanceof Error ? error.message : String(error)}`
+}
+
+function workItemTransferContinuationMatches(
+  run: TaskRunRecord | undefined,
+  requestId: string,
+  assignmentId: string
+): run is TaskRunRecord {
+  return run?.continuation?.kind === 'work_item_transfer' &&
+    run.continuation.requestId === requestId && run.continuation.assignmentId === assignmentId
 }
 
 export const sessionManager = new SessionManager()

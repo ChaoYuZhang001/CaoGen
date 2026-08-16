@@ -6,6 +6,12 @@ import type {
   GoalPatch,
   GoalStatus,
   MutationOptions,
+  ProjectMember,
+  ProjectMemberInput,
+  ProjectMemberPatch,
+  ProjectInvitation,
+  ProjectInvitationCreateResult,
+  ProjectInvitationInput,
   ProjectSquad,
   ProjectSquadInput,
   ProjectSquadMemberInput,
@@ -15,10 +21,18 @@ import type {
   ProjectWorkspaceManifest,
   ProjectWorkspacePatch,
   ProjectWorkspaceState,
+  ProjectCollaborationInboxItem,
+  ProjectCollaborationInboxListOptions,
+  ProjectCollaborationInboxMarkInput,
+  ProjectCollaborationInboxReceipt,
   WorkItem,
   WorkItemComment,
   WorkItemCommentInput,
   WorkItemCommentPatch,
+  WorkItemActor,
+  WorkItemSharedApproval,
+  WorkItemSharedApprovalDecisionInput,
+  WorkItemSharedApprovalInput,
   WorkItemInput,
   WorkItemOwnerType,
   WorkItemPatch,
@@ -88,7 +102,11 @@ export class ProjectWorkspaceStore {
     goals: Goal[]
     workItems: WorkItem[]
     squads: ProjectSquad[]
+    members: ProjectMember[]
+    invitations: ProjectInvitation[]
     comments: WorkItemComment[]
+    sharedApprovals: WorkItemSharedApproval[]
+    inboxReceipts: ProjectCollaborationInboxReceipt[]
     events: ProjectWorkspaceState['events']
   }): Promise<{ revision: number; projectId: string }> {
     return this.persistence.read().then((current) => {
@@ -100,7 +118,11 @@ export class ProjectWorkspaceStore {
           goals: input.goals,
           workItems: input.workItems,
           squads: input.squads,
+          members: input.members,
+          invitations: input.invitations,
           comments: input.comments,
+          sharedApprovals: input.sharedApprovals,
+          inboxReceipts: input.inboxReceipts,
           events: input.events
         })) return { revision: current.revision, projectId }
         throw new Error(`Project import identity conflict: ${projectId}`)
@@ -112,7 +134,11 @@ export class ProjectWorkspaceStore {
         ...sameKindConflicts(current.goals, input.goals),
         ...sameKindConflicts(current.workItems, input.workItems),
         ...sameKindConflicts(current.squads, input.squads),
+        ...sameKindConflicts(current.members, input.members),
+        ...sameKindConflicts(current.invitations, input.invitations),
         ...sameKindConflicts(current.comments, input.comments),
+        ...sameKindConflicts(current.sharedApprovals, input.sharedApprovals),
+        ...sameKindConflicts(current.inboxReceipts, input.inboxReceipts),
         ...sameKindConflicts(current.events, input.events)
       ]
       if (collisions.length > 0) {
@@ -124,7 +150,11 @@ export class ProjectWorkspaceStore {
         state.goals.push(...structuredClone(input.goals))
         state.workItems.push(...structuredClone(input.workItems))
         state.squads.push(...structuredClone(input.squads))
+        state.members.push(...structuredClone(input.members))
+        state.invitations.push(...structuredClone(input.invitations))
         state.comments.push(...structuredClone(input.comments))
+        state.sharedApprovals.push(...structuredClone(input.sharedApprovals))
+        state.inboxReceipts.push(...structuredClone(input.inboxReceipts))
         state.events.push(...structuredClone(input.events))
         return { revision: commitRevision, projectId }
       })
@@ -301,6 +331,46 @@ export class ProjectWorkspaceStore {
     return this.collaboration.removeSquadMember(id, memberType, memberId, options)
   }
 
+  listMembers(projectId?: string, options?: ListOptions): Promise<ProjectMember[]> {
+    return this.collaboration.listMembers(projectId, options)
+  }
+
+  getMember(id: string): Promise<ProjectMember | undefined> {
+    return this.collaboration.getMember(id)
+  }
+
+  createMember(input: ProjectMemberInput, options?: MutationOptions | number): Promise<ProjectMember> {
+    return this.collaboration.createMember(input, options)
+  }
+
+  updateMember(id: string, patch: ProjectMemberPatch, options?: MutationOptions | number): Promise<ProjectMember> {
+    return this.collaboration.updateMember(id, patch, options)
+  }
+
+  revokeMember(id: string, options?: MutationOptions | number): Promise<ProjectMember> {
+    return this.collaboration.revokeMember(id, options)
+  }
+
+  restoreMember(id: string, options?: MutationOptions | number): Promise<ProjectMember> {
+    return this.collaboration.restoreMember(id, options)
+  }
+
+  listInvitations(projectId?: string, options?: ListOptions): Promise<ProjectInvitation[]> {
+    return this.collaboration.listInvitations(projectId, options)
+  }
+
+  createInvitation(input: ProjectInvitationInput, options?: MutationOptions | number): Promise<ProjectInvitationCreateResult> {
+    return this.collaboration.createInvitation(input, options)
+  }
+
+  acceptInvitation(projectId: string, token: string, options?: MutationOptions | number): Promise<ProjectMember> {
+    return this.collaboration.acceptInvitation(projectId, token, options)
+  }
+
+  revokeInvitation(id: string, options?: MutationOptions | number): Promise<ProjectInvitation> {
+    return this.collaboration.revokeInvitation(id, options)
+  }
+
   listWorkItemComments(workItemId: string, options?: ListOptions): Promise<WorkItemComment[]> {
     return this.collaboration.listComments(workItemId, options)
   }
@@ -329,6 +399,48 @@ export class ProjectWorkspaceStore {
     return this.collaboration.deleteComment(id, options)
   }
 
+  listSharedApprovals(projectId?: string, options?: ListOptions): Promise<WorkItemSharedApproval[]> {
+    return this.collaboration.listSharedApprovals(projectId, options)
+  }
+
+  getSharedApproval(id: string): Promise<WorkItemSharedApproval | undefined> {
+    return this.collaboration.getSharedApproval(id)
+  }
+
+  createSharedApproval(
+    input: WorkItemSharedApprovalInput,
+    requester: WorkItemActor,
+    options?: MutationOptions | number
+  ): Promise<WorkItemSharedApproval> {
+    return this.collaboration.createSharedApproval(input, requester, options)
+  }
+
+  decideSharedApproval(
+    id: string,
+    input: WorkItemSharedApprovalDecisionInput,
+    options?: MutationOptions | number
+  ): Promise<WorkItemSharedApproval> {
+    return this.collaboration.decideSharedApproval(id, input, options)
+  }
+
+  revokeSharedApproval(id: string, options?: MutationOptions | number): Promise<WorkItemSharedApproval> {
+    return this.collaboration.revokeSharedApproval(id, options)
+  }
+
+  listCollaborationInbox(
+    projectId: string,
+    options?: ProjectCollaborationInboxListOptions
+  ): Promise<ProjectCollaborationInboxItem[]> {
+    return this.collaboration.listCollaborationInbox(projectId, options)
+  }
+
+  markCollaborationInbox(
+    input: ProjectCollaborationInboxMarkInput,
+    options?: MutationOptions | number
+  ): Promise<ProjectCollaborationInboxReceipt> {
+    return this.collaboration.markCollaborationInbox(input, options)
+  }
+
   withBeforeCommit<T>(hook: ProjectWorkspaceBeforeCommit, callback: () => Promise<T>): Promise<T> {
     return this.persistence.withBeforeCommit(hook, callback)
   }
@@ -340,7 +452,11 @@ function projectWorkspaceImportSlice(state: ProjectWorkspaceState, projectId: st
     goals: state.goals.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
     workItems: state.workItems.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
     squads: state.squads.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    members: state.members.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    invitations: state.invitations.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
     comments: state.comments.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    sharedApprovals: state.sharedApprovals.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
+    inboxReceipts: state.inboxReceipts.filter((item) => item.projectId === projectId).sort((left, right) => left.id.localeCompare(right.id)),
     events: state.events.filter((item) => item.projectId === projectId).sort((left, right) =>
       left.occurredAt - right.occurredAt || left.id.localeCompare(right.id))
   }

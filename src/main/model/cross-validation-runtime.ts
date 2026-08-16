@@ -10,7 +10,10 @@ import type {
 import { settingsForCaoGenDrive } from './drive'
 import { getSettings } from '../settings'
 import { cleanOneLine } from '../session-manager-support'
-import { ingestWorkflowAcceptanceFailure } from '../task/workflow-acceptance-failure-ingress'
+import {
+  ingestWorkflowAcceptanceFailure,
+  type WorkflowAcceptanceFailureResult
+} from '../task/workflow-acceptance-failure-ingress'
 import {
   arbitrationCrossValidationTarget,
   buildCrossValidationArbitrationPrompt,
@@ -29,6 +32,7 @@ interface CrossValidationRuntimeDependencies {
   getRun(sessionId: string): TaskRunRecord | undefined
   send(sessionId: string, prompt: string): Promise<boolean>
   dispatch(sessionId: string, event: AgentEvent): void
+  onAcceptanceFailure?(result: WorkflowAcceptanceFailureResult): Promise<void> | void
 }
 
 interface ReviewContext {
@@ -235,7 +239,8 @@ export class ModelCrossValidationRuntime {
       return
     }
     try {
-      await ingestWorkflowAcceptanceFailure(plan.input)
+      const failure = await ingestWorkflowAcceptanceFailure(plan.input)
+      await this.dependencies.onAcceptanceFailure?.(failure)
     } catch (error) {
       console.error('[caogen] structured cross-validation failure ingress rejected:', error)
     }

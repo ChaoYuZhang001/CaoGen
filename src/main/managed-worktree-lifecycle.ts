@@ -121,12 +121,36 @@ export function managedWorktreeRecordForSession(sessionId: string): ManagedWorkt
   return loadRegistry().find((record) => record.sessionId === normalized) ?? null
 }
 
+/**
+ * Removes only a terminal registry projection. Active worktrees remain external
+ * Git state and must first complete their own remove Effect.
+ */
+export function purgeRemovedManagedWorktreeRecord(sessionId: string): boolean {
+  return purgeRemovedManagedWorktreeRecordAtRoot(sessionId)
+}
+
+export function purgeRemovedManagedWorktreeRecordAtRoot(
+  sessionId: string,
+  userDataRoot?: string
+): boolean {
+  const normalized = normalizeSessionId(sessionId)
+  const records = loadRegistry('mutation', userDataRoot)
+  const record = records.find((candidate) => candidate.sessionId === normalized)
+  if (!record) return false
+  if (record.state !== 'removed') {
+    throw new Error('managed worktree is active; complete its remove Effect before deleting the Session')
+  }
+  saveRegistry(records.filter((candidate) => candidate.sessionId !== normalized), userDataRoot)
+  return true
+}
+
 export function inspectManagedWorktreeRegistryRecord(
-  sessionId: string
+  sessionId: string,
+  userDataRoot?: string
 ): ManagedWorktreeRegistryRecordLookup {
   try {
     const normalized = normalizeSessionId(sessionId)
-    const record = loadRegistry('mutation').find((candidate) => candidate.sessionId === normalized)
+    const record = loadRegistry('mutation', userDataRoot).find((candidate) => candidate.sessionId === normalized)
     return { ok: true, record: record ? { ...record } : null }
   } catch (error) {
     return { ok: false, error: errorText(error) }
@@ -533,9 +557,9 @@ function saveProjectedRecord(
 
 type RegistryReadMode = 'query' | 'mutation'
 
-function loadRegistry(mode: RegistryReadMode = 'query'): ManagedWorktreeRecord[] {
+function loadRegistry(mode: RegistryReadMode = 'query', userDataRoot?: string): ManagedWorktreeRecord[] {
   try {
-    const raw = JSON.parse(readFileSync(registryFile(), 'utf8')) as unknown
+    const raw = JSON.parse(readFileSync(registryFile(userDataRoot), 'utf8')) as unknown
     const values = registryValues(raw)
     if (!values) throw new Error('registry 根节点不是 records 数组')
     return validateRegistryRecords(values)
@@ -546,11 +570,11 @@ function loadRegistry(mode: RegistryReadMode = 'query'): ManagedWorktreeRecord[]
   }
 }
 
-function saveRegistry(records: ManagedWorktreeRecord[]): void {
+function saveRegistry(records: ManagedWorktreeRecord[], userDataRoot?: string): void {
   validateRegistryRecords(records)
-  const root = worktreesRoot()
+  const root = worktreesRoot(userDataRoot)
   mkdirSync(root, { recursive: true })
-  const destination = registryFile()
+  const destination = registryFile(userDataRoot)
   const temp = join(root, `.index.json.${process.pid}.${randomUUID()}.tmp`)
   let descriptor: number | undefined
   try {
@@ -636,12 +660,12 @@ function upsertRecord(records: ManagedWorktreeRecord[], record: ManagedWorktreeR
   else records.push(record)
 }
 
-function worktreesRoot(): string {
-  return join(app.getPath('userData'), 'worktrees')
+function worktreesRoot(userDataRoot?: string): string {
+  return join(userDataRoot ? resolve(userDataRoot) : app.getPath('userData'), 'worktrees')
 }
 
-function registryFile(): string {
-  return join(worktreesRoot(), 'index.json')
+function registryFile(userDataRoot?: string): string {
+  return join(worktreesRoot(userDataRoot), 'index.json')
 }
 
 function worktreePathFor(sessionId: string): string {

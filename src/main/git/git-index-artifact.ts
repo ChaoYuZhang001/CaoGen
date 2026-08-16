@@ -19,7 +19,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { inflateSync } from 'node:zlib'
 import type { FileSystemIdentity } from '../../shared/types'
 import type { GitIndexOperation } from './git-index-input'
@@ -49,6 +49,7 @@ export interface GitIndexArtifactManifest {
 }
 
 export interface GitIndexArtifactView {
+  artifactRef: string
   artifactRoot: string
   artifactRootIdentity: FileSystemIdentity
   indexArtifactPath: string
@@ -62,6 +63,7 @@ export interface GitIndexArtifactView {
 }
 
 export interface FrozenGitIndexArtifact {
+  artifactRoot: string
   manifest: GitIndexArtifactManifest
   indexBytes: Buffer
 }
@@ -84,41 +86,47 @@ export function persistGitIndexArtifact(
   const key = sha256(Buffer.from(JSON.stringify({ schemaVersion: 1, ...intent }), 'utf8'))
   const base = join(app.getPath('userData'), 'effect-artifacts', 'git-index')
   const artifactRoot = join(base, key)
+  const artifactRef = `git-index/${key}`
   mkdirSync(base, { recursive: true, mode: 0o700 })
   if (!existsSync(artifactRoot)) {
     createArtifactDirectory(base, artifactRoot, intent.expectedEntriesDigest, indexBytes, tempObjects)
   }
-  return validateArtifactDirectory(artifactRoot, intent.expectedEntriesDigest)
+  return validateArtifactDirectory(artifactRoot, artifactRef, intent.expectedEntriesDigest)
 }
 
 export function readFrozenGitIndexArtifact(target: GitIndexUpdateTarget): FrozenGitIndexArtifact {
-  assertIdentity(target.artifactRoot, target.artifactRootIdentity)
-  assertIdentity(target.indexArtifactPath, target.indexArtifactIdentity)
-  assertIdentity(target.objectManifestPath, target.objectManifestIdentity)
-  const manifestBytes = readBoundedFile(target.objectManifestPath, MAX_INDEX_BYTES, 'Git index artifact manifest')
+  const resolved = resolveFrozenArtifact(target)
+  const manifestPath = join(resolved.artifactRoot, 'manifest.json')
+  const indexPath = join(resolved.artifactRoot, 'index')
+  if (!resolved.portable) {
+    assertIdentity(target.artifactRoot, target.artifactRootIdentity)
+    assertIdentity(target.indexArtifactPath, target.indexArtifactIdentity)
+    assertIdentity(target.objectManifestPath, target.objectManifestIdentity)
+  }
+  const manifestBytes = readBoundedFile(manifestPath, MAX_INDEX_BYTES, 'Git index artifact manifest')
   if (sha256(manifestBytes) !== target.objectManifestSha256) throw new Error('Git index artifact manifest 已变化')
   const manifest = parseManifest(manifestBytes)
   if (manifest.expectedIndexEntriesDigest !== target.expectedIndexEntriesDigest) {
     throw new Error('Git index artifact 意图摘要不匹配')
   }
   if (manifest.objects.length !== target.objectCount) throw new Error('Git object artifact 数量已变化')
-  const indexBytes = readBoundedFile(target.indexArtifactPath, MAX_INDEX_BYTES, 'Git index artifact')
+  const indexBytes = readBoundedFile(indexPath, MAX_INDEX_BYTES, 'Git index artifact')
   if (sha256(indexBytes) !== target.indexArtifactSha256 || indexBytes.byteLength !== target.indexArtifactBytes) {
     throw new Error('Git index artifact 已变化')
   }
   if (manifest.indexSha256 !== target.indexArtifactSha256 || manifest.indexBytes !== target.indexArtifactBytes) {
     throw new Error('Git index artifact manifest 不一致')
   }
-  validateManifestObjects(target.artifactRoot, manifest.objects)
-  return { manifest, indexBytes }
+  validateManifestObjects(resolved.artifactRoot, manifest.objects)
+  return { artifactRoot: resolved.artifactRoot, manifest, indexBytes }
 }
 
 export function promoteGitIndexArtifactObjects(
   target: GitIndexUpdateTarget,
-  manifest: GitIndexArtifactManifest
+  artifact: FrozenGitIndexArtifact
 ): void {
   assertIdentity(target.objectDir, target.objectDirIdentity)
-  for (const entry of manifest.objects) promoteObject(target, entry)
+  for (const entry of artifact.manifest.objects) promoteObject(target, artifact.artifactRoot, entry)
 }
 
 function createArtifactDirectory(
@@ -170,7 +178,11 @@ function copyObjectTree(sourceRoot: string, destinationRoot: string): GitIndexOb
   return entries.sort((left, right) => left.path.localeCompare(right.path))
 }
 
-function validateArtifactDirectory(artifactRoot: string, expectedEntriesDigest: string): GitIndexArtifactView {
+function validateArtifactDirectory(
+  artifactRoot: string,
+  artifactRef: string,
+  expectedEntriesDigest: string
+): GitIndexArtifactView {
   const root = realpathSync(artifactRoot)
   const indexArtifactPath = realpathSync(join(root, 'index'))
   const objectManifestPath = realpathSync(join(root, 'manifest.json'))
@@ -183,6 +195,7 @@ function validateArtifactDirectory(artifactRoot: string, expectedEntriesDigest: 
   }
   validateManifestObjects(root, manifest.objects)
   return {
+    artifactRef,
     artifactRoot: root,
     artifactRootIdentity: fileSystemIdentity(root),
     indexArtifactPath,
@@ -232,9 +245,13 @@ function isManifestObject(entry: unknown): entry is GitIndexObjectManifestEntry 
   )
 }
 
-function promoteObject(target: GitIndexUpdateTarget, entry: GitIndexObjectManifestEntry): void {
+function promoteObject(
+  target: GitIndexUpdateTarget,
+  artifactRoot: string,
+  entry: GitIndexObjectManifestEntry
+): void {
   const objectId = objectIdForEntry(entry, target.objectFormat)
-  const source = join(target.artifactRoot, 'objects', entry.path)
+  const source = join(artifactRoot, 'objects', entry.path)
   const objectDirectory = ensureLooseObjectDirectory(target, entry.path.slice(0, 2))
   const destination = join(objectDirectory, entry.path.slice(3))
   if (existsSync(destination)) {
@@ -262,6 +279,37 @@ function promoteObject(target: GitIndexUpdateTarget, entry: GitIndexObjectManife
     }
     rmSync(temporary, { force: true })
   }
+}
+
+function resolveFrozenArtifact(target: GitIndexUpdateTarget): { artifactRoot: string; portable: boolean } {
+  const key = artifactKey(target.artifactRef, target.artifactRoot)
+  const portableRoot = resolve(realpathSync(app.getPath('userData')), 'effect-artifacts', 'git-index', key)
+  if (target.artifactRef) return { artifactRoot: assertPortableArtifactRoot(portableRoot), portable: true }
+  try {
+    assertIdentity(target.artifactRoot, target.artifactRootIdentity)
+    return { artifactRoot: realpathSync(target.artifactRoot), portable: false }
+  } catch {
+    return { artifactRoot: assertPortableArtifactRoot(portableRoot), portable: true }
+  }
+}
+
+function artifactKey(artifactRef: string | undefined, artifactRoot: string): string {
+  if (artifactRef !== undefined) {
+    const match = /^git-index\/([a-f0-9]{64})$/.exec(artifactRef)
+    if (!match) throw new Error('Git index artifactRef 无效')
+    return match[1]
+  }
+  const key = basename(resolve(artifactRoot))
+  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Git index legacy artifact path 无效')
+  return key
+}
+
+function assertPortableArtifactRoot(expected: string): string {
+  const info = lstatSync(expected)
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Git index portable artifact root 不安全')
+  const actual = realpathSync(expected)
+  if (actual !== expected) throw new Error('Git index portable artifact root 越过应用私有目录')
+  return actual
 }
 
 function ensureLooseObjectDirectory(target: GitIndexUpdateTarget, prefix: string): string {

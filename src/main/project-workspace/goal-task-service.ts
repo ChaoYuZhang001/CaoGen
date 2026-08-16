@@ -4,7 +4,8 @@ import type {
   ProjectGoalTaskInput,
   ProjectGoalTaskResult,
   ProjectWorkspace,
-  WorkItem
+  WorkItem,
+  WorkItemOwner
 } from '../../shared/project-workspace-types'
 import { createProjectWorkspaceReadService } from './canonical-read-service'
 import { openProjectWorkspaceCommandService } from './command-service'
@@ -13,9 +14,14 @@ import { openProjectWorkspaceStore } from './store'
 const TERMINAL_GOAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'archived'])
 const TERMINAL_WORK_ITEM_STATUSES = new Set(['done', 'failed', 'cancelled'])
 
+export interface ProjectGoalTaskCreationOptions {
+  workItemOwner?: WorkItemOwner
+}
+
 export async function createProjectGoalTask(
   rawInput: ProjectGoalTaskInput,
-  rootDir?: string
+  rootDir?: string,
+  options: ProjectGoalTaskCreationOptions = {}
 ): Promise<ProjectGoalTaskResult> {
   const input = normalizeInput(rawInput)
   const ids = goalTaskIds(input.projectId, input.requestId)
@@ -27,7 +33,7 @@ export async function createProjectGoalTask(
   let workItem = await reads.getWorkItem(ids.workItemId)
   const recovered = Boolean(goal || workItem)
   if (goal) assertMatchingGoal(goal, input)
-  if (workItem) assertMatchingWorkItem(workItem, input, ids.goalId)
+  if (workItem) assertMatchingWorkItem(workItem, input, ids.goalId, options.workItemOwner)
 
   const commands = await openProjectWorkspaceCommandService(rootDir)
   if (!goal) {
@@ -55,6 +61,7 @@ export async function createProjectGoalTask(
         description: input.objective,
         type: 'custom',
         status: 'ready',
+        owner: options.workItemOwner,
         acceptanceSpec: [{
           id: `${ids.workItemId}-result`,
           criterion: '交付目标要求的结果并附带验证证据',
@@ -62,7 +69,7 @@ export async function createProjectGoalTask(
         }]
       }),
       () => reads.getWorkItem(ids.workItemId),
-      (candidate) => assertMatchingWorkItem(candidate, input, goal!.id)
+      (candidate) => assertMatchingWorkItem(candidate, input, goal!.id, options.workItemOwner)
     )
   }
   return { requestId: input.requestId, goal, workItem, recovered }
@@ -112,10 +119,18 @@ function assertMatchingGoal(goal: Goal, input: ProjectGoalTaskInput): void {
   }
 }
 
-function assertMatchingWorkItem(workItem: WorkItem, input: ProjectGoalTaskInput, goalId: string): void {
+function assertMatchingWorkItem(
+  workItem: WorkItem,
+  input: ProjectGoalTaskInput,
+  goalId: string,
+  expectedOwner?: WorkItemOwner
+): void {
   if (workItem.projectId !== input.projectId || workItem.goalId !== goalId ||
       workItem.description !== input.objective || workItem.title !== taskTitle(input.objective)) {
     throw new Error(`goal task request conflicts with existing WorkItem:${workItem.id}`)
+  }
+  if (expectedOwner && (workItem.owner?.type !== expectedOwner.type || workItem.owner.id !== expectedOwner.id)) {
+    throw new Error(`goal task request conflicts with existing WorkItem owner:${workItem.id}`)
   }
   if (TERMINAL_WORK_ITEM_STATUSES.has(workItem.status)) {
     throw new Error(`goal task request cannot resume terminal WorkItem:${workItem.id}:${workItem.status}`)

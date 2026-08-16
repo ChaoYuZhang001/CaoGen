@@ -1,4 +1,5 @@
 import { delimiter } from 'node:path'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 const SAFE_LOCAL_GIT_CONFIG = ['-c', 'core.fsmonitor=false'] as const
 
@@ -156,7 +157,7 @@ export function withSafeMergeGitConfig(args: readonly string[], hooksPath: strin
 }
 
 export function isolatedLocalGitEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...baseEnv }
+  const env = buildMinimalSubprocessEnv({}, { source: baseEnv })
   for (const key of Object.keys(env)) {
     if (
       LOCAL_COMMAND_ENV_KEYS.has(key) ||

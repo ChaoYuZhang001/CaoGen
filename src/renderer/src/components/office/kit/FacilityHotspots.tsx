@@ -1,8 +1,9 @@
 import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import type { MeshStandardMaterial } from 'three'
+import { CONTROL_ROOM_LAYOUT } from './controlRoomLayout'
 
-export type OfficeFacilityKey = 'hydration' | 'restroom' | 'dining'
+export type OfficeFacilityKey = 'assistant' | 'project' | 'video'
 
 export interface OfficeFacilitySpec {
   key: OfficeFacilityKey
@@ -16,56 +17,59 @@ export interface OfficeFacilitySpec {
 }
 
 export const OFFICE_FACILITY_OVERVIEW_CAMERA = {
-  position: [-1.6, 5.5, 14.6] as [number, number, number],
-  target: [-1.6, 0.82, 4.2] as [number, number, number]
+  position: CONTROL_ROOM_LAYOUT.zoneOverview.position as [number, number, number],
+  target: CONTROL_ROOM_LAYOUT.zoneOverview.target as [number, number, number]
 }
 
 export const OFFICE_FACILITY_SPECS: OfficeFacilitySpec[] = [
   {
-    key: 'hydration',
-    labelKey: 'officeFacilityHydration',
-    statusKey: 'officeFacilityReady',
-    accent: '#8fe9ff',
-    position: [4.86, 0, 1.82],
-    hit: [4.86, 1.9, 1.82],
-    cameraPosition: [3.1, 2.95, 5.72],
-    cameraTarget: [4.78, 0.76, 1.72]
+    key: 'assistant',
+    labelKey: 'officeZoneAssistant',
+    statusKey: 'officeZoneLive',
+    accent: '#8fb8c6',
+    position: CONTROL_ROOM_LAYOUT.assistant.station,
+    hit: CONTROL_ROOM_LAYOUT.assistant.hit,
+    cameraPosition: CONTROL_ROOM_LAYOUT.assistant.cameraPosition,
+    cameraTarget: CONTROL_ROOM_LAYOUT.assistant.cameraTarget
   },
   {
-    key: 'restroom',
-    labelKey: 'officeFacilityRestroom',
-    statusKey: 'officeFacilityReady',
-    accent: '#8fe9ff',
-    position: [-8, 0, 4.65],
-    hit: [-8, 2.02, 4.71],
-    cameraPosition: [-6.45, 4.6, 9.15],
-    cameraTarget: [-8, 0.45, 5.35]
+    key: 'project',
+    labelKey: 'officeZoneProject',
+    statusKey: 'officeZoneLive',
+    accent: '#8ba88f',
+    position: CONTROL_ROOM_LAYOUT.project.station,
+    hit: CONTROL_ROOM_LAYOUT.project.hit,
+    cameraPosition: CONTROL_ROOM_LAYOUT.project.cameraPosition,
+    cameraTarget: CONTROL_ROOM_LAYOUT.project.cameraTarget
   },
   {
-    key: 'dining',
-    labelKey: 'officeFacilityDining',
-    statusKey: 'officeFacilityReady',
-    accent: '#5f7f8c',
-    position: [-5, 0, 6],
-    hit: [-5, 2.02, 6.06],
-    cameraPosition: [-2, 4.5, 10.8],
-    cameraTarget: [-4.45, 0.55, 6.25]
+    key: 'video',
+    labelKey: 'officeZoneVideo',
+    statusKey: 'officeZoneLive',
+    accent: '#c39b73',
+    position: CONTROL_ROOM_LAYOUT.video.station,
+    hit: CONTROL_ROOM_LAYOUT.video.hit,
+    cameraPosition: CONTROL_ROOM_LAYOUT.video.cameraPosition,
+    cameraTarget: CONTROL_ROOM_LAYOUT.video.cameraTarget
   }
 ]
 
 interface FacilityHotspotsProps {
   specs: OfficeFacilitySpec[]
   activeKey?: OfficeFacilityKey | null
+  interactive?: boolean
   onSelect: (key: OfficeFacilityKey) => void
 }
 
 function FacilityHotspot({
   spec,
   active,
+  interactive,
   onSelect
 }: {
   spec: OfficeFacilitySpec
   active: boolean
+  interactive: boolean
   onSelect: (key: OfficeFacilityKey) => void
 }): React.JSX.Element {
   const pulseRef = useRef<MeshStandardMaterial>(null)
@@ -93,9 +97,12 @@ function FacilityHotspot({
     e.stopPropagation()
     onSelect(spec.key)
   }
+  const interactionProps = interactive
+    ? { onClick: clickSelect, onDoubleClick: clickSelect, onPointerOver: cursorOver, onPointerOut: cursorOut }
+    : {}
 
   return (
-    <group position={spec.position} onClick={clickSelect} onDoubleClick={clickSelect} onPointerOver={cursorOver} onPointerOut={cursorOut}>
+    <group position={spec.position} {...interactionProps}>
       <mesh position={[0, 0.024, 0]} receiveShadow>
         <boxGeometry args={[0.82, 0.012, 0.48]} />
         <meshStandardMaterial
@@ -122,7 +129,14 @@ function FacilityHotspot({
           />
         </mesh>
       ))}
-      <mesh position={[0, spec.hit[1], spec.hit[2] - spec.position[2]]} visible>
+      <mesh
+        position={[
+          spec.hit[0] - spec.position[0],
+          spec.hit[1] - spec.position[1],
+          spec.hit[2] - spec.position[2]
+        ]}
+        visible
+      >
         <boxGeometry args={[1.4, 0.36, 0.52]} />
         <meshBasicMaterial transparent opacity={0.01} depthWrite={false} />
       </mesh>
@@ -130,11 +144,17 @@ function FacilityHotspot({
   )
 }
 
-export default function FacilityHotspots({ specs, activeKey, onSelect }: FacilityHotspotsProps): React.JSX.Element {
+export default function FacilityHotspots({ specs, activeKey, interactive = true, onSelect }: FacilityHotspotsProps): React.JSX.Element {
   return (
     <>
       {specs.map((spec) => (
-        <FacilityHotspot key={spec.key} spec={spec} active={spec.key === activeKey} onSelect={onSelect} />
+        <FacilityHotspot
+          key={spec.key}
+          spec={spec}
+          active={spec.key === activeKey}
+          interactive={interactive}
+          onSelect={onSelect}
+        />
       ))}
     </>
   )

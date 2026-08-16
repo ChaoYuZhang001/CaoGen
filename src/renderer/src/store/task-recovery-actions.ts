@@ -1,4 +1,5 @@
 import type {
+  AgentEvent,
   McpProbeResult,
   TaskDagFinalizationResolution,
   TaskSnapshotRecord,
@@ -20,8 +21,10 @@ interface TaskRecoveryState {
   workflowAttentionSupervisorRuns: SupervisorRunRecord[]
   workflowAttentionLoading: boolean
   workflowAttentionError?: string
+  workflowAttentionActionError?: string
   recoverTaskSnapshot(snapshotId: string): Promise<void>
   refreshTaskSnapshots(): Promise<void>
+  refreshWorkflowAttention(): Promise<void>
 }
 
 type TaskRecoveryStateUpdate = Partial<
@@ -35,6 +38,7 @@ type TaskRecoveryStateUpdate = Partial<
     | 'workflowAttentionSupervisorRuns'
     | 'workflowAttentionLoading'
     | 'workflowAttentionError'
+    | 'workflowAttentionActionError'
   >
 >
 
@@ -44,8 +48,13 @@ export interface TaskRecoveryActions {
   workflowAttentionSupervisorRuns: SupervisorRunRecord[]
   workflowAttentionLoading: boolean
   workflowAttentionError?: string
+  workflowAttentionActionError?: string
   hydrateTaskRecoveryCandidates(): Promise<void>
   refreshWorkflowAttention(): Promise<void>
+  controlWorkflowSupervisorRun(
+    run: SupervisorRunRecord,
+    action: 'pause' | 'cancel' | 'resume' | 'retry'
+  ): Promise<void>
   resolveTaskEffect(
     snapshotId: string,
     effectId: string,
@@ -62,6 +71,13 @@ export interface TaskRecoveryActions {
     expectedRevision: number,
     resolution: ModelAttemptReconciliationResolution
   ): Promise<void>
+}
+
+export function refreshTaskRecoveryAfterEvent(
+  event: AgentEvent,
+  refresh: () => Promise<void>
+): void {
+  if (event.kind === 'turn-result' || (event.kind === 'status' && event.status === 'error')) void refresh()
 }
 
 export async function requireMcpProbeResults(
@@ -82,6 +98,7 @@ export function createTaskRecoveryActions(
     workflowAttentionWorkItems: [],
     workflowAttentionSupervisorRuns: [],
     workflowAttentionLoading: false,
+    workflowAttentionActionError: undefined,
 
     async refreshWorkflowAttention() {
       set({ workflowAttentionLoading: true, workflowAttentionError: undefined })
@@ -99,11 +116,42 @@ export function createTaskRecoveryActions(
           ? workItemsResult.value.filter((item) => attentionStatuses.has(item.status) || item.acceptance?.status === 'failed')
           : get().workflowAttentionWorkItems,
         workflowAttentionSupervisorRuns: supervisorResult.status === 'fulfilled'
-          ? supervisorResult.value.filter((run) => ['waiting_approval', 'waiting_reconciliation', 'blocked', 'failed'].includes(run.status))
+          ? supervisorResult.value.filter((run) => run.origin === 'task_run' && [
+            'queued', 'running', 'waiting_approval', 'waiting_reconciliation', 'paused', 'blocked', 'failed'
+          ].includes(run.status))
           : get().workflowAttentionSupervisorRuns,
         workflowAttentionLoading: false,
         workflowAttentionError: errors.length > 0 ? errors.join('\n') : undefined
       })
+    },
+
+    async controlWorkflowSupervisorRun(run, action) {
+      set({ workflowAttentionActionError: undefined })
+      try {
+        if (action === 'cancel') {
+          await window.agentDesk.cancelSupervisorRun(run.id, { expectedRevision: run.revision })
+        } else if (action === 'retry') {
+          await window.agentDesk.retrySupervisorRun(run.id, { expectedRevision: run.revision })
+        } else {
+          const leased = await window.agentDesk.claimSupervisorControlLease(run.id, run.revision)
+          const lease = leased.lease
+          if (!lease) throw new Error(`Supervisor Run ${run.id} did not return a control lease`)
+          const options = {
+            ownerId: lease.ownerId,
+            leaseId: lease.id,
+            fencingToken: lease.fencingToken,
+            expectedRevision: leased.revision
+          }
+          if (action === 'pause') await window.agentDesk.pauseSupervisorRun(run.id, options)
+          else if (action === 'resume') await window.agentDesk.resumeSupervisorRun(run.id, options)
+          else throw new Error(`Unsupported Supervisor action: ${action}`)
+        }
+        await get().refreshWorkflowAttention()
+      } catch (error) {
+        set({ workflowAttentionActionError: errorMessage(error) })
+        await get().refreshWorkflowAttention()
+        throw error
+      }
     },
 
     async hydrateTaskRecoveryCandidates() {

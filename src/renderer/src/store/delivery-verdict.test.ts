@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import type { StudioResultSnapshot } from '../../../shared/studio-result-types'
 import { deriveDeliveryVerdict, canMarkGoalComplete } from './delivery-verdict.ts'
 
-type AcceptanceStub = Pick<StudioResultSnapshot['acceptances'][number], 'status'>
+type AcceptanceStub = Pick<StudioResultSnapshot['acceptances'][number], 'status'> &
+  Partial<Pick<StudioResultSnapshot['acceptances'][number], 'deliveryScope'>>
 type RunStub = Pick<StudioResultSnapshot['runs'][number], 'status'>
 type GoalStub = Pick<NonNullable<StudioResultSnapshot['goal']>, 'status'>
 type SnapshotOverrides = {
@@ -64,6 +65,8 @@ function makeSnapshot(over: SnapshotOverrides = {}): StudioResultSnapshot {
     cost: { knownUsd: 0, knownRunCount: 0, totalRunCount: 0, coverage: 'unavailable' },
     summary: {
       runs: 0, artifacts: 0, availableArtifacts: 0, evidence: 0, acceptances: 0,
+      currentArtifacts: 0, historicalArtifacts: 0,
+      readyArtifacts: 0, attentionArtifacts: 0,
       passedAcceptances: 0, tests: 0, changes: 0, openItems: 0, approvals: 0, risks: 0
     },
     verification: { canonicalAggregateVerified: true, sanitized: true as const, resultDigest: '' },
@@ -124,6 +127,19 @@ test('deriveDeliveryVerdict: 空 acceptances 按字面 → verifiable(架构 §8
   const d = deriveDeliveryVerdict(makeSnapshot({ acceptances: [] }))
   assert.equal(d.verdict, 'verifiable')
   assert.equal(d.total, 0)
+})
+
+test('deriveDeliveryVerdict: historical failed Acceptance does not block its accepted successor', () => {
+  const d = deriveDeliveryVerdict(makeSnapshot({
+    acceptances: [
+      { status: 'failed', deliveryScope: 'historical' },
+      { status: 'passed', deliveryScope: 'blocking' }
+    ]
+  }))
+  assert.equal(d.verdict, 'verifiable')
+  assert.equal(d.total, 1)
+  assert.equal(d.passed, 1)
+  assert.equal(d.failed, 0)
 })
 
 test('deriveDeliveryVerdict: Run completed 但 Acceptance failed → not_done(AC-1)', () => {

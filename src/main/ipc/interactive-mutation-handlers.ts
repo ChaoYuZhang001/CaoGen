@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import type { CheckpointRestoreMode } from '../../shared/types'
 import { sessionManager } from '../sessionManager'
 import { executeInteractiveOperationEffect } from '../task/operation-effect-gateway'
@@ -53,14 +53,16 @@ function registerGitMutationIpc(): void {
     runGitIndex(id, 'git:unstage', { paths }, '取消暂存 Git 文件'))
   ipcMain.handle('git:commit', (_event, id: string, message: string) => {
     authorize(id, '提交 Git 改动')
-    return executeInteractiveOperationEffectGitCommit(id, message, executeInteractiveOperationEffect)
+    return executeInteractiveOperationEffectGitCommit(
+      id, message, executeInteractiveOperationEffect, app.getPath('userData')
+    )
   })
   ipcMain.handle('workspace:applyHunk', (_event, id: string, filePath: string, hunkPatch: string) =>
     runGitIndex(id, 'workspace:applyHunk', { filePath, hunkPatch }, '暂存工作区 hunk'))
   ipcMain.handle('workspace:discardHunk', (_event, id: string, filePath: string, hunkPatch: string) => {
     authorize(id, '丢弃工作区 hunk')
     return executeInteractiveOperationEffectDiscardHunk(
-      id, filePath, hunkPatch, executeInteractiveOperationEffect
+      id, filePath, hunkPatch, executeInteractiveOperationEffect, app.getPath('userData')
     )
   })
 }
@@ -92,7 +94,7 @@ function registerFileMutationIpc(): void {
   ipcMain.handle('files:write', (_event, id: string, relativePath: string, content: string) => {
     authorize(id, '保存项目文件')
     return executeInteractiveOperationEffectWriteFile(
-      id, relativePath, content, executeInteractiveOperationEffect
+      id, relativePath, content, executeInteractiveOperationEffect, app.getPath('userData')
     )
   })
 }
@@ -104,7 +106,9 @@ function runGitIndex(
   title: string
 ) {
   authorize(id, title)
-  return executeInteractiveOperationEffectGitIndex(id, channel, input, executeInteractiveOperationEffect)
+  return executeInteractiveOperationEffectGitIndex(
+    id, channel, input, executeInteractiveOperationEffect, app.getPath('userData')
+  )
 }
 
 function authorize(sessionId: string, title: string): void {

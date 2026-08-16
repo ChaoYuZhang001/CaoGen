@@ -1,5 +1,7 @@
-import { existsSync, lstatSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import type { DataPurgeTarget, DataRetentionSubject } from '../../shared/data-lifecycle-types'
+import type { HistoryEntry } from '../../shared/types'
 import type { MutationOptions, ProjectDeletionResult } from '../../shared/project-workspace-types'
 import { AssignmentOwnerJournal } from '../assignment-owner-coordinator/journal'
 import { DigitalWorkerStore } from '../digital-worker/domain-store'
@@ -7,6 +9,7 @@ import { learningStatePath } from '../learning/learning-store'
 import { createProductionProjectAggregateService } from '../project-aggregate/project-aggregate-factory'
 import { projectLearningNamespace } from '../project-aggregate/project-memory-adapter'
 import { openProjectWorkspaceStore } from '../project-workspace/store'
+import { getProjectPortfolioStore } from '../project-portfolio/store'
 import { SupervisorStateStore } from '../task/supervisor-state'
 import { readTaskSnapshotDatabase } from '../task/task-snapshot'
 import { findWorkflowLedgerAuthorizedPurge } from '../task/workflow-ledger-authorized-purge'
@@ -20,6 +23,7 @@ import {
   type ProjectDeletionPhase
 } from './project-deletion-journal'
 import {
+  assertProjectSessionPurgeable,
   collectProjectSessionInventory,
   purgeProjectSessionData,
   scanProjectSessionResiduals
@@ -35,8 +39,27 @@ import {
   scanWorkflowProjectResiduals
 } from './workflow-project-purge'
 import { purgeProjectRoutineSlice, scanProjectRoutineResiduals } from '../routines/routine-project-store'
+import { historyEntriesFromDocument } from '../history-store-format'
+import {
+  assertDataPurgeAllowed,
+  isDataRetentionBlockedError
+} from './retention-authority'
+import { withDataLifecycleMutation } from './data-lifecycle-mutation-lock'
+import { getRemoteContinuationStore } from '../remote/store'
+import { getMediaStore } from '../media/media-store'
+import {
+  countMediaProjectFiles,
+  purgeLegacyMediaProviderOutputFiles,
+  purgeMediaProjectFiles
+} from '../media/media-ffmpeg'
+import {
+  countProjectConnectorCacheResiduals,
+  purgeProjectConnectorCaches
+} from '../project-workspace/project-connector-cache'
 
 export interface ProjectDeletionCoordinatorOptions {
+  /** Stable caller-owned operation ID for Effect reconciliation; direct callers omit it. */
+  operationId?: string
   afterPhase?: (phase: ProjectDeletionPhase, entry: ProjectDeletionJournalEntry) => void | Promise<void>
 }
 
@@ -59,7 +82,7 @@ export async function purgeProjectPermanently(
   const id = requiredId(projectId, 'projectId')
   const journal = new ProjectDeletionJournal(root)
   let entry = journal.getPendingProject(id)
-  if (!entry) entry = await prepareDeletion(id, root, mutationOptions, journal)
+  if (!entry) entry = await prepareDeletion(id, root, mutationOptions, journal, options.operationId)
   return executeDeletion(root, entry, journal, options)
 }
 
@@ -71,16 +94,29 @@ export async function resumeProjectDeletions(
   const journal = new ProjectDeletionJournal(root)
   const results: ProjectDeletionResult[] = []
   for (const entry of journal.listPending()) {
-    results.push(await executeDeletion(root, entry, journal, options))
+    try {
+      results.push(await executeDeletion(root, entry, journal, options))
+    } catch (error) {
+      if (!isDataRetentionBlockedError(error)) throw error
+      console.info(`[caogen] Project deletion remains pending under retention authority: ${entry.projectId}`)
+    }
   }
   return results
+}
+
+export function assertProjectDeletionResumeAllowed(
+  userDataRoot: string,
+  entry: ProjectDeletionJournalEntry
+): void {
+  assertDeletionAllowed(requiredRoot(userDataRoot), entry)
 }
 
 async function prepareDeletion(
   projectId: string,
   root: string,
   mutationOptions: MutationOptions,
-  journal: ProjectDeletionJournal
+  journal: ProjectDeletionJournal,
+  operationId?: string
 ): Promise<ProjectDeletionJournalEntry> {
   const workspaceStore = await openProjectWorkspaceStore(root)
   const workspace = await workspaceStore.getWorkspace(projectId)
@@ -90,6 +126,10 @@ async function prepareDeletion(
   }
   if (mutationOptions.expectedRevision !== undefined && mutationOptions.expectedRevision !== workspace.revision) {
     throw new Error(`stale_revision: Project ${projectId} is at ${workspace.revision}`)
+  }
+  const projectRetentionTarget: DataPurgeTarget = {
+    subject: { kind: 'project', id: projectId },
+    retentionAnchorAt: requiredTimestamp(workspace.deletedAt ?? workspace.updatedAt, 'Project retention anchor')
   }
   const service = createProductionProjectAggregateService(root)
   const currentSeal = service.seals.readProject(projectId)
@@ -101,6 +141,7 @@ async function prepareDeletion(
     expectedAggregateDigest: seal.aggregateDigest
   })
   const workflowSessionIds = aggregate.bundle.aggregate.workflow.runs.map((run) => run.sessionId)
+  const portableSessionIds = aggregate.bundle.runtime?.sessionIds ?? []
   const routineSessionIds = (aggregate.bundle.automation?.runs ?? [])
     .map((run) => run.sessionId)
     .filter((sessionId): sessionId is string => Boolean(sessionId))
@@ -109,17 +150,28 @@ async function prepareDeletion(
   const inventory = collectProjectSessionInventory(
     root,
     projectId,
-    [...workflowSessionIds, ...routineSessionIds, ...conversationInventory.sessionIds],
+    [...workflowSessionIds, ...portableSessionIds, ...routineSessionIds, ...conversationInventory.sessionIds],
     conversationInventory.sdkSessionIds
   )
+  assertProjectSessionPurgeable(root, inventory.sessionIds)
+  const retention = projectDeletionRetentionScope(root, projectRetentionTarget, inventory.sessionIds)
   const artifactBlobDigests = await planWorkflowProjectPurgeBlobs(projectId, root)
-  return journal.begin({
-    projectId,
-    expectedWorkspaceRevision: workspace.revision,
-    sessionIds: inventory.sessionIds,
-    sdkSessionIds: inventory.sdkSessionIds,
-    artifactBlobDigests,
-    externalResources: captureProjectExternalResourceBoundaries(aggregate.bundle.aggregate.resources)
+  const effectArtifactRefs = aggregate.bundle.runtime?.effectArtifacts?.map((record) => record.artifactRef) ?? []
+  return withDataLifecycleMutation(root, async () => {
+    const entry = await journal.begin({
+      ...(operationId === undefined ? {} : { operationId }),
+      projectId,
+      expectedWorkspaceRevision: workspace.revision,
+      sessionIds: inventory.sessionIds,
+      sdkSessionIds: inventory.sdkSessionIds,
+      artifactBlobDigests,
+      retentionTargets: retention.targets,
+      legalHoldSubjects: retention.relatedLegalHoldSubjects,
+      effectArtifactRefs,
+      externalResources: captureProjectExternalResourceBoundaries(aggregate.bundle.aggregate.resources)
+    })
+    assertDeletionAllowed(root, entry)
+    return entry
   })
 }
 
@@ -129,7 +181,17 @@ async function executeDeletion(
   journal: ProjectDeletionJournal,
   options: ProjectDeletionCoordinatorOptions
 ): Promise<ProjectDeletionResult> {
+  return withDataLifecycleMutation(root, () => executeDeletionLocked(root, initial, journal, options))
+}
+
+async function executeDeletionLocked(
+  root: string,
+  initial: ProjectDeletionJournalEntry,
+  journal: ProjectDeletionJournal,
+  options: ProjectDeletionCoordinatorOptions
+): Promise<ProjectDeletionResult> {
   let entry = initial
+  assertProjectSessionPurgeable(root, entry.sessionIds)
   const current = (): number => PROJECT_DELETION_PHASES.indexOf(entry.phase)
   const advance = async (
     phase: ProjectDeletionPhase,
@@ -153,40 +215,56 @@ async function executeDeletion(
   }
 
   if (current() < phaseIndex('workflow_purged')) {
+    assertDeletionAllowed(root, entry)
     await purgeWorkflowProjectData(
       entry.projectId,
       root,
       entry.operationId,
       entry.sessionIds,
-      entry.artifactBlobDigests
+      entry.artifactBlobDigests,
+      entry.effectArtifactRefs ?? []
     )
     await advance('workflow_purged')
   }
 
   if (current() < phaseIndex('project_stores_purged')) {
+    assertDeletionAllowed(root, entry)
     await new DigitalWorkerStore(root).purgeProject(entry.projectId)
     await new AssignmentOwnerJournal(root).purgeProject(entry.projectId)
     await new SupervisorStateStore(root).purgeProject(entry.projectId)
+    await getProjectPortfolioStore(root).purgeProject(entry.projectId)
+    await getRemoteContinuationStore(root).purgeProject(entry.projectId)
+    await purgeProjectConnectorCaches(root, entry.projectId)
+    const mediaStore = getMediaStore(root)
+    const legacyRemoteOutputs = await mediaStore.listUnsharedLegacyRemoteOutputPaths(entry.projectId)
+    await purgeLegacyMediaProviderOutputFiles(root, legacyRemoteOutputs)
+    await purgeMediaProjectFiles(root, entry.projectId)
+    await mediaStore.purgeProject(entry.projectId)
     createProductionProjectAggregateService(root).seals.purgeProject(entry.projectId)
     await advance('project_stores_purged')
   }
 
   if (current() < phaseIndex('automation_purged')) {
+    assertDeletionAllowed(root, entry)
     await purgeProjectRoutineSlice(join(root, 'routines'), entry.projectId)
     await advance('automation_purged')
   } else {
     const residual = await scanProjectRoutineResiduals(join(root, 'routines'), entry.projectId)
     if (residual.routines > 0 || residual.runs > 0) {
+      assertDeletionAllowed(root, entry)
       await purgeProjectRoutineSlice(join(root, 'routines'), entry.projectId)
     }
   }
 
-  if (current() < phaseIndex('session_data_purged')) {
+  const sessionDataPending = current() < phaseIndex('session_data_purged')
+  if (current() < phaseIndex('workspace_purged')) {
+    assertDeletionAllowed(root, entry)
     purgeProjectSessionData(root, entry.projectId, entry.sessionIds, entry.sdkSessionIds)
-    await advance('session_data_purged')
   }
+  if (sessionDataPending) await advance('session_data_purged')
 
   if (current() < phaseIndex('learning_purged')) {
+    assertDeletionAllowed(root, entry)
     purgeCanonicalLearning(root, entry.projectId)
     await advance('learning_purged')
   }
@@ -214,6 +292,7 @@ async function executeDeletion(
 async function purgeWorkspacePhase(root: string, progress: DeletionProgress): Promise<void> {
   if (progress.current() >= phaseIndex('workspace_purged')) return
   const entry = progress.entry()
+  assertDeletionAllowed(root, entry)
   const workspaceStore = await openProjectWorkspaceStore(root)
   const workspace = await workspaceStore.getWorkspace(entry.projectId)
   if (workspace) {
@@ -224,6 +303,50 @@ async function purgeWorkspacePhase(root: string, progress: DeletionProgress): Pr
     await workspaceStore.purgeWorkspace(entry.projectId, { expectedRevision: entry.expectedWorkspaceRevision })
   }
   await progress.advance('workspace_purged')
+}
+
+function projectDeletionRetentionScope(
+  root: string,
+  projectTarget: DataPurgeTarget,
+  sessionIds: readonly string[]
+): { targets: DataPurgeTarget[]; relatedLegalHoldSubjects: DataRetentionSubject[] } {
+  const sessionIdSet = new Set(sessionIds)
+  const historyById = new Map(readHistoryAtRoot(root)
+    .filter((entry) => sessionIdSet.has(entry.id))
+    .map((entry) => [entry.id, entry] as const))
+  const sessionTargets = [...sessionIdSet].sort().flatMap((sessionId): DataPurgeTarget[] => {
+    const history = historyById.get(sessionId)
+    return history ? [{
+      subject: { kind: 'session', id: sessionId },
+      retentionAnchorAt: requiredTimestamp(history.updatedAt, 'Session retention anchor')
+    }] : []
+  })
+  return {
+    targets: [projectTarget, ...sessionTargets],
+    relatedLegalHoldSubjects: [
+      projectTarget.subject,
+      ...[...sessionIdSet].sort().map((id) => ({ kind: 'session' as const, id }))
+    ]
+  }
+}
+
+function readHistoryAtRoot(root: string): HistoryEntry[] {
+  const file = join(root, 'sessions.json')
+  if (!existsSync(file)) return []
+  return historyEntriesFromDocument<HistoryEntry>(JSON.parse(readFileSync(file, 'utf8')), 'Project retention History Store')
+}
+
+function assertDeletionAllowed(root: string, entry: ProjectDeletionJournalEntry): void {
+  assertDataPurgeAllowed(root, {
+    targets: entry.retentionTargets ?? [{
+      subject: { kind: 'project', id: entry.projectId },
+      retentionAnchorAt: entry.createdAt
+    }],
+    relatedLegalHoldSubjects: entry.legalHoldSubjects ?? [
+      { kind: 'project', id: entry.projectId },
+      ...entry.sessionIds.map((id) => ({ kind: 'session' as const, id }))
+    ]
+  })
 }
 
 async function verifyAndWriteProof(
@@ -275,6 +398,7 @@ async function writeDeletionProof(
     sessionIds: entry.sessionIds,
     sdkSessionIds: entry.sdkSessionIds,
     artifactBlobDigests: entry.artifactBlobDigests,
+    effectArtifactRefs: entry.effectArtifactRefs ?? [],
     authorizedPurge: authorization,
     residuals,
     externalResourcesBefore: entry.externalResources ??
@@ -334,7 +458,12 @@ async function scanProjectDeletionResiduals(
   root: string,
   entry: ProjectDeletionJournalEntry
 ): Promise<Record<string, number>> {
-  const workflow = await scanWorkflowProjectResiduals(entry.projectId, root, entry.sessionIds)
+  const workflow = await scanWorkflowProjectResiduals(
+    entry.projectId,
+    root,
+    entry.sessionIds,
+    entry.effectArtifactRefs ?? []
+  )
   const workers = new DigitalWorkerStore(root).read()
   const assignmentJournal = await new AssignmentOwnerJournal(root).countProject(entry.projectId)
   const supervisor = await new SupervisorStateStore(root).listRuns({ projectId: entry.projectId })
@@ -345,8 +474,16 @@ async function scanProjectDeletionResiduals(
     workspaceStore.getWorkspace(entry.projectId),
     workspaceStore.getState()
   ])
+  const portfolio = await getProjectPortfolioStore(root).countProject(entry.projectId)
+  const media = await getMediaStore(root).countProject(entry.projectId)
+  const mediaFiles = await countMediaProjectFiles(root, entry.projectId)
+  const connectorCache = await countProjectConnectorCacheResiduals(root, entry.projectId)
+  const artifactSourceFiles = workflow.counts.artifact_source_files ?? 0
+  const effectArtifacts = workflow.counts.effect_artifacts ?? 0
   return {
-    workflow: workflow.total,
+    workflow: workflow.total - artifactSourceFiles - effectArtifacts,
+    artifactSourceFiles,
+    effectArtifacts,
     digitalWorkers: workers.workers.filter((record) => record.projectId === entry.projectId).length,
     assignments: workers.assignments.filter((record) => record.projectId === entry.projectId).length,
     leases: workers.leases.filter((record) => record.projectId === entry.projectId).length,
@@ -359,7 +496,17 @@ async function scanProjectDeletionResiduals(
     routineRuns: automation.runs,
     workspace: workspace ? 1 : 0,
     squads: workspaceState.squads.filter((record) => record.projectId === entry.projectId).length,
+    members: workspaceState.members.filter((record) => record.projectId === entry.projectId).length,
+    invitations: workspaceState.invitations.filter((record) => record.projectId === entry.projectId).length,
     comments: workspaceState.comments.filter((record) => record.projectId === entry.projectId).length,
+    sharedApprovals: workspaceState.sharedApprovals.filter((record) => record.projectId === entry.projectId).length,
+    inboxReceipts: workspaceState.inboxReceipts.filter((record) => record.projectId === entry.projectId).length,
+    portfolioDependencies: portfolio.dependencies,
+    portfolioMilestones: portfolio.milestones,
+    mediaProductions: media.productions,
+    mediaJobs: media.jobs,
+    mediaFiles,
+    connectorCache,
     ...Object.fromEntries(Object.entries(sessions).map(([key, value]) => [`sessions.${key}`, value]))
   }
 }
@@ -406,4 +553,9 @@ function requiredRoot(value: string): string {
 function requiredId(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim() || /[\0-\x1f\x7f]/.test(value)) throw new Error(`${label} is required`)
   return value.trim()
+}
+
+function requiredTimestamp(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new Error(`${label} is invalid`)
+  return Number(value)
 }

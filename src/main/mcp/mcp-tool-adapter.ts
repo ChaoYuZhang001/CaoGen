@@ -1,4 +1,5 @@
 import { callMcpTool, type McpDiscoveryResult, type McpServerConfig, type McpToolDefinition } from './mcp-client'
+import { authorizeMcpRuntimeConfig } from '../plugin/plugin-runtime-authorization'
 
 export interface CaoGenToolDefinition {
   type: 'function'
@@ -22,7 +23,10 @@ export function toCaoGenTools(serverId: string, discovery: McpDiscoveryResult): 
   return discovery.tools.map((tool) => toolToCaoGen(serverId, tool))
 }
 
-export function createMcpToolRuntime(configs: Record<string, McpServerConfig>): McpToolRuntime {
+export function createMcpToolRuntime(
+  configs: Record<string, McpServerConfig>,
+  projectRoot?: string
+): McpToolRuntime {
   const prefixMap = new Map<string, { serverId: string; config: McpServerConfig }>()
   for (const [serverId, config] of Object.entries(configs)) {
     prefixMap.set(`mcp__${sanitizeName(serverId)}__`, { serverId, config })
@@ -36,7 +40,12 @@ export function createMcpToolRuntime(configs: Record<string, McpServerConfig>): 
       if (!found) return { ok: false, output: `未知 MCP 工具: ${name}` }
       const toolName = name.slice(found.prefix.length).replace(/_/g, '-')
       try {
-        const result = await callMcpTool(found.config.config, toolName, args)
+        const authorized = authorizeMcpRuntimeConfig({
+          projectRoot,
+          serverId: found.config.serverId,
+          requestedConfig: found.config.config
+        })
+        const result = await callMcpTool(authorized.config, toolName, args)
         return { ok: result.isError !== true, output: stringifyContent(result.content) }
       } catch (error) {
         return { ok: false, output: error instanceof Error ? error.message : String(error) }

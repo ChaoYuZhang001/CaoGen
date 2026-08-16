@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const repoRoot = process.cwd()
+const require = createRequire(import.meta.url)
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter)
+require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-worker-performance-'))
 const outDir = path.join(tempRoot, 'compiled')
 try {

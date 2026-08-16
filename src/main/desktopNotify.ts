@@ -24,6 +24,10 @@ export function showDesktopNotification(input: {
   body: string
   sessionId: string
 }): void {
+  console.info('[caogen] desktop notification requested:', JSON.stringify({
+    sessionId: input.sessionId,
+    title: input.title
+  }))
   if (!Notification.isSupported()) return
   const notification = new Notification({
     title: input.title,

@@ -37,8 +37,17 @@ function evaluateMacosController(platform = process.platform) {
   }).outputText
 
   const module = { exports: {} }
+  const runtimeRequire = (specifier) => specifier === '../security/subprocess-environment'
+    ? {
+        buildMinimalSubprocessEnv: (input = {}) => ({
+          PATH: input.PATH ?? process.env.PATH ?? '',
+          HOME: input.HOME ?? process.env.HOME ?? '',
+          TMPDIR: input.TMPDIR ?? process.env.TMPDIR ?? '/tmp'
+        })
+      }
+    : require(specifier)
   new Function('require', 'module', 'exports', 'process', output)(
-    require,
+    runtimeRequire,
     module,
     module.exports,
     { ...process, platform }

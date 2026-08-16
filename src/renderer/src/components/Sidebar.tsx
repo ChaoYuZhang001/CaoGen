@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { Search } from 'lucide-react'
 import { useStore } from '../store'
@@ -7,7 +7,6 @@ import { basename, formatCost, formatTime } from '../format'
 import { APP_ICON_URL, APP_NAME } from '../brand'
 import type {
   HistoryEntry,
-  LayoutSettings,
   SessionStatus,
   TranscriptSearchResult
 } from '../../../shared/types'
@@ -19,6 +18,9 @@ import SidebarProjectSections, { type SidebarProjectSort } from './SidebarProjec
 import { HeaderIcon } from './ChatHeaderIcons'
 import { modelAttemptMatchesSnapshot } from './ModelAttemptRecoveryPanel'
 import { isTaskSnapshotRecoverable } from './TaskRecoveryItem'
+import { useSidebarResize } from './useSidebarResize'
+import { ExperiencePreferenceSuggestion } from './ExperiencePreferenceSuggestion'
+import { recommendExperiencePreferences } from '../store/experience-recommendation'
 import {
   buildSidebarProjectGroups,
   sidebarEntryPath,
@@ -35,8 +37,6 @@ const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   closed: 'statusClosed'
 }
 
-const SIDEBAR_MIN_WIDTH = 208
-const SIDEBAR_MAX_WIDTH = 360
 const SIDEBAR_COLLAPSED_WIDTH = 56
 
 interface EditingTarget { kind: SidebarEntry['kind']; id: string }
@@ -67,10 +67,6 @@ function historyPath(entry: HistoryEntry): string {
 
 function normalized(value: string | undefined): string {
   return (value ?? '').toLowerCase()
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, Math.round(value)))
 }
 
 function activateByKeyboard(e: React.KeyboardEvent, action: () => void): void {
@@ -145,7 +141,8 @@ function Sidebar({
   const showNewSession = useStore((s) => s.showNewSession)
   const showTaskRecovery = useStore((s) => s.showTaskRecovery)
   const view = useStore((s) => s.view)
-  const layout = useStore((s) => s.settings.layout)
+  const settings = useStore((s) => s.settings)
+  const layout = settings.layout
   const updateSettings = useStore((s) => s.updateSettings)
 
   const [editing, setEditing] = useState<EditingTarget | null>(null)
@@ -158,36 +155,13 @@ function Sidebar({
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
-  const [sidebarWidth, setSidebarWidth] = useState(layout.sidebarWidth)
-  useEffect(() => {
-    setSidebarWidth(layout.sidebarWidth)
-  }, [layout.sidebarWidth])
-  const patchLayout = (patch: Partial<LayoutSettings>): void => {
-    void updateSettings({ layout: { ...layout, ...patch } }).catch((error) => {
-      console.error('[agent-desk] Failed to persist sidebar layout:', error)
-    })
-  }
-
-  const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
-    if (layout.sidebarCollapsed) return
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = sidebarWidth
-    let nextWidth = startWidth
-    const move = (moveEvent: PointerEvent): void => {
-      nextWidth = clamp(startWidth + moveEvent.clientX - startX, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
-      setSidebarWidth(nextWidth)
-    }
-    const stop = (): void => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', stop)
-      document.body.classList.remove('is-resizing-layout')
-      patchLayout({ sidebarWidth: nextWidth })
-    }
-    document.body.classList.add('is-resizing-layout')
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', stop, { once: true })
-  }
+  const { sidebarWidth, patchLayout, startSidebarResize } = useSidebarResize(layout, updateSettings)
+  const experienceRecommendation = useMemo(() => recommendExperiencePreferences({
+    settings,
+    sessions: Object.values(sessions).map((session) => session.meta),
+    history,
+    projectCount: projectWorkspaces.filter((project) => project.status === 'active').length
+  }), [history, projectWorkspaces, sessions, settings])
 
   const historyByActiveId = useMemo(() => {
     const map = new Map<string, HistoryEntry>()
@@ -700,6 +674,7 @@ function Sidebar({
           onPointerDown={preloadOfficeView}
           onClick={() => {
             closeMobile()
+            setShowTaskRecovery(false)
             setView('office')
           }}
         >
@@ -817,6 +792,14 @@ function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        {experienceRecommendation && (
+          <ExperiencePreferenceSuggestion
+            language={language}
+            recommendation={experienceRecommendation}
+            settings={settings}
+            onUpdate={updateSettings}
+          />
+        )}
         <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
         <button
           type="button"

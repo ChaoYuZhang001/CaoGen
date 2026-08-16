@@ -3,6 +3,7 @@ import type {
   WorkflowAcceptanceRecord,
   WorkflowAcceptanceReviewDecision,
   WorkflowAcceptanceReviewResult,
+  WorkflowArtifactRecord,
   WorkflowEvidenceKind,
   WorkflowEvidenceRecord
 } from '../../../shared/types'
@@ -52,6 +53,7 @@ function useReviewState(acceptance: WorkflowAcceptanceRecord): ReviewState {
 export function WorkflowAcceptanceRow({
   acceptance,
   evidence,
+  artifact,
   onRefresh,
   repairWorkItemId,
   onOpenRepair,
@@ -59,18 +61,19 @@ export function WorkflowAcceptanceRow({
 }: {
   acceptance: WorkflowAcceptanceRecord
   evidence: WorkflowEvidenceRecord[]
+  artifact?: WorkflowArtifactRecord
   onRefresh: () => Promise<void>
   /** ART-005 (T06) additive:来自 reviewWorkflowAcceptance 返回的 repair.workItemId,回填映射提供 */
   repairWorkItemId?: string
   /** ART-005 (T06) additive:点击 repair 入口时跳转(openTool('tasks')/openSubagentPanel) */
-  onOpenRepair?: (workItemId: string) => void
+  onOpenRepair?: (workItemId: string) => Promise<void> | void
   /** ART-005 (T06) additive:review 成功且有 repair 时上报父层,用于回填 repairByAcceptanceId */
   onRepairReported?: (repair: NonNullable<WorkflowAcceptanceReviewResult['repair']>) => void
 }): React.JSX.Element {
   const state = useReviewState(acceptance)
   const reviewable = acceptance.status === 'pending' || acceptance.status === 'verifying'
   const onAddEvidence = (event: React.FormEvent<HTMLFormElement>): void => {
-    void addEvidence(event, acceptance, state, onRefresh)
+    void addEvidence(event, acceptance, state, onRefresh, artifact)
   }
   const onReview = (decision: WorkflowAcceptanceReviewDecision): void => {
     void reviewAcceptance(decision, acceptance, state, onRefresh, onRepairReported)
@@ -87,6 +90,7 @@ export function WorkflowAcceptanceRow({
         <AcceptanceReviewPanel
           acceptance={acceptance}
           evidence={evidence}
+          artifactId={artifact?.id}
           state={state}
           onAddEvidence={onAddEvidence}
           onReview={onReview}
@@ -101,14 +105,33 @@ export function WorkflowAcceptanceRow({
             type="button"
             className="btn btn-ghost btn-xs"
             data-acceptance-repair
-            onClick={() => onOpenRepair(repairWorkItemId)}
+            onClick={() => void openRepair(repairWorkItemId, state, onOpenRepair)}
+            disabled={state.busy}
           >
-            查看返工 WorkItem
+            {state.busy ? '启动中...' : '开始返工'}
           </button>
         </div>
       )}
     </div>
   )
+}
+
+async function openRepair(
+  workItemId: string,
+  state: ReviewState,
+  onOpenRepair: (workItemId: string) => Promise<void> | void
+): Promise<void> {
+  state.setError('')
+  state.setSuccess('')
+  state.setBusy(true)
+  try {
+    await onOpenRepair(workItemId)
+    state.setSuccess('返工任务已启动')
+  } catch (cause) {
+    state.setError(errorMessage(cause))
+  } finally {
+    state.setBusy(false)
+  }
 }
 
 function AcceptancePolicyList({ acceptance }: { acceptance: WorkflowAcceptanceRecord }): React.JSX.Element {
@@ -126,12 +149,14 @@ function AcceptancePolicyList({ acceptance }: { acceptance: WorkflowAcceptanceRe
 function AcceptanceReviewPanel({
   acceptance,
   evidence,
+  artifactId,
   state,
   onAddEvidence,
   onReview
 }: {
   acceptance: WorkflowAcceptanceRecord
   evidence: WorkflowEvidenceRecord[]
+  artifactId?: string
   state: ReviewState
   onAddEvidence: (event: React.FormEvent<HTMLFormElement>) => void
   onReview: (decision: WorkflowAcceptanceReviewDecision) => void
@@ -151,7 +176,7 @@ function AcceptanceReviewPanel({
         </button>
       </div>
       {state.addingEvidence && <EvidenceAuthoringForm state={state} onSubmit={onAddEvidence} />}
-      <CriterionReviewList acceptance={acceptance} evidence={evidence} state={state} />
+      <CriterionReviewList acceptance={acceptance} evidence={evidence} artifactId={artifactId} state={state} />
       <label className="field-label workflow-waiver-field">
         Waiver reason
         <input
@@ -223,10 +248,12 @@ function EvidenceAuthoringForm({
 function CriterionReviewList({
   acceptance,
   evidence,
+  artifactId,
   state
 }: {
   acceptance: WorkflowAcceptanceRecord
   evidence: WorkflowEvidenceRecord[]
+  artifactId?: string
   state: ReviewState
 }): React.JSX.Element {
   return (
@@ -238,6 +265,7 @@ function CriterionReviewList({
           criterion={criterion}
           criterionIndex={criterionIndex}
           evidence={evidence}
+          artifactId={artifactId}
           state={state}
         />
       ))}
@@ -250,16 +278,18 @@ function CriterionReview({
   criterion,
   criterionIndex,
   evidence,
+  artifactId,
   state
 }: {
   acceptance: WorkflowAcceptanceRecord
   criterion: string
   criterionIndex: number
   evidence: WorkflowEvidenceRecord[]
+  artifactId?: string
   state: ReviewState
 }): React.JSX.Element {
   const policy = policyFor(acceptance, criterionIndex)
-  const candidates = eligibleEvidence(evidence, policy)
+  const candidates = eligibleEvidence(evidence, policy, artifactId)
   const selected = state.selectedEvidence[criterionIndex] ?? []
   return (
     <fieldset className="workflow-criterion-review">
@@ -335,11 +365,13 @@ function policyFor(acceptance: WorkflowAcceptanceRecord, criterionIndex: number)
 
 function eligibleEvidence(
   evidence: WorkflowEvidenceRecord[],
-  policy: ReturnType<typeof policyFor>
+  policy: ReturnType<typeof policyFor>,
+  artifactId?: string
 ): WorkflowEvidenceRecord[] {
   return evidence.filter((record) =>
     (!policy || record.kind === policy.evidenceKind) &&
-    (!policy || policy.allowedSources.includes(record.source))
+    (!policy || policy.allowedSources.includes(record.source)) &&
+    (!artifactId || record.artifactId === artifactId)
   )
 }
 
@@ -347,7 +379,8 @@ async function addEvidence(
   event: React.FormEvent<HTMLFormElement>,
   acceptance: WorkflowAcceptanceRecord,
   state: ReviewState,
-  onRefresh: () => Promise<void>
+  onRefresh: () => Promise<void>,
+  artifact?: WorkflowArtifactRecord
 ): Promise<void> {
   event.preventDefault()
   state.setError('')
@@ -365,10 +398,14 @@ async function addEvidence(
       projectId: acceptance.projectId,
       ...(acceptance.goalId === undefined ? {} : { goalId: acceptance.goalId }),
       ...(acceptance.workItemId === undefined ? {} : { workItemId: acceptance.workItemId }),
+      ...(artifact?.goalId === undefined ? {} : { goalId: artifact.goalId }),
+      ...(artifact?.workItemId === undefined ? {} : { workItemId: artifact.workItemId }),
+      ...(artifact?.runId === undefined ? {} : { runId: artifact.runId }),
+      ...(artifact === undefined ? {} : { artifactId: artifact.id }),
       kind: state.evidenceKind,
       title,
       ...(summary ? { summary } : {}),
-      contentDigest: await sha256(`${title}\n${summary}`)
+      contentDigest: artifact?.digest ?? await sha256(`${title}\n${summary}`)
     })
     state.setEvidenceTitle('')
     state.setEvidenceSummary('')

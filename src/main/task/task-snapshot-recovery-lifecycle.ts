@@ -80,7 +80,7 @@ export async function prepareTaskSnapshotRecovery(
     meta: boundMeta,
     ...(boundRun ? { run: boundRun } : {})
   }
-  const persistedSnapshot = await reconcilePersistedTaskSnapshot(ownedSnapshot)
+  const persistedSnapshot = await reconcilePersistedTaskSnapshot(ownedSnapshot, rootDir)
   const persistedMeta = bindLegacyUnscopedSessionForRecovery({ ...persistedSnapshot.meta, ...ownership })
   resolveDigitalWorkerSessionScope(persistedMeta, rootDir)
   const persistedRun = bindAndValidateTaskRun(persistedMeta, persistedSnapshot.run)

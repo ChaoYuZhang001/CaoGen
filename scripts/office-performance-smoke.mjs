@@ -45,10 +45,7 @@ const runDir = path.join(reportRoot, runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-office-performance-'))
 const userDataDir = path.join(tempRoot, 'userData')
 const projectDir = path.join(tempRoot, 'project')
-const electronBin =
-  process.platform === 'win32'
-    ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
-    : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const electronBin = require('electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
 const rendererEntry = path.join(repoRoot, 'out', 'renderer', 'index.html')
 
@@ -98,15 +95,15 @@ const fixedQualityRegressionBudgets = {
 }
 const artifactTargets = {
   officeChunkBytesMaximum: 1_800_000,
-  robotGlbBytesMaximum: 8_000_000
+  watercolorAssetBytesMaximum: 36_000_000
 }
 const artifactRegressionBudgets = {
   officeChunkBytesMaximum: 2_200_000,
-  robotGlbBytesMaximum: 12_700_000
+  watercolorAssetBytesMaximum: 40_000_000
 }
-const cardCTargets = {
+const commandCenterTargets = {
   officeChunkBytesMaximum: 1_800_000,
-  robotGlbBytesMaximum: 8_000_000,
+  watercolorAssetBytesMaximum: 36_000_000,
   twelveAgentMedianDrawCallsMaximum: 3_269,
   twelveAgentBaselineMedianDrawCalls: 4_671,
   twelveAgentDrawCallReductionMinimumPercent: 30
@@ -115,9 +112,9 @@ const loadPhaseTargets = {
   shellReadyMsMaximum: 100,
   canvasReadyMsMaximum: 350,
   basicNonblankMsMaximum: 500,
-  lowLodReadyMsMaximum: 1_200,
+  charactersReadyMsMaximum: 1_200,
   interactiveReadyMsMaximum: 500,
-  fullLodReadyMsMaximum: 4_000
+  sceneAssetsReadyMsMaximum: 4_000
 }
 const cpuIdlePolicy = {
   maximumBusyPercent: 65,
@@ -159,7 +156,7 @@ const report = {
   fixedQualityRegressionBudgets,
   artifactTargets,
   artifactRegressionBudgets,
-  cardCTargets,
+  commandCenterTargets,
   loadPhaseTargets,
   cpuIdlePolicy,
   artifacts: artifactMetrics(),
@@ -169,8 +166,7 @@ const report = {
   autoAdaptation: null,
   renderPause: null,
   unmount: null,
-  lodUpgrade: null,
-  cardCContract: null,
+  commandCenterContract: null,
   checks: [],
   warnings: []
 }
@@ -303,27 +299,18 @@ try {
         target: qualityMode === 'auto' ? (targets[count] ?? null) : fixedQualityTargets[qualityMode],
         regressionBudget:
           qualityMode === 'auto' ? (regressionBudgets[count] ?? null) : fixedQualityRegressionBudgets[qualityMode],
-        lodViolations: [],
+        characterViolations: [],
         loadPhaseViolations: [],
         targetViolations: [],
         regressionViolations: []
       }
-      scenario.lodViolations = evaluateLodScenario(scenario)
+      scenario.characterViolations = evaluateWatercolorScenario(scenario)
       scenario.targetViolations = evaluateScenario(scenario, scenario.target, 'target')
       scenario.regressionViolations = evaluateScenario(
         scenario,
         scenario.regressionBudget,
         'regression budget'
       )
-      if (
-        report.lodUpgrade === null &&
-        fixedQualityAgentCount > 1 &&
-        count === fixedQualityAgentCount &&
-        qualityMode === 'auto'
-      ) {
-        report.lodUpgrade = await verifyLowLodUpgrade(page)
-        report.checks.push({ name: '3D Office low LOD selection upgrade', status: 'pass', ...report.lodUpgrade })
-      }
       if (report.autoAdaptation === null && qualityMode === 'auto') {
         report.autoAdaptation = await verifyAutoPressureDowngrade(page)
         report.checks.push({ name: '3D Office Auto pressure downgrade', status: 'pass', ...report.autoAdaptation })
@@ -356,7 +343,7 @@ try {
       report.checks.push({
         name: `${count}-agent ${qualityMode} office performance`,
         status:
-          scenario.lodViolations.length > 0 ||
+          scenario.characterViolations.length > 0 ||
           scenario.loadPhaseViolations.length > 0 ||
           scenario.regressionViolations.length > 0
             ? required
@@ -367,7 +354,7 @@ try {
               : 'pass',
         targetViolations: scenario.targetViolations,
         regressionViolations: scenario.regressionViolations,
-        violations: [...scenario.lodViolations, ...scenario.loadPhaseViolations]
+        violations: [...scenario.characterViolations, ...scenario.loadPhaseViolations]
       })
     }
   }
@@ -387,8 +374,8 @@ try {
   if (process.env.CAOGEN_KEEP_TEST_TMP !== '1') rmSync(tempRoot, { recursive: true, force: true })
 }
 
-report.cardCContract = evaluateCardCContract(report)
-report.checks.push(report.cardCContract)
+report.commandCenterContract = evaluateCommandCenterContract(report)
+report.checks.push(report.commandCenterContract)
 
 const failures = report.checks.filter((item) => item.status === 'fail')
 const warnings = report.checks.filter((item) => item.status === 'warn')
@@ -450,29 +437,23 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
       if (!(button instanceof HTMLElement)) throw new Error('Office navigation button unavailable')
 
       const startedAt = performance.now()
-      const expectedFullRobots = agents > 0 ? 1 : 0
-      const expectedLowRobots = Math.max(0, agents - expectedFullRobots)
       const measurement = {
         active: true,
         complete: false,
         rafId: 0,
         lastSnapshotAt: 0,
+        businessViewRequested: false,
         snapshotDurationsMs: [],
         kind: loadKind,
         expectedAgents: agents,
         expectedQuality: quality,
-        expectedFullRobots,
-        expectedLowRobots,
-        fullLodExpected: expectedFullRobots > 0,
-        lowLodExpected: expectedLowRobots > 0,
         startedAt,
         startedAtEpochMs: performance.timeOrigin + startedAt,
         shellReadyMs: null,
         canvasReadyMs: null,
         basicNonblankMs: null,
-        fullLodReadyMs: null,
-        lowLodReadyMs: null,
-        robotsReadyMs: null,
+        sceneAssetsReadyMs: null,
+        charactersReadyMs: null,
         interactiveReadyMs: null,
         observed: null
       }
@@ -489,6 +470,17 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
         }
 
         const office = document.querySelector('.office-canvas-wrap')
+        if (
+          office &&
+          office.getAttribute('data-office-business-view') !== 'all' &&
+          !measurement.businessViewRequested
+        ) {
+          const allBusinessView = document.querySelector('[data-office-business-view-option="all"]')
+          if (allBusinessView instanceof HTMLElement) {
+            measurement.businessViewRequested = true
+            allBusinessView.click()
+          }
+        }
         const diagnostics = window.__caogenOfficePerformance
         const rendered = diagnostics?.readFrame?.()
         const sceneMatches =
@@ -522,56 +514,32 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
           const snapshot = diagnostics.snapshot()
           measurement.snapshotDurationsMs.push(performance.now() - snapshotStartedAt)
           const snapshotObservedAt = snapshotStartedAt - startedAt
-          const lod = snapshot?.lod
-          const robots = Array.isArray(lod?.robots) ? lod.robots : []
-          const fullRobots = robots.filter(
-            (robot) =>
-              robot.lod === 'full' &&
-              robot.assetLod === 'full' &&
-              robot.sessionId &&
-              typeof robot.modelUrl === 'string' &&
-              /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
-          )
-          const lowRobots = robots.filter(
-            (robot) =>
-              robot.lod === 'low' &&
-              robot.assetLod === 'low' &&
-              robot.sessionId &&
-              robot.modelUrl === 'procedural-low-v2'
-          )
-          const fullReady =
-            lod?.fullRobots === expectedFullRobots && fullRobots.length === expectedFullRobots
-          const lowReady = lod?.lowRobots === expectedLowRobots && lowRobots.length === expectedLowRobots
-          if (measurement.fullLodExpected && measurement.fullLodReadyMs === null && fullReady) {
-            measurement.fullLodReadyMs = snapshotObservedAt
+          const assetsReady = office?.getAttribute('data-office-scene-assets-ready') === '1'
+          const characterCount = Number(office?.getAttribute('data-office-watercolor-characters') ?? 0)
+          const oneCharacterPerAgent = office?.getAttribute('data-office-one-watercolor-character-per-agent') === '1'
+          const watercolorReady = snapshot?.watercolor?.characters === agents && characterCount === agents && oneCharacterPerAgent
+          if (measurement.sceneAssetsReadyMs === null && assetsReady) {
+            measurement.sceneAssetsReadyMs = snapshotObservedAt
           }
-          if (measurement.lowLodExpected && measurement.lowLodReadyMs === null && lowReady) {
-            measurement.lowLodReadyMs = snapshotObservedAt
-          }
-          if (
-            measurement.robotsReadyMs === null &&
-            fullReady &&
-            lowReady &&
-            robots.length === agents &&
-            new Set(robots.map((robot) => robot.sessionId)).size === agents
-          ) {
-            measurement.robotsReadyMs = snapshotObservedAt
+          if (measurement.charactersReadyMs === null && watercolorReady) {
+            measurement.charactersReadyMs = snapshotObservedAt
             measurement.observed = {
-              visibleRobots: Number(office?.getAttribute('data-office-visible-robots') ?? 0),
-              fullRobots: lod.fullRobots,
-              lowRobots: lod.lowRobots,
-              modelUrls: [...new Set(robots.map((robot) => robot.modelUrl))].sort()
+              watercolorCharacters: characterCount,
+              renderedWatercolorCharacters: snapshot.watercolor.characters,
+              roles: snapshot.watercolor.roles,
+              states: snapshot.watercolor.states,
+              sceneAssetsReady: assetsReady
             }
+          }
+          if (measurement.observed && assetsReady) {
+            measurement.observed.sceneAssetsReady = true
           }
         }
 
-        const fullComplete = !measurement.fullLodExpected || measurement.fullLodReadyMs !== null
-        const lowComplete = !measurement.lowLodExpected || measurement.lowLodReadyMs !== null
         if (
           interactiveReady &&
-          lowComplete &&
-          fullComplete &&
-          measurement.robotsReadyMs !== null
+          measurement.sceneAssetsReadyMs !== null &&
+          measurement.charactersReadyMs !== null
         ) {
           measurement.complete = true
           measurement.active = false
@@ -611,17 +579,12 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
       kind: measurement.kind,
       expectedAgents: measurement.expectedAgents,
       expectedQuality: measurement.expectedQuality,
-      expectedFullRobots: measurement.expectedFullRobots,
-      expectedLowRobots: measurement.expectedLowRobots,
-      fullLodExpected: measurement.fullLodExpected,
-      lowLodExpected: measurement.lowLodExpected,
       startedAtEpochMs: Math.round(measurement.startedAtEpochMs),
       shellReadyMs: milliseconds(measurement.shellReadyMs),
       canvasReadyMs: milliseconds(measurement.canvasReadyMs),
       basicNonblankMs: milliseconds(measurement.basicNonblankMs),
-      fullLodReadyMs: milliseconds(measurement.fullLodReadyMs),
-      lowLodReadyMs: milliseconds(measurement.lowLodReadyMs),
-      robotsReadyMs: milliseconds(measurement.robotsReadyMs),
+      sceneAssetsReadyMs: milliseconds(measurement.sceneAssetsReadyMs),
+      charactersReadyMs: milliseconds(measurement.charactersReadyMs),
       interactiveReadyMs: milliseconds(measurement.interactiveReadyMs),
       snapshotDurationMs: {
         samples: measurement.snapshotDurationsMs.length,
@@ -653,7 +616,7 @@ async function verifyQualitySettingsUi(page) {
     height: window.innerHeight,
     deviceScaleFactor: window.devicePixelRatio
   }))
-  await page.click('.sidebar-footer button')
+  await page.click('.sidebar-footer > .sidebar-nav-item')
   await page.waitForSelector('.settings-page', { timeout: 10_000 })
   await page.click('[data-settings-tab="office"]')
   await page.waitForFunction(
@@ -711,7 +674,7 @@ async function verifyQualitySettingsUi(page) {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForApp(page)
   await page.setViewport({ width: 360, height: 520, deviceScaleFactor: 1 })
-  await page.evaluate(() => document.querySelector('.sidebar-footer button')?.click())
+  await page.evaluate(() => document.querySelector('.sidebar-footer > .sidebar-nav-item')?.click())
   await page.waitForSelector('.settings-page', { timeout: 10_000 })
   await page.click('[data-settings-tab="office"]')
   const compactLayout = await page.evaluate(() =>
@@ -833,6 +796,9 @@ async function readOfficeSemantics(page) {
     const number = (name) => Number(office.getAttribute(name) ?? 0)
     return {
       sessions: number('data-office-sessions'),
+      watercolorCharacters: number('data-office-watercolor-characters'),
+      oneWatercolorCharacterPerAgent: number('data-office-one-watercolor-character-per-agent'),
+      sceneAssetsReady: number('data-office-scene-assets-ready'),
       walkers: number('data-office-walkers'),
       clickableWorkstations: number('data-office-clickable-workstations'),
       clickableWalkers: number('data-office-clickable-walkers'),
@@ -846,185 +812,6 @@ async function readOfficeSemantics(page) {
       facilityHitTargets: office.getAttribute('data-office-facility-hit-targets') ?? ''
     }
   })
-}
-
-async function verifyLowLodUpgrade(page) {
-  const readState = () =>
-    page.evaluate(() => {
-      const office = document.querySelector('.office-canvas-wrap')
-      const diagnostics = window.__caogenOfficePerformance
-      if (!office || !diagnostics) throw new Error('Office LOD diagnostics unavailable')
-      const parseTargets = (name) => {
-        try {
-          return JSON.parse(office.getAttribute(name) || '[]')
-        } catch {
-          return []
-        }
-      }
-      const selected = office.getAttribute('data-office-selected-session') ?? ''
-      const walkers = parseTargets('data-office-walker-hit-targets')
-      const walkerIds = new Set(walkers.map((target) => target.id))
-      const targets = parseTargets('data-office-workstation-hit-targets')
-      const candidates = targets
-        .filter((candidate) => candidate.id !== selected && !walkerIds.has(candidate.id))
-        .sort((left, right) => right.z - left.z || Math.abs(left.x) - Math.abs(right.x))
-      const target =
-        candidates[0] ??
-        targets.find((candidate) => candidate.id !== selected) ??
-        null
-      return {
-        selected,
-        visibleRobots: Number(office.getAttribute('data-office-visible-robots') ?? 0),
-        target,
-        lod: diagnostics.snapshot().lod
-      }
-    })
-
-  const validateState = (state, label) => {
-    if (!state?.lod) throw new Error(`${label} LOD snapshot missing`)
-    const { fullRobots, lowRobots } = state.lod
-    if (!Number.isInteger(fullRobots) || !Number.isInteger(lowRobots) || fullRobots < 0 || lowRobots < 0) {
-      throw new Error(`${label} LOD counts are invalid: ${JSON.stringify(state.lod)}`)
-    }
-    if (fullRobots + lowRobots !== state.visibleRobots) {
-      throw new Error(
-        `${label} full + low LOD ${fullRobots + lowRobots} does not match ${state.visibleRobots} visible robots`
-      )
-    }
-    if (!Array.isArray(state.lod.robots) || state.lod.robots.length !== state.visibleRobots) {
-      throw new Error(
-        `${label} robot evidence ${state.lod.robots?.length ?? 'missing'} does not match ${state.visibleRobots} visible robots`
-      )
-    }
-    const sessionIds = new Set()
-    for (const robot of state.lod.robots) {
-      const fullAssetReady =
-        robot.lod === 'full' &&
-        robot.assetLod === 'full' &&
-        typeof robot.modelUrl === 'string' &&
-        /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
-      const lowAssetReady =
-        robot.lod === 'low' &&
-        robot.assetLod === 'low' &&
-        robot.modelUrl === 'procedural-low-v2'
-      if (!robot.sessionId || (!fullAssetReady && !lowAssetReady)) {
-        throw new Error(`${label} robot asset evidence is invalid: ${JSON.stringify(robot)}`)
-      }
-      sessionIds.add(robot.sessionId)
-    }
-    if (sessionIds.size !== state.visibleRobots) {
-      throw new Error(`${label} robot sessions are not one-to-one: ${JSON.stringify(state.lod.robots)}`)
-    }
-  }
-
-  await page.waitForFunction(
-    () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') === 'overview',
-    { timeout: 5_000 }
-  )
-  const before = await readState()
-  validateState(before, 'before selection')
-  if (before.lod.lowRobots < 1) {
-    throw new Error(`selection upgrade requires a low LOD robot: ${JSON.stringify(before.lod)}`)
-  }
-  if (!before.target?.id || before.target.id === before.selected) {
-    throw new Error(`selection upgrade target unavailable: ${JSON.stringify(before)}`)
-  }
-
-  const projected = await page.evaluate(({ x, y, z }) => {
-    const diagnostics = window.__caogenOfficePerformance
-    if (!diagnostics) throw new Error('Office projection diagnostics unavailable')
-    return diagnostics.projectWorldPoint([x, y, z])
-  }, before.target)
-  if (!projected.visible || !Number.isFinite(projected.x) || !Number.isFinite(projected.y)) {
-    throw new Error(`low LOD workstation target is outside the live camera: ${JSON.stringify({ target: before.target, projected })}`)
-  }
-  const hit = await page.evaluate(({ x, y }) => {
-    const element = document.elementFromPoint(x, y)
-    return { tag: element?.tagName ?? '', isCanvas: element?.tagName === 'CANVAS' }
-  }, projected)
-  if (!hit.isCanvas) {
-    throw new Error(`low LOD workstation click is covered: ${JSON.stringify({ target: before.target, projected, hit })}`)
-  }
-
-  await page.mouse.click(Math.round(projected.x), Math.round(projected.y))
-  await page.waitForFunction(
-    (expected) => {
-      const office = document.querySelector('.office-canvas-wrap')
-      const diagnostics = window.__caogenOfficePerformance
-      if (!office || !diagnostics) return false
-      const lod = diagnostics.snapshot().lod
-      const visibleRobots = Number(office.getAttribute('data-office-visible-robots') ?? 0)
-      return (
-        office.getAttribute('data-office-selected-session') === expected &&
-        office.getAttribute('data-office-active-camera-preset') === 'agent' &&
-        lod.fullRobots + lod.lowRobots === visibleRobots &&
-        lod.robots.some(
-          (robot) =>
-            robot.sessionId === expected &&
-            robot.lod === 'full' &&
-            robot.assetLod === 'full' &&
-            typeof robot.modelUrl === 'string' &&
-            /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(robot.modelUrl)
-        )
-      )
-    },
-    { timeout: 8_000 },
-    before.target.id
-  )
-  const after = await readState()
-  validateState(after, 'after selection')
-  const targetBefore = before.lod.robots.find((robot) => robot.sessionId === before.target.id)
-  const targetAfter = after.lod.robots.find((robot) => robot.sessionId === before.target.id)
-  const previousSelectionBefore = before.lod.robots.find((robot) => robot.sessionId === before.selected)
-  const previousSelectionAfter = after.lod.robots.find((robot) => robot.sessionId === before.selected)
-  const robotRootsChanged =
-    JSON.stringify(before.lod.fullRobotRootIds) !== JSON.stringify(after.lod.fullRobotRootIds) &&
-    JSON.stringify(before.lod.lowRobotRootIds) !== JSON.stringify(after.lod.lowRobotRootIds)
-  const workstationRootsChanged =
-    JSON.stringify(before.lod.fullWorkstationRootIds) !== JSON.stringify(after.lod.fullWorkstationRootIds) &&
-    JSON.stringify(before.lod.compactWorkstationRootIds) !== JSON.stringify(after.lod.compactWorkstationRootIds)
-  const targetSessionUpgraded =
-    targetBefore?.lod === 'low' &&
-    targetBefore?.assetLod === 'low' &&
-    targetBefore?.modelUrl === 'procedural-low-v2' &&
-    targetAfter?.lod === 'full' &&
-    targetAfter?.assetLod === 'full' &&
-    typeof targetAfter?.modelUrl === 'string' &&
-    /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(targetAfter.modelUrl)
-  const previousSelectionDowngraded =
-    previousSelectionBefore?.lod === 'full' &&
-    previousSelectionBefore?.assetLod === 'full' &&
-    typeof previousSelectionBefore?.modelUrl === 'string' &&
-    /\/reference-office-robot(?!-lod)(?:-[^/?#]+)?\.glb(?:[?#].*)?$/.test(previousSelectionBefore.modelUrl) &&
-    previousSelectionAfter?.lod === 'low' &&
-    previousSelectionAfter?.assetLod === 'low' &&
-    previousSelectionAfter?.modelUrl === 'procedural-low-v2'
-  if (
-    after.selected !== before.target.id ||
-    !targetSessionUpgraded ||
-    !previousSelectionDowngraded ||
-    !robotRootsChanged ||
-    !workstationRootsChanged
-  ) {
-    throw new Error(
-      `low LOD workstation did not upgrade to a full rig: ${JSON.stringify({ before, after, targetSessionUpgraded, previousSelectionDowngraded, robotRootsChanged, workstationRootsChanged })}`
-    )
-  }
-  return {
-    targetSession: before.target.id,
-    projected: {
-      x: Math.round(projected.x),
-      y: Math.round(projected.y),
-      ndcX: Number(projected.ndcX.toFixed(3)),
-      ndcY: Number(projected.ndcY.toFixed(3))
-    },
-    before: { selected: before.selected, visibleRobots: before.visibleRobots, lod: before.lod },
-    after: { selected: after.selected, visibleRobots: after.visibleRobots, lod: after.lod },
-    targetSessionUpgraded,
-    previousSelectionDowngraded,
-    robotRootsChanged,
-    workstationRootsChanged
-  }
 }
 
 async function verifyOfficeControls(page) {
@@ -1047,12 +834,12 @@ async function verifyOfficeControls(page) {
       return rendererPassDeltas
     }, selector)
 
-  const facilitiesPasses = await exercisePreset('.office-camera-button:nth-child(3)')
+  const facilitiesPasses = await exercisePreset('[data-office-camera-preset="facilities"]')
   await page.waitForFunction(
     () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') === 'facilities',
     { timeout: 5_000 }
   )
-  const overviewPasses = await exercisePreset('.office-camera-button:nth-child(1)')
+  const overviewPasses = await exercisePreset('[data-office-camera-preset="overview"]')
   await page.waitForFunction(
     () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') === 'overview',
     { timeout: 5_000 }
@@ -1351,8 +1138,8 @@ function evaluateLoadPhases(measurement, budget) {
     ['canvasReadyMs', 'Canvas mount', budget.canvasReadyMsMaximum, true],
     ['basicNonblankMs', 'basic nonblank', budget.basicNonblankMsMaximum, true],
     ['interactiveReadyMs', 'interactive ready', budget.interactiveReadyMsMaximum, true],
-    ['fullLodReadyMs', 'full LOD ready', budget.fullLodReadyMsMaximum, measurement.fullLodExpected],
-    ['lowLodReadyMs', 'low LOD ready', budget.lowLodReadyMsMaximum, measurement.lowLodExpected]
+    ['sceneAssetsReadyMs', 'business scene assets ready', budget.sceneAssetsReadyMsMaximum, true],
+    ['charactersReadyMs', 'watercolor characters ready', budget.charactersReadyMsMaximum, true]
   ]
   for (const [field, label, maximum, expected] of checks) {
     if (!expected) continue
@@ -1362,9 +1149,6 @@ function evaluateLoadPhases(measurement, budget) {
     } else if (value > maximum) {
       violations.push(`${prefix}${label} ${value.toFixed(1)}ms exceeds ${maximum}ms`)
     }
-  }
-  if (!Number.isFinite(measurement.robotsReadyMs)) {
-    violations.push(`${prefix}robot LOD aggregate readiness timing is missing`)
   }
   if (!Number.isFinite(measurement.interactiveReadyMs)) {
     violations.push(`${prefix}interactive readiness timing is missing`)
@@ -1383,20 +1167,17 @@ function evaluateLoadPhases(measurement, budget) {
   ) {
     violations.push(`${prefix}nonblank timing precedes Canvas mount`)
   }
-  if (measurement.observed?.visibleRobots !== measurement.expectedAgents) {
+  if (measurement.observed?.watercolorCharacters !== measurement.expectedAgents) {
     violations.push(
-      `${prefix}observed ${measurement.observed?.visibleRobots ?? 'missing'} visible robots, expected ${measurement.expectedAgents}`
+      `${prefix}observed ${measurement.observed?.watercolorCharacters ?? 'missing'} watercolor characters, expected ${measurement.expectedAgents}`
     )
   }
-  if (
-    measurement.observed?.fullRobots !== measurement.expectedFullRobots ||
-    measurement.observed?.lowRobots !== measurement.expectedLowRobots
-  ) {
+  if (measurement.observed?.renderedWatercolorCharacters !== measurement.expectedAgents) {
     violations.push(
-      `${prefix}observed full/low ${measurement.observed?.fullRobots ?? 'missing'}/${measurement.observed?.lowRobots ?? 'missing'}, ` +
-        `expected ${measurement.expectedFullRobots}/${measurement.expectedLowRobots}`
+      `${prefix}scene probe observed ${measurement.observed?.renderedWatercolorCharacters ?? 'missing'} watercolor characters, expected ${measurement.expectedAgents}`
     )
   }
+  if (measurement.observed?.sceneAssetsReady !== true) violations.push(`${prefix}business scene assets were not ready`)
   return violations
 }
 
@@ -1467,57 +1248,35 @@ function evaluateScenario(scenario, budget, label) {
   return violations
 }
 
-function evaluateLodScenario(scenario) {
+function evaluateWatercolorScenario(scenario) {
   const violations = []
-  const lod = scenario.renderer?.lod
-  if (!lod) return ['renderer did not report Office robot LOD counts']
-  for (const field of ['fullRobots', 'lowRobots']) {
-    if (!Number.isInteger(lod[field]) || lod[field] < 0) {
-      violations.push(`renderer reported invalid ${field} count ${lod[field]}`)
-    }
+  const watercolor = scenario.renderer?.watercolor
+  if (!watercolor) return ['renderer did not report Office watercolor character counts']
+  if (scenario.semantics.watercolorCharacters !== scenario.agents) {
+    violations.push(`semantic watercolor count ${scenario.semantics.watercolorCharacters} does not match ${scenario.agents} agents`)
   }
-  const visibleRobots = scenario.semantics.visibleRobots
-  if (lod.fullRobots + lod.lowRobots !== visibleRobots) {
-    violations.push(
-      `full + low LOD ${lod.fullRobots + lod.lowRobots} does not match ${visibleRobots} visible robots`
-    )
+  if (scenario.semantics.oneWatercolorCharacterPerAgent !== 1) violations.push('Office did not prove one watercolor character per agent')
+  if (scenario.semantics.sceneAssetsReady !== 1) violations.push('business scene assets were not ready during measurement')
+  if (watercolor.characters !== scenario.agents) {
+    violations.push(`rendered watercolor count ${watercolor.characters} does not match ${scenario.agents} agents`)
   }
-  if (visibleRobots > 0 && lod.fullRobots < 1) {
-    violations.push('Office has visible robots but no full LOD rig')
-  }
-  if (visibleRobots > 1 && lod.lowRobots < 1) {
-    violations.push('multi-agent Office has no low LOD robot')
-  }
-  if (!Array.isArray(lod.robots) || lod.robots.length !== visibleRobots) {
-    violations.push(`robot asset evidence ${lod.robots?.length ?? 'missing'} does not match ${visibleRobots} visible robots`)
-  } else {
-    const sessionIds = new Set()
-    for (const robot of lod.robots) {
-      if (!robot.sessionId) violations.push(`robot ${robot.rootId} is missing its session id`)
-      if (!robot.modelUrl) violations.push(`robot ${robot.rootId} is missing its model URL`)
-      if (robot.assetLod !== robot.lod) {
-        violations.push(
-          `robot ${robot.sessionId || robot.rootId} is labeled ${robot.lod} but loaded ${robot.assetLod}`
-        )
-      }
-      sessionIds.add(robot.sessionId)
-    }
-    if (sessionIds.size !== visibleRobots) {
-      violations.push(`robot session evidence covers ${sessionIds.size}/${visibleRobots} visible robots`)
-    }
+  if (scenario.semantics.visibleRobots !== 0 || scenario.semantics.oneRobotPerAgent !== 0) {
+    violations.push('legacy robot render semantics must stay at zero')
   }
   return violations
 }
 
-function evaluateCardCContract(value) {
+function evaluateCommandCenterContract(value) {
   const violations = []
-  if (value.artifacts.officeChunkBytes > cardCTargets.officeChunkBytesMaximum) {
+  if (value.artifacts.officeChunkBytes > commandCenterTargets.officeChunkBytesMaximum) {
     violations.push(
-      `officeChunkBytes ${value.artifacts.officeChunkBytes} exceeds ${cardCTargets.officeChunkBytesMaximum}`
+      `officeChunkBytes ${value.artifacts.officeChunkBytes} exceeds ${commandCenterTargets.officeChunkBytesMaximum}`
     )
   }
-  if (value.artifacts.robotGlbBytes > cardCTargets.robotGlbBytesMaximum) {
-    violations.push(`robotGlbBytes ${value.artifacts.robotGlbBytes} exceeds ${cardCTargets.robotGlbBytesMaximum}`)
+  if (value.artifacts.watercolorAssetBytes > commandCenterTargets.watercolorAssetBytesMaximum) {
+    violations.push(
+      `watercolorAssetBytes ${value.artifacts.watercolorAssetBytes} exceeds ${commandCenterTargets.watercolorAssetBytesMaximum}`
+    )
   }
 
   const twelveAgentScenarios = value.scenarios.filter((scenario) => scenario.agents === 12)
@@ -1535,46 +1294,43 @@ function evaluateCardCContract(value) {
   const drawCallReductionPercent =
     maximumMedianDrawCalls === null
       ? null
-      : ((cardCTargets.twelveAgentBaselineMedianDrawCalls - maximumMedianDrawCalls) /
-          cardCTargets.twelveAgentBaselineMedianDrawCalls) *
+      : ((commandCenterTargets.twelveAgentBaselineMedianDrawCalls - maximumMedianDrawCalls) /
+          commandCenterTargets.twelveAgentBaselineMedianDrawCalls) *
         100
   if (maximumMedianDrawCalls === null) {
     violations.push('missing 12-agent median draw-call measurement')
   } else {
-    if (maximumMedianDrawCalls > cardCTargets.twelveAgentMedianDrawCallsMaximum) {
+    if (maximumMedianDrawCalls > commandCenterTargets.twelveAgentMedianDrawCallsMaximum) {
       violations.push(
-        `12-agent maximum median draw calls ${maximumMedianDrawCalls} exceeds ${cardCTargets.twelveAgentMedianDrawCallsMaximum}`
+        `12-agent maximum median draw calls ${maximumMedianDrawCalls} exceeds ${commandCenterTargets.twelveAgentMedianDrawCallsMaximum}`
       )
     }
-    if (drawCallReductionPercent < cardCTargets.twelveAgentDrawCallReductionMinimumPercent) {
+    if (drawCallReductionPercent < commandCenterTargets.twelveAgentDrawCallReductionMinimumPercent) {
       violations.push(
-        `12-agent draw-call reduction ${drawCallReductionPercent.toFixed(2)}% is below ${cardCTargets.twelveAgentDrawCallReductionMinimumPercent}% from baseline ${cardCTargets.twelveAgentBaselineMedianDrawCalls}`
+        `12-agent draw-call reduction ${drawCallReductionPercent.toFixed(2)}% is below ${commandCenterTargets.twelveAgentDrawCallReductionMinimumPercent}% from baseline ${commandCenterTargets.twelveAgentBaselineMedianDrawCalls}`
       )
     }
   }
 
   for (const scenario of value.scenarios) {
-    for (const violation of scenario.lodViolations ?? []) {
+    for (const violation of scenario.characterViolations ?? []) {
       violations.push(`${scenario.agents}-agent ${scenario.qualityMode}: ${violation}`)
     }
   }
-  if (value.required && !value.lodUpgrade) {
-    violations.push('missing low LOD workstation selection upgrade evidence')
-  }
 
   return {
-    name: '3D Office Card C assets, LOD, and draw-call contract',
+    name: '3D command center assets, watercolor characters, and draw-call contract',
     status: violations.length > 0 ? (value.required ? 'fail' : 'warn') : 'pass',
     metrics: {
       officeChunkBytes: value.artifacts.officeChunkBytes,
-      robotGlbBytes: value.artifacts.robotGlbBytes,
+      watercolorAssetBytes: value.artifacts.watercolorAssetBytes,
+      watercolorAssetCount: value.artifacts.watercolorAssetCount,
       twelveAgentMedianDrawCallsByMode: drawCallsByMode,
       twelveAgentMaximumMedianDrawCalls: maximumMedianDrawCalls,
       twelveAgentDrawCallReductionPercent:
-        drawCallReductionPercent === null ? null : Number(drawCallReductionPercent.toFixed(2)),
-      lodUpgradeVerified: Boolean(value.lodUpgrade)
+        drawCallReductionPercent === null ? null : Number(drawCallReductionPercent.toFixed(2))
     },
-    targets: cardCTargets,
+    targets: commandCenterTargets,
     violations
   }
 }
@@ -1596,7 +1352,7 @@ function renderMarkdown(value) {
   const rows = value.scenarios.map((scenario) => {
     const regression = scenario.regressionViolations.length > 0 ? scenario.regressionViolations.join('; ') : 'none'
     const target = scenario.targetViolations.length > 0 ? scenario.targetViolations.join('; ') : 'met'
-    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.lod?.fullRobots ?? 0} | ${scenario.renderer.lod?.lowRobots ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
+    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.watercolor?.characters ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
   })
   const formatLoadMs = (duration) => (Number.isFinite(duration) ? duration.toFixed(1) : 'n/a')
   const loadRows = value.scenarios.flatMap((scenario) =>
@@ -1606,7 +1362,7 @@ function renderMarkdown(value) {
         const violations = (scenario.loadPhaseViolations ?? []).filter((item) =>
           item.startsWith(`${load.kind}:`)
         )
-        return `| ${scenario.agents} | ${scenario.qualityMode} | ${load.kind} | ${formatLoadMs(load.shellReadyMs)} | ${formatLoadMs(load.canvasReadyMs)} | ${formatLoadMs(load.basicNonblankMs)} | ${formatLoadMs(load.fullLodReadyMs)} | ${formatLoadMs(load.lowLodReadyMs)} | ${formatLoadMs(load.robotsReadyMs)} | ${formatLoadMs(load.interactiveReadyMs)} | ${violations.length > 0 ? violations.join('; ') : 'met'} |`
+        return `| ${scenario.agents} | ${scenario.qualityMode} | ${load.kind} | ${formatLoadMs(load.shellReadyMs)} | ${formatLoadMs(load.canvasReadyMs)} | ${formatLoadMs(load.basicNonblankMs)} | ${formatLoadMs(load.sceneAssetsReadyMs)} | ${formatLoadMs(load.charactersReadyMs)} | ${formatLoadMs(load.interactiveReadyMs)} | ${violations.length > 0 ? violations.join('; ') : 'met'} |`
       })
   )
   const pause = value.renderPause
@@ -1620,7 +1376,7 @@ function renderMarkdown(value) {
     ].join('; ')
     return `| ${check.status} | ${check.name} | ${detail || 'none'} |`
   })
-  const cardC = value.cardCContract?.metrics
+  const commandCenter = value.commandCenterContract?.metrics
   return `# 3D Office Performance
 
 - Run: ${value.runId}
@@ -1632,24 +1388,23 @@ function renderMarkdown(value) {
 - GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}
 - Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups
 - Office chunk: ${value.artifacts.officeChunkBytes} bytes
-- Robot GLB: ${value.artifacts.robotGlbBytes} bytes
-- Card C draw calls: ${cardC?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${cardC?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.cardCTargets.twelveAgentBaselineMedianDrawCalls}
-- Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; Low <=${value.loadPhaseTargets.lowLodReadyMsMaximum}ms; background Full <=${value.loadPhaseTargets.fullLodReadyMsMaximum}ms
-- LOD selection upgrade: ${value.lodUpgrade ? `${value.lodUpgrade.before.lod.fullRobots}/${value.lodUpgrade.before.lod.lowRobots} full/low before; ${value.lodUpgrade.after.lod.fullRobots}/${value.lodUpgrade.after.lod.lowRobots} after` : 'not measured'}
+- Watercolor assets: ${value.artifacts.watercolorAssetCount} files / ${value.artifacts.watercolorAssetBytes} bytes
+- Command center draw calls: ${commandCenter?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${commandCenter?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.commandCenterTargets.twelveAgentBaselineMedianDrawCalls}
+- Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; watercolor characters <=${value.loadPhaseTargets.charactersReadyMsMaximum}ms; business assets <=${value.loadPhaseTargets.sceneAssetsReadyMsMaximum}ms
 - Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}
 - Hidden/unfocused render pause: ${pause}
 - Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}
 
-| Agents | Requested | Effective | Full LOD | Low LOD | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |
-|---:|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|
+| Agents | Requested | Effective | Watercolor characters | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |
+|---:|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|
 ${rows.join('\n')}
 
 ## Load phases
 
 \`renderer-cold-prefetched\` is the first measured renderer reload and includes the product's post-paint Office prefetch. \`renderer-cache-warm-prefetched\` repeats that path with browser resource-cache reuse. \`warm-remount\` reopens Office in the same renderer context after a real unmount.
 
-| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Full LOD ms | Low LOD ms | All robots ms | Interactive ms | Contract |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Business assets ms | Watercolor characters ms | Interactive ms | Contract |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---|
 ${loadRows.join('\n')}
 
 ## Checks
@@ -1681,26 +1436,29 @@ function artifactMetrics() {
   )
   if (!officeChunk) fail('Built OfficeView chunk not found')
   const officeChunkPath = path.join(rendererAssets, officeChunk)
-  const robotGlbPath = path.join(
+  const watercolorAssetRoot = path.join(
     repoRoot,
     'src',
     'renderer',
     'src',
     'assets',
-    'robots',
-    'reference-office-robot.glb'
+    'watercolor-characters'
   )
+  const watercolorAssets = readdirSync(watercolorAssetRoot)
+    .filter((name) => name.endsWith('.png'))
+    .map((name) => path.join(watercolorAssetRoot, name))
   const artifacts = {
     officeChunk,
     officeChunkBytes: statSync(officeChunkPath).size,
-    robotGlbPath: path.relative(repoRoot, robotGlbPath),
-    robotGlbBytes: statSync(robotGlbPath).size
+    watercolorAssetRoot: path.relative(repoRoot, watercolorAssetRoot),
+    watercolorAssetCount: watercolorAssets.length,
+    watercolorAssetBytes: watercolorAssets.reduce((total, file) => total + statSync(file).size, 0)
   }
   const regressionViolations = []
   const targetViolations = []
   for (const [field, maximum] of [
     ['officeChunkBytes', artifactRegressionBudgets.officeChunkBytesMaximum],
-    ['robotGlbBytes', artifactRegressionBudgets.robotGlbBytesMaximum]
+    ['watercolorAssetBytes', artifactRegressionBudgets.watercolorAssetBytesMaximum]
   ]) {
     if (artifacts[field] > maximum) {
       regressionViolations.push(`${field} ${artifacts[field]} exceeds ${maximum}`)
@@ -1708,7 +1466,7 @@ function artifactMetrics() {
   }
   for (const [field, maximum] of [
     ['officeChunkBytes', artifactTargets.officeChunkBytesMaximum],
-    ['robotGlbBytes', artifactTargets.robotGlbBytesMaximum]
+    ['watercolorAssetBytes', artifactTargets.watercolorAssetBytesMaximum]
   ]) {
     if (artifacts[field] > maximum) {
       targetViolations.push(`${field} ${artifacts[field]} exceeds ${maximum}`)
@@ -1807,13 +1565,18 @@ async function findFreePort(start) {
 
 async function terminate(processHandle) {
   if (processHandle.exitCode !== null) return processHandle.exitCode
+  const waitForExit = () => new Promise((resolve) => processHandle.once('exit', (code) => resolve(code)))
   processHandle.kill('SIGTERM')
   const exitCode = await Promise.race([
-    new Promise((resolve) => processHandle.once('exit', (code) => resolve(code))),
+    waitForExit(),
     sleep(3_000).then(() => null)
   ])
-  if (processHandle.exitCode === null) processHandle.kill('SIGKILL')
-  return exitCode
+  if (processHandle.exitCode !== null) return processHandle.exitCode
+  processHandle.kill('SIGKILL')
+  return await Promise.race([
+    waitForExit(),
+    sleep(3_000).then(() => exitCode)
+  ])
 }
 
 function summarizeProcessOutput(stdoutText, stderrText, exitCode) {

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import {
   existsSync,
@@ -34,6 +35,11 @@ const targetRequestId = 'request-cross-provider-target'
 const targetStepId = 'step-cross-provider-target'
 const sourceAttemptId = 'attempt-openai-source'
 const targetAttemptId = 'attempt-anthropic-target'
+const artifactId = 'artifact-cross-provider-source'
+const artifactEvidenceId = 'evidence-cross-provider-source'
+const artifactAcceptanceId = 'acceptance-cross-provider-source'
+const artifactLocationId = 'location-cross-provider-source'
+const artifactBytes = Buffer.from('CaoGen canonical Artifact survives Provider continuation.\n', 'utf8')
 const userSecret = ['sk-proj', 'user-secret-1234567890'].join('-')
 const toolInputSecret = ['ghp', 'tool-input-secret-1234567890'].join('_')
 const toolResultSecret = ['sk-ant', 'tool-result-secret-1234567890'].join('-')
@@ -82,6 +88,10 @@ async function orchestrate() {
     assertEqual(report.attempts, 2, 'cross-provider attempt count')
     assertEqual(report.historyRoles, 'user', 'Anthropic portable replay role sequence')
     assertEqual(report.redactionPassed, true, 'cross-provider replay redaction')
+    assertEqual(report.contextParity, true, 'provider-neutral Canonical Context parity')
+    assertEqual(report.artifact.byteVerified, true, 'target must verify canonical Artifact bytes')
+    assertEqual(report.artifact.crossProjectRejected, true, 'target must reject cross-Project Artifact access')
+    assertEqual(report.artifact.tamperRejected, true, 'target must reject tampered Artifact bytes')
     console.log(JSON.stringify({
       ok: true,
       restartBoundary: 'two-node-processes',
@@ -94,6 +104,8 @@ async function orchestrate() {
       attachmentReferences: report.attachmentReferences,
       toolPairs: report.toolPairs,
       redactionPassed: report.redactionPassed,
+      canonicalContextDigest: report.canonicalContextDigest,
+      artifact: report.artifact,
       sourceJsonlRecovered: report.sourceJsonlRecovered,
       sideEffectReplay: false
     }, null, 2))
@@ -107,93 +119,31 @@ async function sourcePhase() {
   const transcript = await importCompiled(outDir, 'transcript.js')
   const archive = await importCompiled(outDir, 'conversation-ledger-archive.js')
   const snapshots = await importCompiled(outDir, 'task-snapshot.js')
-  const attempts = await importCompiled(outDir, 'model-attempt-api.js')
+  const attemptRuntime = await importCompiled(outDir, 'model-attempt-runtime.js')
   const workflow = await importCompiled(outDir, 'workflow-ledger-store.js')
+  const workflowApi = await importCompiled(outDir, 'workflow-ledger-api.js')
+  const neutralContext = await importCompiled(outDir, 'provider-neutral-context.js')
 
-  const writer = new transcript.TranscriptWriter()
-  writer.next({ kind: 'init', sdkSessionId: sourceSdkSessionId, model: 'gpt-fixture' })
-  writer.next({
-    kind: 'user-message',
-    messageId: 'message-cross-provider',
-    text: `Inspect the project and persist the result. User credential: ${userSecret}`,
-    attachments: [{
-      id: 'c'.repeat(64),
-      hash: 'c'.repeat(64),
-      mime: 'image/png',
-      bytes: 256
-    }]
-  })
-  writer.next({
-    kind: 'assistant-message',
-    blocks: [
-      { type: 'text', text: 'The project state is available.' },
-      {
-        type: 'tool_use',
-        id: 'tool-cross-provider',
-        name: 'read_file',
-        input: { path: 'STATUS.md', apiKey: toolInputSecret }
-      }
-    ]
-  })
-  writer.next({
-    kind: 'tool-result',
-    toolUseId: 'tool-cross-provider',
-    content: `persisted project evidence ${toolResultSecret}`,
-    isError: false
-  })
-  writer.next({ kind: 'turn-result', subtype: 'success', isError: false })
-
-  const entries = writer.readAll()
+  const entries = buildSourceTranscript(transcript)
   await archive.archiveConversationLedgerFromJsonl(sourceArchiveIdentity(), {
     rootDir: userData,
     reason: 'initial'
   })
-  await snapshots.mutateTaskSnapshotDatabase(userData, (db) => {
-    workflow.projectGoal(db, {
-      id: goalId,
-      projectId: workspaceId,
-      title: 'Cross-provider recovery goal',
-      objective: 'Resume one durable task across provider boundaries.',
-      status: 'running',
-      revision: 1,
-      source: 'explicit',
-      createdAt: 90,
-      updatedAt: 90
-    })
-    workflow.projectWorkItem(db, {
-      id: workItemId,
-      projectId: workspaceId,
-      goalId,
-      type: 'coding',
-      title: 'Cross-provider recovery work item',
-      status: 'running',
-      revision: 1,
-      source: 'explicit',
-      createdAt: 90,
-      updatedAt: 90
-    })
-  })
-  await snapshots.saveTaskSnapshot(snapshots.buildTaskSnapshot({
-    meta: sessionMeta({
-      id: sourceSessionId,
-      sdkSessionId: sourceSdkSessionId,
+  await persistSourceSnapshot({ snapshots, workflow, entries, userData })
+
+  const artifact = await persistSourceArtifact({ workflowApi, neutralContext }, userData)
+  const canonicalContextDigest = neutralContext.buildProviderNeutralContextDigest({
+    entries,
+    outboundContext: providerOutboundContext({
+      sessionId: sourceSessionId,
       providerId: 'provider-openai',
       model: 'gpt-fixture',
-      engine: 'openai'
-    }, userData),
-    transcript: entries,
-    lastSeq: entries.at(-1)?.seq ?? 0,
-    lastEventId: entries.at(-1)?.eventId,
-    lastEventKind: entries.at(-1)?.event.kind,
-    eventCount: entries.length,
-    reason: 'important-event',
-    run: sourceTaskRun(),
-    now: 100
-  }), userData)
-
-  const started = await attempts.startPersistedModelAttempt({
+      artifactContinuationDigest: artifact.continuation.digest
+    }),
+    artifactContinuationDigest: artifact.continuation.digest
+  })
+  const handle = await attemptRuntime.beginPersistedModelAttempt({
     id: sourceAttemptId,
-    commandId: 'command-openai-start',
     requestId: sourceRequestId,
     stepId: sourceStepId,
     runId: sourceRunId,
@@ -201,21 +151,62 @@ async function sourcePhase() {
     model: 'gpt-fixture',
     protocol: 'openai.responses',
     adapterVersion: 'openai-adapter-v1',
-    contextDigest: `sha256:${'d'.repeat(64)}`,
+    context: {
+      endpoint: 'https://openai.fixture/v1/responses',
+      body: { input: 'provider-specific OpenAI wire body' }
+    },
+    contextDigest: canonicalContextDigest,
     routeReason: 'Selected OpenAI-compatible source route.',
-    projectId: workspaceId,
-    goalId,
-    workItemId,
+    rootDir: userData,
     startedAt: 110
-  }, userData)
-  await attempts.completePersistedModelAttempt(started.id, {
-    commandId: 'command-openai-complete',
-    expectedRevision: 1,
+  }, { dependencies: { now: () => 120 } })
+  await handle.fail({
     status: 'failed',
-    completedAt: 120,
     outcome: 'unavailable',
     errorClass: 'provider_unavailable'
-  }, userData)
+  })
+}
+
+function buildSourceTranscript(transcript) {
+  const writer = new transcript.TranscriptWriter()
+  writer.next({ kind: 'init', sdkSessionId: sourceSdkSessionId, model: 'gpt-fixture' })
+  writer.next({
+    kind: 'user-message',
+    messageId: 'message-cross-provider',
+    text: `Inspect the project and persist the result. User credential: ${userSecret}`,
+    attachments: [{ id: 'c'.repeat(64), hash: 'c'.repeat(64), mime: 'image/png', bytes: 256 }]
+  })
+  writer.next({
+    kind: 'assistant-message',
+    blocks: [
+      { type: 'text', text: 'The project state is available.' },
+      { type: 'tool_use', id: 'tool-cross-provider', name: 'read_file', input: { path: 'STATUS.md', apiKey: toolInputSecret } }
+    ]
+  })
+  writer.next({ kind: 'tool-result', toolUseId: 'tool-cross-provider', content: `persisted project evidence ${toolResultSecret}`, isError: false })
+  writer.next({ kind: 'turn-result', subtype: 'success', isError: false })
+  return writer.readAll()
+}
+
+async function persistSourceSnapshot({ snapshots, workflow, entries, userData }) {
+  await snapshots.mutateTaskSnapshotDatabase(userData, (db) => {
+    workflow.projectGoal(db, {
+      id: goalId, projectId: workspaceId, title: 'Cross-provider recovery goal',
+      objective: 'Resume one durable task across provider boundaries.', status: 'running',
+      revision: 1, source: 'explicit', createdAt: 90, updatedAt: 90
+    })
+    workflow.projectWorkItem(db, {
+      id: workItemId, projectId: workspaceId, goalId, type: 'coding',
+      title: 'Cross-provider recovery work item', status: 'running', revision: 1,
+      source: 'explicit', createdAt: 90, updatedAt: 90
+    })
+  })
+  await snapshots.saveTaskSnapshot(snapshots.buildTaskSnapshot({
+    meta: sessionMeta({ id: sourceSessionId, sdkSessionId: sourceSdkSessionId, providerId: 'provider-openai', model: 'gpt-fixture', engine: 'openai' }, userData),
+    transcript: entries, lastSeq: entries.at(-1)?.seq ?? 0, lastEventId: entries.at(-1)?.eventId,
+    lastEventKind: entries.at(-1)?.event.kind, eventCount: entries.length,
+    reason: 'important-event', run: sourceTaskRun(), now: 100
+  }), userData)
 }
 
 async function targetPhase() {
@@ -223,13 +214,21 @@ async function targetPhase() {
   const modules = await loadTargetPhaseModules(outDir)
   const conversation = await restoreTargetConversation(modules, userData)
   const targetRun = await persistTargetRun(modules, userData, conversation.targetEntries)
-  const attemptState = await persistAndVerifyTargetAttempt(modules.attempts, userData, targetRun)
+  const artifactState = await verifyTargetArtifactContinuation(modules, userData)
+  const attemptState = await persistAndVerifyTargetAttempt(
+    modules,
+    userData,
+    targetRun,
+    conversation.targetEntries,
+    artifactState.continuation
+  )
   const portableState = verifyPortableTargetContext(modules, conversation.targetEntries)
   const archiveState = await readAndVerifyTargetArchive(modules, userData)
   writeTargetPhaseReport(reportFile, {
     sourceJsonlRecovered: conversation.sourceJsonlRecovered,
     targetRun,
     attemptState,
+    artifactState,
     portableState,
     conversationStreams: archiveState.verification.streams
   })
@@ -241,10 +240,23 @@ async function loadTargetPhaseModules(outDir) {
   const ledgerStore = await importCompiled(outDir, 'conversation-ledger-store.js')
   const snapshots = await importCompiled(outDir, 'task-snapshot.js')
   const attempts = await importCompiled(outDir, 'model-attempt-api.js')
+  const attemptRuntime = await importCompiled(outDir, 'model-attempt-runtime.js')
   const anthropicHistory = await importCompiled(outDir, 'anthropic-history.js')
   const replay = await importCompiled(outDir, 'conversation-ledger-replay.js')
   const taskRuns = await importCompiled(outDir, 'task-run.js')
-  return { transcript, archive, ledgerStore, snapshots, attempts, anthropicHistory, replay, taskRuns }
+  const neutralContext = await importCompiled(outDir, 'provider-neutral-context.js')
+  return {
+    transcript,
+    archive,
+    ledgerStore,
+    snapshots,
+    attempts,
+    attemptRuntime,
+    anthropicHistory,
+    replay,
+    taskRuns,
+    neutralContext
+  }
 }
 
 async function restoreTargetConversation(modules, userData) {
@@ -334,10 +346,25 @@ async function persistTargetRun(modules, userData, targetEntries) {
   return targetRun
 }
 
-async function persistAndVerifyTargetAttempt(attempts, userData, targetRun) {
-  const successor = await attempts.startPersistedModelAttempt({
+async function persistAndVerifyTargetAttempt(
+  modules,
+  userData,
+  targetRun,
+  targetEntries,
+  artifactContinuation
+) {
+  const canonicalContextDigest = modules.neutralContext.buildProviderNeutralContextDigest({
+    entries: targetEntries,
+    outboundContext: providerOutboundContext({
+      sessionId: targetSessionId,
+      providerId: 'provider-anthropic',
+      model: 'claude-fixture',
+      artifactContinuationDigest: artifactContinuation.digest
+    }),
+    artifactContinuationDigest: artifactContinuation.digest
+  })
+  const handle = await modules.attemptRuntime.beginPersistedModelAttempt({
     id: targetAttemptId,
-    commandId: 'command-anthropic-start',
     requestId: targetRequestId,
     stepId: targetStepId,
     runId: targetRun.id,
@@ -345,25 +372,22 @@ async function persistAndVerifyTargetAttempt(attempts, userData, targetRun) {
     model: 'claude-fixture',
     protocol: 'anthropic.messages',
     adapterVersion: 'anthropic-adapter-v1',
-    contextDigest: `sha256:${'e'.repeat(64)}`,
+    context: {
+      endpoint: 'https://anthropic.fixture/v1/messages',
+      body: { messages: 'provider-specific Anthropic wire body' }
+    },
+    contextDigest: canonicalContextDigest,
     routeReason: 'Recovered CaoGen ledger on Anthropic-compatible target.',
-    projectId: workspaceId,
-    goalId,
-    workItemId,
+    rootDir: userData,
     startedAt: 130
-  }, userData)
-  await attempts.completePersistedModelAttempt(successor.id, {
-    commandId: 'command-anthropic-complete',
-    expectedRevision: 1,
-    status: 'succeeded',
-    completedAt: 150,
-    outcome: 'success',
+  }, { dependencies: { now: () => 150 } })
+  await handle.succeed({
     usage: { inputTokens: 10, outputTokens: 5 },
     costUsd: 0.01
-  }, userData)
+  })
 
-  const sourceSelection = await attempts.queryPersistedModelAttempts({ runId: sourceRunId, limit: 10 }, userData)
-  const targetSelection = await attempts.queryPersistedModelAttempts({ runId: targetRun.id, limit: 10 }, userData)
+  const sourceSelection = await modules.attempts.queryPersistedModelAttempts({ runId: sourceRunId, limit: 10 }, userData)
+  const targetSelection = await modules.attempts.queryPersistedModelAttempts({ runId: targetRun.id, limit: 10 }, userData)
   assertEqual(sourceSelection.attempts.length, 1, 'restart must retain source Run Attempt')
   assertEqual(targetSelection.attempts.length, 1, 'successor Run must own its own Attempt')
   const sourceAttempt = sourceSelection.attempts[0]
@@ -380,7 +404,206 @@ async function persistAndVerifyTargetAttempt(attempts, userData, targetRun) {
   }
   assertEqual(sourceAttempt.providerId, 'provider-openai', 'source Provider identity')
   assertEqual(targetAttempt.providerId, 'provider-anthropic', 'target Provider identity')
-  return { sourceSelection, targetSelection, sourceAttempt, targetAttempt }
+  assertEqual(sourceAttempt.contextDigest, canonicalContextDigest, 'source Canonical Context digest')
+  assertEqual(targetAttempt.contextDigest, canonicalContextDigest, 'target Canonical Context digest')
+  return {
+    sourceSelection,
+    targetSelection,
+    sourceAttempt,
+    targetAttempt,
+    canonicalContextDigest,
+    contextParity: sourceAttempt.contextDigest === targetAttempt.contextDigest
+  }
+}
+
+async function persistSourceArtifact(modules, userData) {
+  const artifactPath = providerArtifactPath(userData)
+  const digest = `sha256:${createHash('sha256').update(artifactBytes).digest('hex')}`
+  writeFileSync(artifactPath, artifactBytes)
+  await modules.workflowApi.createWorkflowArtifact({
+    id: artifactId,
+    projectId: workspaceId,
+    goalId,
+    workItemId,
+    runId: sourceRunId,
+    kind: 'report',
+    title: 'Cross-provider canonical Artifact',
+    digest,
+    mediaType: 'text/plain',
+    provenance: 'explicit',
+    createdAt: 121,
+    updatedAt: 121
+  }, userData)
+  await modules.workflowApi.createWorkflowArtifactLocation({
+    id: artifactLocationId,
+    artifactId,
+    projectId: workspaceId,
+    goalId,
+    workItemId,
+    runId: sourceRunId,
+    kind: 'file',
+    path: artifactPath,
+    availability: 'available',
+    checksum: digest,
+    sizeBytes: artifactBytes.byteLength,
+    mediaType: 'text/plain',
+    createdAt: 121,
+    updatedAt: 121
+  }, userData)
+  const pending = await modules.workflowApi.saveWorkflowAcceptance({
+    id: artifactAcceptanceId,
+    projectId: workspaceId,
+    goalId,
+    workItemId,
+    criteria: ['Artifact bytes and ownership remain continuous across Provider takeover.'],
+    status: 'pending',
+    revision: 1,
+    createdAt: 122,
+    updatedAt: 122
+  }, userData, { caller: 'automatic', actorId: 'provider-cross-resume-source' })
+  const evidence = await modules.workflowApi.createWorkflowEvidence({
+    evidenceId: artifactEvidenceId,
+    projectId: workspaceId,
+    goalId,
+    workItemId,
+    runId: sourceRunId,
+    artifactId,
+    kind: 'delivery_check',
+    title: 'Cross-provider Artifact byte verification',
+    summary: 'The canonical local file matches its Artifact digest and Project ownership.',
+    mediaType: 'text/plain',
+    contentDigest: digest.slice('sha256:'.length)
+  }, userData, {
+    source: 'runtime',
+    verifier: 'provider-cross-resume-source',
+    observedAt: 123
+  })
+  await modules.workflowApi.createWorkflowEvidenceLink({
+    id: 'link-cross-provider-source',
+    evidenceId: evidence.evidenceId,
+    evidenceOrigin: 'workflow',
+    projectId: workspaceId,
+    runId: sourceRunId,
+    artifactId,
+    acceptanceId: pending.id,
+    relation: 'verifies',
+    createdAt: 123
+  }, userData)
+  const verifying = await modules.workflowApi.saveWorkflowAcceptance({
+    ...pending,
+    status: 'verifying',
+    evidenceRefs: [evidence.evidenceId],
+    revision: pending.revision + 1,
+    updatedAt: 124
+  }, userData, { caller: 'automatic', actorId: 'provider-cross-resume-source' })
+  const passed = await modules.workflowApi.saveWorkflowAcceptance({
+    ...verifying,
+    status: 'passed',
+    verifier: 'provider-cross-resume-source',
+    verifiedAt: 125,
+    revision: verifying.revision + 1,
+    updatedAt: 125
+  }, userData, { caller: 'automatic', actorId: 'provider-cross-resume-source' })
+  assertEqual(passed.status, 'passed', 'source Artifact Acceptance must pass')
+  const continuation = await modules.neutralContext.readReadyCanonicalArtifactContinuation({
+    projectId: workspaceId,
+    artifactIds: [artifactId],
+    rootDir: userData
+  })
+  assertEqual(continuation.artifacts[0]?.digest, digest, 'source Artifact continuation digest')
+  return { artifactPath, digest, continuation }
+}
+
+async function verifyTargetArtifactContinuation(modules, userData) {
+  const continuation = await modules.neutralContext.readReadyCanonicalArtifactContinuation({
+    projectId: workspaceId,
+    artifactIds: [artifactId],
+    rootDir: userData
+  })
+  const artifactPath = providerArtifactPath(userData)
+  const byteVerified = readFileSync(artifactPath).equals(artifactBytes)
+  assertEqual(byteVerified, true, 'target must read the exact source Artifact bytes')
+  const crossProjectRejected = await rejects(async () => {
+    await modules.neutralContext.readReadyCanonicalArtifactContinuation({
+      projectId: 'workspace-cross-provider-other',
+      artifactIds: [artifactId],
+      rootDir: userData
+    })
+  })
+  assertEqual(crossProjectRejected, true, 'cross-Project Artifact continuation must fail closed')
+
+  writeFileSync(artifactPath, 'tampered cross-provider Artifact\n', 'utf8')
+  const tamperRejected = await rejects(async () => {
+    await modules.neutralContext.readReadyCanonicalArtifactContinuation({
+      projectId: workspaceId,
+      artifactIds: [artifactId],
+      rootDir: userData
+    })
+  })
+  writeFileSync(artifactPath, artifactBytes)
+  assertEqual(tamperRejected, true, 'tampered Artifact continuation must fail closed')
+  const restored = await modules.neutralContext.readReadyCanonicalArtifactContinuation({
+    projectId: workspaceId,
+    artifactIds: [artifactId],
+    rootDir: userData
+  })
+  assertEqual(restored.digest, continuation.digest, 'restored Artifact continuation must be byte-stable')
+  return { continuation, byteVerified, crossProjectRejected, tamperRejected }
+}
+
+function providerOutboundContext(input) {
+  const userPromptDigest = `sha256:${createHash('sha256')
+    .update('Inspect the project and persist the result. User credential: [REDACTED]')
+    .digest('hex')}`
+  return {
+    schemaVersion: 1,
+    generatedAt: input.providerId === 'provider-openai' ? 110 : 140,
+    sessionId: input.sessionId,
+    projectId: workspaceId,
+    projectRevision: 1,
+    projectPolicyDigest: `sha256:${'1'.repeat(64)}`,
+    resourceContextDigest: `sha256:${'2'.repeat(64)}`,
+    receiver: {
+      providerId: input.providerId,
+      providerName: input.providerId,
+      engine: input.providerId === 'provider-openai' ? 'openai' : 'anthropic',
+      model: input.model,
+      endpointOrigin: input.providerId === 'provider-openai'
+        ? 'https://openai.fixture'
+        : 'https://anthropic.fixture',
+      locality: 'remote'
+    },
+    dataClasses: ['S2', 'S4'],
+    items: [{
+      id: 'message:user-prompt',
+      kind: 'user_prompt',
+      label: 'User prompt',
+      dataClass: 'S2',
+      egressPolicy: 'allow',
+      decision: 'included',
+      digest: userPromptDigest
+    }, {
+      id: 'context:workflow',
+      kind: 'workflow_context',
+      label: 'Workflow handoff',
+      dataClass: 'S4',
+      egressPolicy: 'allow',
+      decision: 'included',
+      digest: input.artifactContinuationDigest
+    }],
+    scopeCompleteness: 'partial',
+    blocked: false,
+    blockReasons: [],
+    failoverAllowed: true,
+    routingMayChangeReceiver: true,
+    manifestDigest: `sha256:${createHash('sha256')
+      .update(`${input.providerId}:${input.model}:${input.sessionId}`)
+      .digest('hex')}`
+  }
+}
+
+function providerArtifactPath(userData) {
+  return path.join(userData, 'cross-provider-canonical-artifact.txt')
 }
 
 function verifyPortableTargetContext(modules, targetEntries) {
@@ -451,7 +674,14 @@ async function readAndVerifyTargetArchive(modules, userData) {
 }
 
 function writeTargetPhaseReport(reportFile, state) {
-  const { sourceSelection, targetSelection, sourceAttempt, targetAttempt } = state.attemptState
+  const {
+    sourceSelection,
+    targetSelection,
+    sourceAttempt,
+    targetAttempt,
+    canonicalContextDigest,
+    contextParity
+  } = state.attemptState
   writeFileSync(reportFile, JSON.stringify({
     sourceJsonlRecovered: state.sourceJsonlRecovered,
     source: {
@@ -476,6 +706,16 @@ function writeTargetPhaseReport(reportFile, state) {
       continuation: state.targetRun.continuation
     },
     attempts: sourceSelection.attempts.length + targetSelection.attempts.length,
+    canonicalContextDigest,
+    contextParity,
+    artifact: {
+      artifactId,
+      digest: state.artifactState.continuation.artifacts[0]?.digest,
+      continuationDigest: state.artifactState.continuation.digest,
+      byteVerified: state.artifactState.byteVerified,
+      crossProjectRejected: state.artifactState.crossProjectRejected,
+      tamperRejected: state.artifactState.tamperRejected
+    },
     conversationStreams: state.conversationStreams,
     historyRoles: state.portableState.historyRoles,
     attachmentReferences: state.portableState.attachmentReferences,
@@ -493,6 +733,9 @@ function compileSources(outDir) {
     'src/main/task/conversation-ledger-archive.ts',
     'src/main/task/conversation-ledger-store.ts',
     'src/main/task/model-attempt-api.ts',
+    'src/main/task/model-attempt-runtime.ts',
+    'src/main/task/provider-neutral-context.ts',
+    'src/main/task/workflow-ledger-api.ts',
     'src/main/task/task-snapshot.ts',
     'src/main/task/task-run.ts',
     '--outDir', outDir,
@@ -622,6 +865,15 @@ function rows(db, sql, values = []) {
 
 function countOccurrences(text, value) {
   return text.split(value).length - 1
+}
+
+async function rejects(operation) {
+  try {
+    await operation()
+    return false
+  } catch {
+    return true
+  }
 }
 
 function assert(value, message) {

@@ -121,6 +121,13 @@ async function operationGatewayCases({ gateway, operationSnapshot, snapshotStore
   const file = path.join(project, 'state.txt')
   writeFileSync(file, 'before\n', 'utf8')
 
+  await successfulOperationCase({ gateway, snapshotStore, taskRun, registryModule, project, file })
+  await restoredRuntimeRegistryCase({ gateway, snapshotStore, registryModule, project })
+  await sourcedOperationCases({ gateway, snapshotStore, project, file })
+  await waitingOperationCase({ gateway, operationSnapshot, snapshotStore, effectRuntime, project, file })
+}
+
+async function successfulOperationCase({ gateway, snapshotStore, taskRun, registryModule, project, file }) {
   const chatRun = taskRun.createTaskRun({ id: 'chat-run', sessionId: 'chat-session', taskId: 'chat-task' })
   registryModule.taskRuntimeRegistry.set('chat-session', chatRun)
   let callbackCount = 0
@@ -156,7 +163,40 @@ async function operationGatewayCases({ gateway, operationSnapshot, snapshotStore
   assertEqual(registryModule.taskRuntimeRegistry.get('chat-session')?.id, 'chat-run')
   const terminalRuns = await snapshotStore.listTaskRuns('operation:write-success')
   assertEqual(terminalRuns[0]?.status, 'completed', 'terminal operation run should remain auditable')
+}
 
+async function restoredRuntimeRegistryCase({ gateway, snapshotStore, registryModule, project }) {
+  const restoredFile = path.join(project, 'restored-state.txt')
+  writeFileSync(restoredFile, 'before\n', 'utf8')
+  const restored = await gateway.executeInteractiveOperationEffect({
+    operationId: 'write-runtime-registry-recovery',
+    kind: 'file_write',
+    title: 'durable runtime registry recovery probe',
+    sourceSessionId: 'chat-session',
+    cwd: project,
+    toolName: 'write_file',
+    toolInput: { path: 'restored-state.txt', content: 'after\n' },
+    execute: async (effect) => {
+      const snapshot = await snapshotStore.getTaskSnapshot(effect.sessionId)
+      assertEqual(
+        snapshot?.run.effects.find((item) => item.id === effect.id)?.status,
+        'executing',
+        'runtime recovery probe must cross the durable executing barrier'
+      )
+      registryModule.taskRuntimeRegistry.delete(effect.sessionId)
+      writeFileSync(restoredFile, 'after\n', 'utf8')
+      return { ok: true }
+    },
+    isSuccess: (result) => result.ok
+  })
+  assertEqual(restored.status, 'completed', 'completion must restore an exact durable Effect handle')
+  assertEqual(readFileSync(restoredFile, 'utf8'), 'after\n')
+  assertEqual(await snapshotStore.getTaskSnapshot('operation:write-runtime-registry-recovery'), null)
+  const restoredRuns = await snapshotStore.listTaskRuns('operation:write-runtime-registry-recovery')
+  assertEqual(restoredRuns[0]?.status, 'completed', 'restored operation must remain auditable')
+}
+
+async function sourcedOperationCases({ gateway, snapshotStore, project, file }) {
   for (const source of ['dag', 'session_lifecycle']) {
     const content = `${source}\n`
     const sourced = await gateway.executeInteractiveOperationEffect({
@@ -188,7 +228,9 @@ async function operationGatewayCases({ gateway, operationSnapshot, snapshotStore
     const [terminal] = await snapshotStore.listTaskRuns(`operation:write-${source}`)
     assertEqual(terminal?.operation?.source, source, `${source} must remain auditable after settlement`)
   }
+}
 
+async function waitingOperationCase({ gateway, operationSnapshot, snapshotStore, effectRuntime, project, file }) {
   writeFileSync(file, 'before\n', 'utf8')
   const waiting = await gateway.executeInteractiveOperationEffect({
     operationId: 'write-unknown',
@@ -861,23 +903,21 @@ async function pullRequestCases({ pullRequest, reconciler, ledger, taskRun }) {
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
   writeExecutable(
     path.join(fakeBin, 'git'),
-    `#!/bin/sh\nlast=\nseen=0\nfor arg in "$@"\ndo\n  [ "$arg" != "ls-remote" ] || seen=1\n  last="$arg"\ndone\nif [ "$seen" = "1" ]\nthen\n  printf '%s\\t%s\\n' "$FAKE_REMOTE_SHA" "$last"\n  exit 0\nfi\nexec ${shellQuote(realGit)} "$@"\n`
+    `#!/bin/sh\nlast=\nseen=0\nfor arg in "$@"\ndo\n  [ "$arg" != "ls-remote" ] || seen=1\n  last="$arg"\ndone\nif [ "$seen" = "1" ]\nthen\n  printf '%s\\t%s\\n' ${shellQuote(sourceSha)} "$last"\n  exit 0\nfi\nexec ${shellQuote(realGit)} "$@"\n`
   )
   writeExecutable(
     path.join(fakeBin, 'gh'),
     `#!${process.execPath}\n` +
-      `const fs=require('fs');const a=process.argv.slice(2);const state=process.env.FAKE_PR_STATE;` +
+      `const fs=require('fs');const a=process.argv.slice(2);const state=${JSON.stringify(stateFile)};` +
+      `const count=${JSON.stringify(countFile)};const remoteSha=${JSON.stringify(sourceSha)};` +
       `if(a[0]==='pr'&&a[1]==='list'){process.stdout.write(fs.existsSync(state)?fs.readFileSync(state,'utf8'):'[]');process.exit(0)}` +
       `if(a[0]==='pr'&&a[1]==='create'){const get=(n)=>a[a.indexOf(n)+1]||'';` +
-      `const r=[{number:1,url:'https://github.com/owner/project/pull/1',state:'OPEN',headRefName:get('--head'),headRefOid:process.env.FAKE_REMOTE_SHA,baseRefName:get('--base'),body:get('--body')}];` +
-      `fs.writeFileSync(state,JSON.stringify(r));const c=process.env.FAKE_PR_COUNT;const n=fs.existsSync(c)?Number(fs.readFileSync(c,'utf8')):0;fs.writeFileSync(c,String(n+1));process.stdout.write(r[0].url+'\\n');process.exit(0)}` +
+      `const r=[{number:1,url:'https://github.com/owner/project/pull/1',state:'OPEN',headRefName:get('--head'),headRefOid:remoteSha,baseRefName:get('--base'),body:get('--body')}];` +
+      `fs.writeFileSync(state,JSON.stringify(r));const n=fs.existsSync(count)?Number(fs.readFileSync(count,'utf8')):0;fs.writeFileSync(count,String(n+1));process.stdout.write(r[0].url+'\\n');process.exit(0)}` +
       `process.stderr.write('unexpected gh args '+JSON.stringify(a));process.exit(2)\n`
   )
   const previousPath = process.env.PATH
   process.env.PATH = `${fakeBin}:${previousPath}`
-  process.env.FAKE_REMOTE_SHA = sourceSha
-  process.env.FAKE_PR_STATE = stateFile
-  process.env.FAKE_PR_COUNT = countFile
   try {
     const descriptor = await reconciler.buildEffectDescriptor({
       toolName: 'git_create_pr',
@@ -929,9 +969,6 @@ async function pullRequestCases({ pullRequest, reconciler, ledger, taskRun }) {
     assertEqual(missingMarker.kind, 'unresolved')
   } finally {
     process.env.PATH = previousPath
-    delete process.env.FAKE_REMOTE_SHA
-    delete process.env.FAKE_PR_STATE
-    delete process.env.FAKE_PR_COUNT
   }
 }
 

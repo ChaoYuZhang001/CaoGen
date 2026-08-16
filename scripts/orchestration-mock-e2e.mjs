@@ -32,16 +32,18 @@ const projectDir = path.join(tempRoot, 'project')
 const approvalFilePath = path.join(projectDir, 'office-approval-required.txt')
 const officeFailureMessage = 'office deterministic validation fault'
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
-const officeScreenshotThresholds = ciSoftwareWebgl ? { sceneNonDark: 0.1, leftDark: 0.91, leftBuckets: 64, centralNonDark: 0.12, workAreaNonDark: 0.2 } : { sceneNonDark: 0.2, leftDark: 0.82, leftBuckets: 70, centralNonDark: 0.18, workAreaNonDark: 0.35 }
+const officeScreenshotThresholds = ciSoftwareWebgl
+  ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftDark: 0.91, leftBuckets: 48, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006 }
+  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftDark: 0.82, leftBuckets: 56, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012 }
 const OFFICE_OVERVIEW_CAMERA = {
-  position: [0.28, 4.5, 9.55],
-  target: [0.02, 0.82, -1.18],
-  fov: 44
+  position: [0.2, 7.1, 16.8],
+  target: [0, 0.75, 0.15],
+  fov: 48
 }
 const OFFICE_FACILITIES_CAMERA = {
-  position: [-1.6, 5.5, 14.6],
-  target: [-1.6, 0.82, 4.2],
-  fov: 44
+  position: [0, 6.35, 15.8],
+  target: [0, 0.92, 0.1],
+  fov: 48
 }
 const electronBin =
   process.platform === 'win32'
@@ -271,9 +273,12 @@ try {
   await focusElectronPage(page, focusSession)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
   await page.click('.sidebar-office')
+  await page.waitForFunction(() => !document.querySelector('.task-recovery-drawer'), { timeout: 5_000 })
   await startOfficeViewDiagnostics(page)
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
   await waitForOfficeRenderLoop(page, 15_000)
+  await page.click('[data-office-business-view-option="all"]')
+  await page.waitForFunction(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-business-view') === 'all')
   await check('3D office model exposes parent-child Subagent packets', async () => {
     const attrs = await waitForValue(
       () =>
@@ -310,15 +315,20 @@ try {
             deskRobots: Number(wrap?.getAttribute('data-office-desk-robots') ?? 0),
             visibleRobots: Number(wrap?.getAttribute('data-office-visible-robots') ?? 0),
             oneRobotPerAgent: Number(wrap?.getAttribute('data-office-one-robot-per-agent') ?? 0),
-            teaWalkers: Number(wrap?.getAttribute('data-office-tea-walkers') ?? 0),
+            watercolorCharacters: Number(wrap?.getAttribute('data-office-watercolor-characters') ?? 0),
+            oneWatercolorCharacterPerAgent: Number(wrap?.getAttribute('data-office-one-watercolor-character-per-agent') ?? 0),
+            assistantWalkers: Number(wrap?.getAttribute('data-office-assistant-walkers') ?? 0),
             approvalWalkers: Number(wrap?.getAttribute('data-office-approval-walkers') ?? 0),
-            restroomWalkers: Number(wrap?.getAttribute('data-office-restroom-walkers') ?? 0),
-            diningWalkers: Number(wrap?.getAttribute('data-office-dining-walkers') ?? 0),
+            projectWalkers: Number(wrap?.getAttribute('data-office-project-walkers') ?? 0),
+            videoWalkers: Number(wrap?.getAttribute('data-office-video-walkers') ?? 0),
             facilityWalkers: Number(wrap?.getAttribute('data-office-facility-walkers') ?? 0),
             approvalStations: Number(wrap?.getAttribute('data-office-approval-stations') ?? 0),
-            hydrationStations: Number(wrap?.getAttribute('data-office-hydration-stations') ?? 0),
-            restroomStations: Number(wrap?.getAttribute('data-office-restroom-stations') ?? 0),
-            diningStations: Number(wrap?.getAttribute('data-office-dining-stations') ?? 0),
+            assistantStations: Number(wrap?.getAttribute('data-office-assistant-stations') ?? 0),
+            projectStations: Number(wrap?.getAttribute('data-office-project-stations') ?? 0),
+            videoStations: Number(wrap?.getAttribute('data-office-video-stations') ?? 0),
+            commandStations: Number(wrap?.getAttribute('data-office-command-stations') ?? 0),
+            artifactVaults: Number(wrap?.getAttribute('data-office-artifact-vaults') ?? 0),
+            renderRacks: Number(wrap?.getAttribute('data-office-render-racks') ?? 0),
             facilityFixtures: Number(wrap?.getAttribute('data-office-facility-fixtures') ?? 0),
             serviceWayfinding: Number(wrap?.getAttribute('data-office-service-wayfinding') ?? 0),
             amenityPortals: Number(wrap?.getAttribute('data-office-amenity-portals') ?? 0),
@@ -408,24 +418,28 @@ try {
         value.packets >= 3 &&
         value.walkers >= value.waitingApprovalSessions &&
         value.awaySessions >= value.waitingApprovalSessions &&
-        value.deskRobots >= 1 &&
-        value.deskRobots + value.awaySessions === value.sessions &&
-        value.visibleRobots === value.sessions &&
-        value.oneRobotPerAgent === 1 &&
-        value.teaWalkers >= Math.min(value.idleSessions, 1) &&
+        value.deskRobots === 0 &&
+        value.visibleRobots === 0 &&
+        value.oneRobotPerAgent === 0 &&
+        value.watercolorCharacters === value.sessions &&
+        value.oneWatercolorCharacterPerAgent === 1 &&
+        value.assistantWalkers >= Math.min(value.idleSessions, 1) &&
         value.approvalWalkers >= Math.min(value.waitingApprovalSessions, 1) &&
-        value.diningWalkers >= Math.min(value.completedSessions, 1) &&
-        value.restroomWalkers >= Math.min(Math.max(value.completedSessions - 1, 0), 1) &&
-        value.facilityWalkers === value.teaWalkers + value.restroomWalkers + value.diningWalkers &&
+        value.videoWalkers >= Math.min(value.completedSessions, 1) &&
+        value.projectWalkers >= Math.min(Math.max(value.completedSessions - 1, 0), 1) &&
+        value.facilityWalkers === value.assistantWalkers + value.projectWalkers + value.videoWalkers &&
         value.walkers === value.approvalWalkers + value.facilityWalkers &&
         value.approvalStations === 1 &&
-        value.hydrationStations === 1 &&
-        value.restroomStations === 1 &&
-        value.diningStations === 1 &&
+        value.assistantStations === 1 &&
+        value.projectStations === 1 &&
+        value.videoStations === 1 &&
+        value.commandStations === 1 &&
+        value.artifactVaults === 1 &&
+        value.renderRacks === 1 &&
         value.facilityFixtures >= 3 &&
-        value.serviceWayfinding === 1 &&
-        value.amenityPortals === 2 &&
-        value.facilitySignals >= 4 &&
+        value.serviceWayfinding === 0 &&
+        value.amenityPortals === 0 &&
+        value.facilitySignals === 3 &&
         value.clickableFacilities === 3 &&
         value.selectedFacility === '' &&
         value.facilityHitTargets === 3 &&
@@ -434,13 +448,13 @@ try {
         value.architecturalLights === 1 &&
         value.workZoneGlass === 1 &&
         value.vendorEmblems === 1 &&
-        value.deskFacingScreens === value.deskRobots &&
-        value.operatorContactLinks === value.deskRobots * 2 &&
-        value.screenFocusLinks === value.deskRobots * 2 &&
-        value.deskStatusPlaques === value.deskRobots &&
+        value.deskFacingScreens === value.sessions - value.awaySessions &&
+        value.operatorContactLinks === (value.sessions - value.awaySessions) * 2 &&
+        value.screenFocusLinks === (value.sessions - value.awaySessions) * 2 &&
+        value.deskStatusPlaques === value.sessions - value.awaySessions &&
         value.walkerFloorBadges === value.walkers &&
-        value.workInputs === value.deskRobots &&
-        value.operatorInputArrays === value.deskRobots &&
+        value.workInputs === value.sessions - value.awaySessions &&
+        value.operatorInputArrays === value.sessions - value.awaySessions &&
         value.serviceForegroundOccluders === 0 &&
         value.screenPanels >= value.sessions * 2 &&
         value.walkerRoutes === value.walkers &&
@@ -451,13 +465,13 @@ try {
         value.wallOccluders === 0 &&
         value.longLightOccluders === 0 &&
         value.presentationBackdrop === 1 &&
-        value.industrialRobots === value.deskRobots + value.walkers &&
-        value.humanoidRobotSilhouettes === value.sessions &&
-        value.humanoidFaceVisors === value.sessions &&
-        value.humanoidShellPanels >= value.sessions * 10 &&
-        value.humanoidArticulatedJoints >= value.sessions * 8 &&
-        value.humanoidBackShells === value.sessions &&
-        value.humanoidNeutralShells === value.sessions &&
+        value.industrialRobots === 0 &&
+        value.humanoidRobotSilhouettes === 0 &&
+        value.humanoidFaceVisors === 0 &&
+        value.humanoidShellPanels === 0 &&
+        value.humanoidArticulatedJoints === 0 &&
+        value.humanoidBackShells === 0 &&
+        value.humanoidNeutralShells === 0 &&
         value.faultBeacons === value.failedSessions &&
         value.maintenanceUnits === value.failedSessions &&
         value.diagnosticBeams === value.failedSessions * 2 &&
@@ -512,24 +526,28 @@ try {
         attrs.idleSessions + attrs.runningSessions + attrs.waitingApprovalSessions + attrs.completedSessions + attrs.failedSessions === attrs.sessions &&
         attrs.walkers >= attrs.waitingApprovalSessions &&
         attrs.awaySessions >= attrs.waitingApprovalSessions &&
-        attrs.deskRobots >= 1 &&
-        attrs.deskRobots + attrs.awaySessions === attrs.sessions &&
-        attrs.visibleRobots === attrs.sessions &&
-        attrs.oneRobotPerAgent === 1 &&
-        attrs.teaWalkers >= Math.min(attrs.idleSessions, 1) &&
+        attrs.deskRobots === 0 &&
+        attrs.visibleRobots === 0 &&
+        attrs.oneRobotPerAgent === 0 &&
+        attrs.watercolorCharacters === attrs.sessions &&
+        attrs.oneWatercolorCharacterPerAgent === 1 &&
+        attrs.assistantWalkers >= Math.min(attrs.idleSessions, 1) &&
         attrs.approvalWalkers >= Math.min(attrs.waitingApprovalSessions, 1) &&
-        attrs.diningWalkers >= Math.min(attrs.completedSessions, 1) &&
-        attrs.restroomWalkers >= Math.min(Math.max(attrs.completedSessions - 1, 0), 1) &&
-        attrs.facilityWalkers === attrs.teaWalkers + attrs.restroomWalkers + attrs.diningWalkers &&
+        attrs.videoWalkers >= Math.min(attrs.completedSessions, 1) &&
+        attrs.projectWalkers >= Math.min(Math.max(attrs.completedSessions - 1, 0), 1) &&
+        attrs.facilityWalkers === attrs.assistantWalkers + attrs.projectWalkers + attrs.videoWalkers &&
         attrs.walkers === attrs.approvalWalkers + attrs.facilityWalkers &&
         attrs.approvalStations === 1 &&
-        attrs.hydrationStations === 1 &&
-        attrs.restroomStations === 1 &&
-        attrs.diningStations === 1 &&
+        attrs.assistantStations === 1 &&
+        attrs.projectStations === 1 &&
+        attrs.videoStations === 1 &&
+        attrs.commandStations === 1 &&
+        attrs.artifactVaults === 1 &&
+        attrs.renderRacks === 1 &&
         attrs.facilityFixtures >= 3 &&
-        attrs.serviceWayfinding === 1 &&
-        attrs.amenityPortals === 2 &&
-        attrs.facilitySignals >= 4 &&
+        attrs.serviceWayfinding === 0 &&
+        attrs.amenityPortals === 0 &&
+        attrs.facilitySignals === 3 &&
         attrs.clickableFacilities === 3 &&
         attrs.selectedFacility === '' &&
         attrs.facilityHitTargets === 3 &&
@@ -538,13 +556,13 @@ try {
         attrs.architecturalLights === 1 &&
         attrs.workZoneGlass === 1 &&
         attrs.vendorEmblems === 1 &&
-        attrs.deskFacingScreens === attrs.deskRobots &&
-        attrs.operatorContactLinks === attrs.deskRobots * 2 &&
-        attrs.screenFocusLinks === attrs.deskRobots * 2 &&
-        attrs.deskStatusPlaques === attrs.deskRobots &&
+        attrs.deskFacingScreens === attrs.sessions - attrs.awaySessions &&
+        attrs.operatorContactLinks === (attrs.sessions - attrs.awaySessions) * 2 &&
+        attrs.screenFocusLinks === (attrs.sessions - attrs.awaySessions) * 2 &&
+        attrs.deskStatusPlaques === attrs.sessions - attrs.awaySessions &&
         attrs.walkerFloorBadges === attrs.walkers &&
-        attrs.workInputs === attrs.deskRobots &&
-        attrs.operatorInputArrays === attrs.deskRobots &&
+        attrs.workInputs === attrs.sessions - attrs.awaySessions &&
+        attrs.operatorInputArrays === attrs.sessions - attrs.awaySessions &&
         attrs.serviceForegroundOccluders === 0 &&
         attrs.screenPanels >= attrs.sessions * 2 &&
         attrs.walkerRoutes === attrs.walkers &&
@@ -555,13 +573,13 @@ try {
         attrs.wallOccluders === 0 &&
         attrs.longLightOccluders === 0 &&
         attrs.presentationBackdrop === 1 &&
-        attrs.industrialRobots === attrs.deskRobots + attrs.walkers &&
-        attrs.humanoidRobotSilhouettes === attrs.sessions &&
-        attrs.humanoidFaceVisors === attrs.sessions &&
-        attrs.humanoidShellPanels >= attrs.sessions * 10 &&
-        attrs.humanoidArticulatedJoints >= attrs.sessions * 8 &&
-        attrs.humanoidBackShells === attrs.sessions &&
-        attrs.humanoidNeutralShells === attrs.sessions &&
+        attrs.industrialRobots === 0 &&
+        attrs.humanoidRobotSilhouettes === 0 &&
+        attrs.humanoidFaceVisors === 0 &&
+        attrs.humanoidShellPanels === 0 &&
+        attrs.humanoidArticulatedJoints === 0 &&
+        attrs.humanoidBackShells === 0 &&
+        attrs.humanoidNeutralShells === 0 &&
         attrs.faultBeacons === attrs.failedSessions &&
         attrs.maintenanceUnits === attrs.failedSessions &&
         attrs.diagnosticBeams === attrs.failedSessions * 2 &&
@@ -607,7 +625,7 @@ try {
     )
   })
   await check('3D office walking gait advances through distance-locked phases', async () => {
-    await page.click('.office-camera-button:nth-child(1)')
+    await page.click('[data-office-camera-preset="overview"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'overview',
@@ -629,14 +647,14 @@ try {
   })
 
   await check('3D office camera presets switch without leaving the control room', async () => {
-    await page.click('.office-camera-button:nth-child(3)')
+    await page.click('[data-office-camera-preset="facilities"]')
     const facilities = await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'facilities',
       5_000,
       'waiting for facilities camera preset'
     )
-    await page.click('.office-camera-button:nth-child(4)')
+    await page.click('[data-office-camera-preset="incidents"]')
     const incidents = await waitForValue(
       () =>
         page.evaluate(() => {
@@ -658,14 +676,14 @@ try {
       5_000,
       'waiting for incidents camera preset'
     )
-    await page.click('.office-camera-button:nth-child(2)')
+    await page.click('[data-office-camera-preset="agent"]')
     const agent = await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'agent',
       5_000,
       'waiting for agent camera preset'
     )
-    await page.click('.office-camera-button:nth-child(1)')
+    await page.click('[data-office-camera-preset="overview"]')
     const overview = await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'overview',
@@ -676,7 +694,7 @@ try {
   })
 
   await check('3D office facilities can be selected from the canvas', async () => {
-    await page.click('.office-camera-button:nth-child(3)')
+    await page.click('[data-office-camera-preset="facilities"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'facilities',
@@ -688,12 +706,12 @@ try {
       const wrap = document.querySelector('.office-canvas-wrap')
       try {
         const targets = JSON.parse(wrap?.getAttribute('data-office-facility-hit-targets') || '[]')
-        return targets.find((target) => target.id === 'dining') || targets[0] || null
+        return targets.find((target) => target.id === 'video') || targets[0] || null
       } catch {
         return null
       }
     })
-    assert(facilityTarget?.id === 'dining', `missing dining facility target: ${JSON.stringify(facilityTarget)}`)
+    assert(facilityTarget?.id === 'video', `missing video facility target: ${JSON.stringify(facilityTarget)}`)
     const facilityClick = await clickProjectedFacilityTarget(page, facilityTarget, OFFICE_FACILITIES_CAMERA)
     const selectedFacility = await waitForValue(
       () =>
@@ -718,19 +736,19 @@ try {
     }
   })
 
-  await check('3D office facility cameras show hydration, restroom, and dining zones', async () => {
+  await check('3D control room cameras show assistant, project, and video zones', async () => {
     const screenshots = {}
     // Let staggered facility walkers clear the shared aisle before capturing acceptance evidence.
     await sleep(5_500)
-    for (const key of ['hydration', 'restroom', 'dining']) {
-      await page.click('.office-camera-button:nth-child(1)')
+    for (const key of ['assistant', 'project', 'video']) {
+      await page.click('[data-office-camera-preset="overview"]')
       await waitForValue(
         () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
         (value) => value === 'overview',
         5_000,
         `waiting for overview before ${key} facility camera`
       )
-      await page.click('.office-camera-button:nth-child(3)')
+      await page.click('[data-office-camera-preset="facilities"]')
       await waitForValue(
         () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
         (value) => value === 'facilities',
@@ -768,7 +786,7 @@ try {
   })
 
   await check('3D office canvas objects select agents without leaving the control room', async () => {
-    await page.click('.office-camera-button:nth-child(1)')
+    await page.click('[data-office-camera-preset="overview"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'overview',
@@ -808,7 +826,7 @@ try {
     assert(clickPlan.walker?.id, `missing walker click target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.walkerHome?.id === clickPlan.walker.id, `missing walker home target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.walker.id !== clickPlan.workstation.id, `walker target should differ from workstation target: ${JSON.stringify(clickPlan)}`)
-    await page.click('.office-camera-button:nth-child(3)')
+    await page.click('[data-office-camera-preset="facilities"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'facilities',
@@ -839,7 +857,7 @@ try {
     assert(clickPlan.facilityWalkerHome?.id === clickPlan.facilityWalker.id, `missing facility walker home target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.facilityWalker.id !== clickPlan.walker.id, `facility walker should differ from first walker: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.facilityWalker.reason !== 'approval', `facility walker should not be approval-only: ${JSON.stringify(clickPlan)}`)
-    await page.click('.office-camera-button:nth-child(3)')
+    await page.click('[data-office-camera-preset="facilities"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'facilities',
@@ -882,7 +900,7 @@ try {
     report.officeCanvas = stats
   })
   await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
-    await page.click('.office-camera-button:nth-child(1)')
+    await page.click('[data-office-camera-preset="overview"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'overview',
@@ -896,7 +914,12 @@ try {
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > officeScreenshotThresholds.sceneNonDark, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
     assert(stats.scene.brightRatio > 0.005, `office scene lacks visible highlights: ${JSON.stringify(stats.scene)}`)
-    assert(stats.scene.coloredRatio > 0.009, `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`)
+    assert(
+      stats.scene.coloredRatio > officeScreenshotThresholds.sceneColored &&
+        stats.scene.uniqueColorBuckets >= officeScreenshotThresholds.sceneBuckets &&
+        stats.scene.otherPaletteRatio > 0.009,
+      `office scene lacks visible agents/zones: ${JSON.stringify(stats.scene)}`
+    )
     assert(
       stats.leftSightline.darkRatio < officeScreenshotThresholds.leftDark &&
         stats.leftSightline.uniqueColorBuckets >= officeScreenshotThresholds.leftBuckets &&
@@ -909,13 +932,13 @@ try {
     )
     assert(
       stats.robotWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
-        stats.robotWorkArea.brightRatio > 0.015 &&
+        stats.robotWorkArea.brightRatio > officeScreenshotThresholds.workAreaBright &&
         stats.robotWorkArea.coloredRatio > 0.01,
       `robots and desk operator lights are not readable: ${JSON.stringify(stats.robotWorkArea)}`
     )
     assert(
       stats.nonErrorWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
-        stats.nonErrorWorkArea.brightRatio > 0.015 &&
+        stats.nonErrorWorkArea.brightRatio > officeScreenshotThresholds.workAreaBright &&
         stats.nonErrorWorkArea.coloredRatio > 0.009 &&
         stats.nonErrorWorkArea.redRatio < 0.02 &&
         stats.nonErrorWorkArea.cyanRatio < 0.35,
@@ -948,7 +971,7 @@ try {
     )
     report.officeSelectedSessionOpenSmoke = { selected: before.selected, officeGone: opened.officeGone }
   })
-  await check('3D office light theme keeps silver robots readable', async () => {
+  await check('3D office light theme keeps watercolor characters readable', async () => {
     await page.evaluate(async () => {
       await window.agentDesk.updateSettings({ theme: 'light' })
     })
@@ -963,6 +986,20 @@ try {
     )
     await page.click('.sidebar-office')
     await page.waitForSelector('.office canvas', { timeout: 20_000 })
+    await page.click('[data-office-business-view-option="all"]')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-business-view') ?? ''),
+      (value) => value === 'all',
+      5_000,
+      'waiting for all-business light office view'
+    )
+    await page.click('[data-office-camera-preset="overview"]')
+    await waitForValue(
+      () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
+      (value) => value === 'overview',
+      5_000,
+      'waiting for light office overview'
+    )
     const renderState = await waitForOfficeRenderLoop(page)
     report.officeLightRenderState = renderState
     await waitForOfficeScenePixels(page)
@@ -972,7 +1009,10 @@ try {
     report.officeLightScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `light office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > 0.55, `light office scene is too dark: ${JSON.stringify(stats.scene)}`)
-    assert(stats.robotWorkArea.uniqueColorBuckets >= 80, `light office robots lack visual separation: ${JSON.stringify(stats.robotWorkArea)}`)
+    assert(
+      stats.robotWorkArea.uniqueColorBuckets >= 80 && stats.robotWorkArea.coloredRatio > 0.009,
+      `light office watercolor characters lack visual separation: ${JSON.stringify(stats.robotWorkArea)}`
+    )
   })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
@@ -1149,6 +1189,7 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
     cyanRatio: nonDarkPixels > 0 ? cyanPixels / nonDarkPixels : 0,
     neutralRatio: nonDarkPixels > 0 ? neutralPixels / nonDarkPixels : 0,
     redRatio: nonDarkPixels > 0 ? redPixels / nonDarkPixels : 1,
+    otherPaletteRatio: nonDarkPixels > 0 ? otherPalettePixels / nonDarkPixels : 0,
     cyanNeutralRatio: nonDarkPixels > 0 ? (cyanPixels + neutralPixels) / nonDarkPixels : 0
   }
 }
@@ -1325,9 +1366,9 @@ async function readOfficeCanvasClickPlan(page) {
     const walkers = readTargets('data-office-walker-hit-targets')
     const walker = walkers.find((target) => target.reason === 'approval') || walkers[0] || null
     const facilityWalker =
-      walkers.find((target) => target.id !== walker?.id && target.reason === 'dining') ||
-      walkers.find((target) => target.id !== walker?.id && target.reason === 'restroom') ||
-      walkers.find((target) => target.id !== walker?.id && target.reason === 'tea') ||
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'video') ||
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'project') ||
+      walkers.find((target) => target.id !== walker?.id && target.reason === 'assistant') ||
       null
     const walkerSessionIds = new Set(walkers.map((target) => target.id))
     const workstationFor = (target) =>

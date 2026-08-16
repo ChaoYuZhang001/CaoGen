@@ -72,3 +72,18 @@ export function clearWorkflowLedgerMigrationSingleFlightForTests(): void {
 export function clearWorkflowLedgerMigrationSingleFlightForDatabase(databasePath: string): void {
   readinessFlights.delete(readinessFlightKey(databasePath))
 }
+
+/** Replace a settled readiness result after an independently verified database commit. */
+export function cacheWorkflowLedgerTaskStoreReadinessForDatabase(
+  databasePath: string,
+  readiness: WorkflowLedgerTaskStoreReadiness
+): void {
+  const resolvedDatabasePath = resolve(databasePath)
+  if (readiness.report.sourceKind !== 'sqlite' || resolve(readiness.report.sourcePath) !== resolvedDatabasePath) {
+    throw new Error('workflow_ledger_readiness_cache_source_mismatch')
+  }
+  readinessFlights.set(readinessFlightKey(resolvedDatabasePath), {
+    promise: Promise.resolve(readiness),
+    settled: true
+  })
+}

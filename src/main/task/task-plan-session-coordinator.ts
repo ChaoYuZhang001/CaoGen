@@ -3,11 +3,13 @@ import type {
   SessionMeta,
   TaskPlanApprovalInput,
   TaskPlanDraftInput,
-  TaskPlanStateView
+  TaskPlanStateView,
+  TaskPlanVersion
 } from '../../shared/types'
 import { requireExecuteTaskStrategy, requireTaskStrategy } from './task-strategy'
 import { TaskPlanContractStore } from './task-plan-contract-store'
 import { TaskPlanCanonicalProjector } from './task-plan-canonical-projection'
+import { reconcileTaskPlanLedger, syncTaskPlanLedger } from './task-plan-ledger'
 
 export class TaskPlanSessionCoordinator {
   private readonly store: TaskPlanContractStore
@@ -16,7 +18,7 @@ export class TaskPlanSessionCoordinator {
 
   constructor(
     private readonly findSession: (id: string) => Engine | undefined,
-    userDataRoot: () => string
+    private readonly userDataRoot: () => string
   ) {
     this.store = new TaskPlanContractStore(userDataRoot)
     this.projector = new TaskPlanCanonicalProjector(userDataRoot)
@@ -33,32 +35,76 @@ export class TaskPlanSessionCoordinator {
     await session.setTaskStrategy(strategy)
   }
 
+  async reconcileLedger(): Promise<void> {
+    await reconcileTaskPlanLedger(this.userDataRoot(), this.store.listAll())
+  }
+
   get(id: string): TaskPlanStateView {
     this.requireSession(id)
     return this.store.get(id)
   }
 
-  createManualVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+  async createManualVersion(id: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView> {
     this.assertApprovalIdle(id)
     const session = this.requireSession(id)
     this.assertIdle(session.meta, '修改计划')
     if (session.meta.taskStrategy !== 'plan') throw new Error('请先切换到规划，再创建计划版本。')
-    return this.store.createVersion(binding(session.meta), { ...draft, source: 'manual' }, 'local-user')
+    const next = this.store.createVersion(binding(session.meta), { ...draft, source: 'manual' }, 'local-user')
+    await syncTaskPlanLedger(this.userDataRoot(), next)
+    return next
   }
 
-  createAgentVersion(id: string, draft: TaskPlanDraftInput): TaskPlanStateView {
+  async createAgentVersion(id: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView> {
     this.assertApprovalIdle(id)
     const session = this.requireSession(id)
     if (session.meta.taskStrategy !== 'plan') throw new Error('Genesis 只能在规划策略中生成计划版本。')
     const current = this.store.get(id).currentVersion
-    return this.store.createVersion(binding(session.meta), {
+    const next = this.store.createVersion(binding(session.meta), {
       ...draft,
       changeReason: current ? (draft.changeReason?.trim() || 'Genesis 重新生成结构化计划') : draft.changeReason,
       source: 'genesis'
     }, 'agent')
+    await syncTaskPlanLedger(this.userDataRoot(), next)
+    return next
   }
 
-  async approve(id: string, input: TaskPlanApprovalInput): Promise<TaskPlanStateView> {
+  async createGeneratedVersion(id: string, draft: TaskPlanDraftInput): Promise<TaskPlanStateView> {
+    this.assertApprovalIdle(id)
+    const session = this.requireSession(id)
+    this.assertIdle(session.meta, '生成计划')
+    if (session.meta.taskStrategy !== 'plan') throw new Error('只能在规划策略中生成工作流草案。')
+    const state = this.store.get(id)
+    if (state.currentVersion) {
+      if (state.currentVersion.objective !== draft.objective.trim()) {
+        throw new Error('当前会话已有另一个目标的计划，已阻止覆盖')
+      }
+      await syncTaskPlanLedger(this.userDataRoot(), state)
+      return state
+    }
+    const next = this.store.createVersion(binding(session.meta), { ...draft, source: 'genesis' }, 'agent')
+    await syncTaskPlanLedger(this.userDataRoot(), next)
+    return next
+  }
+
+  requireApprovedVersion(
+    id: string,
+    input: TaskPlanApprovalInput
+  ): { version: TaskPlanVersion; projection: TaskPlanStateView['projection'] } {
+    const session = this.requireSession(id)
+    this.assertIdle(session.meta, '执行计划')
+    const state = this.store.get(id)
+    const current = state.currentVersion
+    if (!current || current.version !== input.version || current.digest !== input.digest) {
+      throw new Error('计划执行目标已变化，请重新审查当前版本')
+    }
+    if (state.approvalStatus !== 'approved' || state.approvedVersion !== input.version ||
+      state.approvedDigest !== input.digest) {
+      throw new Error(`计划 v${input.version} 尚未批准或已被后续版本取代`)
+    }
+    return { version: current, projection: state.projection }
+  }
+
+  async approve(id: string, input: TaskPlanApprovalInput, actorId = 'local-user'): Promise<TaskPlanStateView> {
     const session = this.requireSession(id)
     this.assertIdle(session.meta, '审批计划')
     this.assertApprovalIdle(id)
@@ -78,16 +124,20 @@ export class TaskPlanSessionCoordinator {
         previousApproval?.projection,
         reusePreviousReceipt
       )
-      return this.store.approve(id, input, projection)
+      const next = this.store.approve(id, input, projection, actorId)
+      await syncTaskPlanLedger(this.userDataRoot(), next)
+      return next
     } finally {
       this.approvalsInFlight.delete(id)
     }
   }
 
-  revoke(id: string, input: TaskPlanApprovalInput): TaskPlanStateView {
+  async revoke(id: string, input: TaskPlanApprovalInput, actorId = 'local-user'): Promise<TaskPlanStateView> {
     const session = this.requireSession(id)
     this.assertIdle(session.meta, '撤销计划审批')
-    return this.store.revoke(id, input)
+    const next = this.store.revoke(id, input, actorId)
+    await syncTaskPlanLedger(this.userDataRoot(), next)
+    return next
   }
 
   assertInteractiveExecution(id: string, action: string): void {
@@ -96,17 +146,31 @@ export class TaskPlanSessionCoordinator {
 
   assertExecution(meta: SessionMeta, action: string): void {
     requireExecuteTaskStrategy(meta, action)
-    this.store.assertExecutionAuthorized(meta.id, false)
+    this.store.assertExecutionAuthorized(this.executionAuthoritySessionId(meta), false)
   }
 
   authorizeSend(session: Engine): boolean {
     if (session.meta.taskStrategy !== 'execute') return true
     try {
-      this.store.assertExecutionAuthorized(session.meta.id, false)
+      this.store.assertExecutionAuthorized(this.executionAuthoritySessionId(session.meta), false)
       return true
     } catch (error) {
       session.meta.lastError = error instanceof Error ? error.message : String(error)
       return false
+    }
+  }
+
+  private executionAuthoritySessionId(meta: SessionMeta): string {
+    const visited = new Set<string>()
+    let current = meta
+    while (true) {
+      if (visited.has(current.id)) throw new Error('任务计划父会话链形成循环，已阻止执行')
+      visited.add(current.id)
+      if (this.store.get(current.id).currentVersion) return current.id
+      if (!current.parentSessionId) return current.id
+      const parent = this.findSession(current.parentSessionId)
+      if (!parent) throw new Error('任务计划父会话不可用，已阻止子任务执行')
+      current = parent.meta
     }
   }
 

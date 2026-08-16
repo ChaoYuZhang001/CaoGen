@@ -10,8 +10,6 @@ import {
   workItemId
 } from './verified-delivery-flow-contract.mjs'
 import {
-  acceptanceResult,
-  acquireAndTransition,
   commandContext,
   ensureRun,
   evidenceAuthority,
@@ -29,8 +27,14 @@ export async function repairReview(api, payload) {
   await createRepairedReviewLink(api, payload, context.failed.id)
   const repairEvidence = await createRepairCompletionEvidence(api, payload, context.repairWorkItem)
   await passRepairAcceptance(api, payload, context, repairEvidence.evidenceId)
-  await finalizeRepairWorkItem(api, payload, context.repairWorkItem, repairEvidence.evidenceId)
-  await retestOriginalAcceptance(api, payload, context, repairedEvidence.evidenceId, repairedArtifact.location.path)
+  await assertAutomaticRepairSettlement(api, payload, context, repairEvidence.evidenceId)
+  await passRetestedOriginalAcceptance(
+    api,
+    payload,
+    context.failed.id,
+    repairedEvidence.evidenceId,
+    repairedArtifact.location.path
+  )
   await attachRepairedReviewArtifact(api, payload)
   await finalizeReviewWorkItem(api, payload, repairedEvidence.evidenceId)
   await transitionPersistedRun(api, payload, REVIEW_V2.sessionId, 'completed')
@@ -133,39 +137,46 @@ async function passRepairAcceptance(api, payload, context, repairEvidenceId) {
   assert.equal(result.acceptance.status, 'passed')
 }
 
-async function finalizeRepairWorkItem(api, payload, repairWorkItem, repairEvidenceId) {
-  const { commands, store } = await commandContext(api, payload)
-  let current = await store.getWorkItem(repairWorkItem.id)
-  assert(current)
-  current = await commands.setWorkItemAcceptance(current.id, acceptanceResult('passed', repairEvidenceId), {
-    expectedRevision: current.revision
-  })
-  current = await acquireAndTransition(commands, current, 'running')
-  current = await commands.transitionWorkItem(current.id, 'verifying', { expectedRevision: current.revision })
-  current = await commands.transitionWorkItem(current.id, 'done', { expectedRevision: current.revision })
-  assert.equal(current.status, 'done')
+async function assertAutomaticRepairSettlement(api, payload, context, repairEvidenceId) {
+  const { store } = await commandContext(api, payload)
+  const repairWorkItem = await store.getWorkItem(context.repairWorkItem.id)
+  assert(repairWorkItem)
+  assert.equal(repairWorkItem.status, 'done')
+  assert.equal(repairWorkItem.lease, undefined)
+  assert.equal(repairWorkItem.acceptance?.status, 'passed')
+  assert.deepEqual(repairWorkItem.acceptance?.evidenceRefs, [repairEvidenceId])
+
+  const repairAcceptance = await findAcceptance(api, payload, context.repairAcceptance.id)
+  assert.equal(repairAcceptance.status, 'passed')
+  assert.deepEqual(repairAcceptance.evidenceRefs, [repairEvidenceId])
+
+  const retested = await findAcceptance(api, payload, context.failed.id)
+  assert.equal(retested.status, 'verifying')
+  assert.equal(retested.revision, context.failed.revision + 1)
+  assert.deepEqual(retested.criterionPolicies, context.failed.criterionPolicies)
+  assert.deepEqual(retested.evidenceRefs, [])
+  assert.equal(retested.criterionEvidence, undefined)
+  assert.equal(retested.verifier, undefined)
 }
 
-async function retestOriginalAcceptance(api, payload, context, repairedEvidenceId, artifactPath) {
-  const retest = await api.handlers.reviewWorkflowAcceptance({
-    acceptanceId: context.failed.id,
-    criterionEvidence: [],
-    decision: 'retest',
-    notes: 'repair completed; retest exact bytes'
-  }, reviewAuthority(), payload.rootDir)
-  assert.equal(retest.acceptance.status, 'verifying')
-
+async function passRetestedOriginalAcceptance(
+  api,
+  payload,
+  targetAcceptanceId,
+  repairedEvidenceId,
+  artifactPath
+) {
   const original = readFileSync(artifactPath)
   const tampered = Buffer.from(original)
   tampered[0] ^= 1
   writeFileSync(artifactPath, tampered)
   try {
-    await assertByteIntegrityFailure(api, payload, context.failed.id, repairedEvidenceId)
+    await assertByteIntegrityFailure(api, payload, targetAcceptanceId, repairedEvidenceId)
   } finally {
     writeFileSync(artifactPath, original)
   }
   const passed = await api.handlers.reviewWorkflowAcceptance({
-    acceptanceId: context.failed.id,
+    acceptanceId: targetAcceptanceId,
     criterionEvidence: [{ criterionIndex: 0, evidenceRefs: [repairedEvidenceId] }],
     decision: 'passed',
     notes: 'repaired Artifact bytes verified'

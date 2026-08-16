@@ -109,9 +109,13 @@ try {
     tokenLabel: 'registration-primary'
   })
   assert.equal(provider.engine, 'anthropic', 'saved Provider must retain the Anthropic engine kind')
-  const persistedProviders = JSON.parse(readFileSync(path.join(userData, 'providers.json'), 'utf8'))
+  const persistedProviderDocument = JSON.parse(readFileSync(path.join(userData, 'providers.json'), 'utf8'))
+  const persistedProviders = Array.isArray(persistedProviderDocument)
+    ? persistedProviderDocument
+    : persistedProviderDocument.entries
+  assert(Array.isArray(persistedProviders), 'providers.json must contain a Provider entry list')
   assert.equal(persistedProviders[0]?.engine, 'anthropic', 'providers.json must persist engine=anthropic')
-  assert.equal(JSON.stringify(persistedProviders).includes(token), false, 'providers.json must not contain the raw API key')
+  assert.equal(JSON.stringify(persistedProviderDocument).includes(token), false, 'providers.json must not contain the raw API key')
 
   manager = sessionManagerModule.sessionManager
   await manager.init()

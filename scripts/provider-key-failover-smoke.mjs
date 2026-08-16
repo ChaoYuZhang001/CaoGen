@@ -103,6 +103,7 @@ try {
     const providers = read('src/main/providers.ts')
     const openai = read('src/main/openaiEngine.ts')
     const anthropic = read('src/main/provider/anthropicRecovery.ts')
+    const anthropicEngine = read('src/main/anthropicEngine.ts')
     const types = read('src/shared/types.ts')
     const store = read('src/renderer/src/store/provider-failover.ts')
     const message = read('src/renderer/src/components/MessageItem.tsx')
@@ -113,7 +114,11 @@ try {
     assert(openai.indexOf('tryProviderKeyFailover(text') < openai.indexOf('recordFailure(this.meta.providerId, text)'), 'OpenAI must rotate a key before marking the Provider failed')
     assert(anthropic.includes('recoverProviderKey(input) ?? recoverProviderModel(input) ?? recoverProvider(input)'), 'Anthropic must rotate a key before model or Provider failover')
     assert(anthropic.includes('const rotation = input.rotateProviderKey({'), 'Anthropic key recovery must use Provider storage rotation')
-    assert(anthropic.includes(".filter((provider) => provider.engine === 'anthropic' && provider.hasToken)"), 'Anthropic Provider failover must remain protocol-scoped')
+    assert(
+      anthropic.includes("provider.engine === (input.engineKind ?? 'anthropic') && provider.hasToken")
+        && anthropicEngine.includes('engineKind: this.dependencies.recoveryEngineKind'),
+      'Provider failover must remain scoped to the active recovery engine'
+    )
     assert(types.includes("kind: 'provider-key-failover'"), 'shared event contract must include key failover')
     assert(!types.match(/provider-key-failover[\s\S]{0,500}(token|encryptedToken):/), 'key failover event must not expose secret fields')
     assert(store.includes("event.kind === 'provider-key-failover'"), 'renderer store must preserve key failover')

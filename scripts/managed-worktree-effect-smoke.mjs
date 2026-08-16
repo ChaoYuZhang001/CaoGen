@@ -196,24 +196,19 @@ async function refMoveCasCase(lifecycle) {
   }
   const wrapperDir = path.join(tempRoot, 'git-wrapper')
   mkdirSync(wrapperDir)
-  writeExecutable(path.join(wrapperDir, 'git'), refMoveWrapper())
-  const previous = captureEnvironment([
-    'PATH',
-    'CAOGEN_TEST_REAL_GIT',
-    'CAOGEN_TEST_MOVE_REPO',
-    'CAOGEN_TEST_MOVE_REF',
-    'CAOGEN_TEST_MOVE_SHA'
-  ])
+  writeExecutable(path.join(wrapperDir, 'git'), refMoveWrapper({
+    gitExecutable: realGit,
+    repo,
+    ref: removeTarget.branchRef,
+    sha: movedSha
+  }))
+  const previousPath = process.env.PATH
   process.env.PATH = `${wrapperDir}${path.delimiter}${process.env.PATH ?? ''}`
-  process.env.CAOGEN_TEST_REAL_GIT = realGit
-  process.env.CAOGEN_TEST_MOVE_REPO = repo
-  process.env.CAOGEN_TEST_MOVE_REF = removeTarget.branchRef
-  process.env.CAOGEN_TEST_MOVE_SHA = movedSha
   let result
   try {
     result = lifecycle.executeManagedWorktreeRemoveTarget(removeTarget)
   } finally {
-    restoreEnvironment(previous)
+    restoreEnv('PATH', previousPath)
   }
   assert(!result.ok, 'ref move between remove and delete must fail the executor CAS')
   assert(!existsSync(worktreePath), 'worktree removal should already have occurred in the race fixture')
@@ -374,8 +369,9 @@ function prepareInput(cwd, id, descriptor) {
   }
 }
 
-function refMoveWrapper() {
-  return `#!/bin/sh\n"$CAOGEN_TEST_REAL_GIT" "$@"\nstatus=$?\ncase " $* " in\n  *" worktree remove "*)\n    "$CAOGEN_TEST_REAL_GIT" -C "$CAOGEN_TEST_MOVE_REPO" update-ref "$CAOGEN_TEST_MOVE_REF" "$CAOGEN_TEST_MOVE_SHA"\n    ;;\nesac\nexit $status\n`
+function refMoveWrapper({ gitExecutable, repo, ref, sha }) {
+  const gitCommand = shellQuote(gitExecutable)
+  return `#!/bin/sh\n${gitCommand} "$@"\nstatus=$?\ncase " $* " in\n  *" worktree remove "*)\n    ${gitCommand} -C ${shellQuote(repo)} update-ref ${shellQuote(ref)} ${shellQuote(sha)}\n    ;;\nesac\nexit $status\n`
 }
 
 function compileSources() {
@@ -462,14 +458,6 @@ function sanitizedGitEnvironment(source) {
   env.GIT_CONFIG_NOSYSTEM = '1'
   env.GIT_TERMINAL_PROMPT = '0'
   return env
-}
-
-function captureEnvironment(keys) {
-  return Object.fromEntries(keys.map((key) => [key, process.env[key]]))
-}
-
-function restoreEnvironment(previous) {
-  for (const [key, value] of Object.entries(previous)) restoreEnv(key, value)
 }
 
 function restoreEnv(key, value) {

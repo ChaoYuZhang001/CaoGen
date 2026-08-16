@@ -21,13 +21,8 @@ import { registerInteractiveMutationIpc } from './ipc/interactive-mutation-handl
 import { registerAppFeatureIpc } from './ipc/app-feature-handlers'
 import { getSettings, updateSettings } from './settings'
 import {
-  listGuiAutomationGrants,
-  listToolCapabilityGrants,
   revokeAllGuiAutomationGrants,
-  revokeAllToolCapabilityGrants,
-  revokeGuiAutomationGrant,
   revokeGuiAutomationGrantsForSession,
-  revokeToolCapabilityGrant,
   revokeToolCapabilityGrantsForSession
 } from './permission/permission-manager'
 import {
@@ -36,7 +31,7 @@ import {
   listNotificationConnectors,
   setDefaultNotificationConnector
 } from './notification/notification-connector-store'
-import { deleteHistory, listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
+import { listHistory, renameHistory, setHistoryArchived, setHistoryPinned } from './history'
 import { searchTranscripts } from './transcriptSearch'
 import {
   listProviders,
@@ -48,8 +43,13 @@ import {
 } from './providers'
 import { listHealth } from './scheduler'
 import { listEngines } from './engine'
-import { applyMigration, rollbackMigration, scanMigration } from './migration'
-import { executeMigrationImportEffect } from './migrationEffect'
+import { scanMigration } from './migration'
+import {
+  executeMigrationApplyEffect,
+  executeMigrationImportEffect,
+  executeMigrationRollbackEffect
+} from './migrationEffect'
+import { configureMigrationOperationBackupRoot } from './migration-operation-effect'
 import { listProjects, updateProject, deleteProject } from './projects'
 import {
   generateProjectContextTemplate,
@@ -70,18 +70,8 @@ import {
 import { writeExtractedMemory } from './memory/memory-writer'
 import { shouldProposeMemory } from './memoryInject'
 import { suggestFiles } from './fileSuggest'
-import { listProjectFiles, readTextFile, searchProjectText } from './fileOps'
-import { collectProjectDiagnostics } from './projectDiagnostics'
-import { resolveProjectDefinition, searchProjectSymbols } from './projectLanguageIntelligence'
-import {
-  getTypeScriptCompletions,
-  getTypeScriptDefinitions,
-  getTypeScriptDiagnostics,
-  getTypeScriptHover
-} from './typescriptLanguageServer'
-import type {
-  TypeScriptLanguageInput
-} from '../shared/types'
+import { registerFileIntelligenceIpc } from './ipc/file-intelligence-handlers'
+import { registerPermissionGrantIpc } from './ipc/permission-grant-handlers'
 import { preparePreview } from './previewOps'
 import { prepareOfficeVisualPreview } from './previewVisual'
 import { listPreviewAnnotations, savePreviewAnnotation } from './previewAnnotations'
@@ -96,8 +86,9 @@ import {
 import { fallbackEffectIntentDescription, fallbackEffectTargetDescription } from './ipc/effect-descriptions'
 import { resolveTaskSnapshotEffect } from './ipc/effect-resolution'
 import { registerTaskRecoveryIpc } from './ipc/task-recovery-handlers'
-import { registerWorkflowLedgerIpc } from './ipc/workflow-ledger-handlers'
+import { assertTrustedWorkflowLedgerSender, registerWorkflowLedgerIpc } from './ipc/workflow-ledger-handlers'
 import { registerProjectWorkspaceIpc } from './ipc/project-workspace-handlers'
+import { registerDataRetentionIpc } from './ipc/data-retention-handlers'
 import { registerDigitalWorkerIpc } from './ipc/digital-worker-handlers'
 import { registerSupervisorIpc } from './ipc/supervisor-handlers'
 import { registerLearningIpc } from './ipc/learning-handlers'
@@ -121,6 +112,7 @@ import {
   setPluginRegistryItemEnabled,
   writePluginRegistryState
 } from './pluginRegistry'
+import { defaultClaudeDesktopConfigPath } from './mcp/mcp-client'
 import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
 import { runRoutineNow } from './routines/routine-executor'
 import { listRoutineRuns } from './routines/routine-runner'
@@ -160,19 +152,6 @@ let browserEventsRegistered = false
 const MEMORY_SUGGESTION_COOLDOWN_MS = 30_000
 const MEMORY_SUGGESTION_MAX_RECENT = 500
 
-function typeScriptLanguageInput(value: unknown): TypeScriptLanguageInput | null {
-  if (!value || typeof value !== 'object') return null
-  const input = value as Record<string, unknown>
-  if (typeof input.path !== 'string' || input.path.length === 0 || input.path.length > 4_096) return null
-  if (typeof input.content !== 'string') return null
-  if (!Number.isSafeInteger(input.line) || !Number.isSafeInteger(input.column)) return null
-  return {
-    path: input.path,
-    content: input.content,
-    line: input.line as number,
-    column: input.column as number
-  }
-}
 const recentMemorySuggestions = new Map<string, number>()
 
 function shouldEmitMemorySuggestion(sessionId: string, text: string, now = Date.now()): boolean {
@@ -260,7 +239,10 @@ function pluginRegistryRoots(sessionId?: string): string[] {
     (cwd): cwd is string => typeof cwd === 'string' && cwd.trim().length > 0
   )
   for (const cwd of projectCwds) roots.push(join(cwd, '.claude'))
+  for (const cwd of projectCwds) roots.push(join(cwd, '.caogen', 'skills'))
   roots.push(join(homedir(), '.claude'))
+  roots.push(join(homedir(), '.caogen', 'skills'))
+  roots.push(dirname(defaultClaudeDesktopConfigPath()))
   roots.push(join(homedir(), '.codex', 'skills'))
   roots.push(...codexPluginPackageRoots())
   return roots
@@ -398,7 +380,8 @@ function effectIntentDescription(snapshot: TaskSnapshotRecord, effect: EffectRec
 }
 
 export function registerIpc(): void {
-  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDigitalWorkerIpc, registerSupervisorIpc, registerInteractiveMutationIpc, registerAppFeatureIpc, registerProviderGatewayIpc]) register()
+  configureMigrationOperationBackupRoot(migrationBackupRoot())
+  for (const register of [registerQuickbarIpc, registerTaskRecoveryIpc, registerWorkflowLedgerIpc, registerProjectWorkspaceIpc, registerDataRetentionIpc, registerDigitalWorkerIpc, registerSupervisorIpc, registerInteractiveMutationIpc, registerAppFeatureIpc, registerProviderGatewayIpc, registerFileIntelligenceIpc, registerPermissionGrantIpc]) register()
   registerAttachmentMutationIpc(attachmentRoot)
   registerProjectContextMutationIpc()
   registerMcpProbeIpc({
@@ -417,7 +400,6 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('sessions:list', () => sessionManager.list())
-
   ipcMain.handle('sessions:pendingPermissions', (_e, id: string) =>
     sessionManager.get(id)?.pendingPermissions() ?? []
   )
@@ -484,70 +466,6 @@ export function registerIpc(): void {
 
   // 合并回执列表(最新在前),验收"上次到底合了什么"。
   ipcMain.handle('worktrees:mergeReceipts', () => listWorktreeMergeReceipts())
-
-  ipcMain.handle('files:list', (_e, id: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, entries: [], error: '会话不存在' }
-    return listProjectFiles(cwd)
-  })
-
-  ipcMain.handle('files:search', (_e, id: string, query: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, matches: [], error: '会话不存在' }
-    return searchProjectText(cwd, typeof query === 'string' ? query : '')
-  })
-
-  ipcMain.handle('files:diagnostics', (_e, id: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, diagnostics: [], analyzedFiles: 0, supportedFiles: 0, truncated: false, error: '会话不存在' }
-    return collectProjectDiagnostics(cwd)
-  })
-
-  ipcMain.handle('files:symbols', (_e, id: string, query: string, limit?: number) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, symbols: [], error: '会话不存在' }
-    return searchProjectSymbols(cwd, typeof query === 'string' ? query : '', typeof limit === 'number' ? limit : undefined)
-  })
-
-  ipcMain.handle('files:definition', (_e, id: string, relPath: string, symbol: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, symbols: [], error: '会话不存在' }
-    return resolveProjectDefinition(cwd, typeof relPath === 'string' ? relPath : '', typeof symbol === 'string' ? symbol : '')
-  })
-
-  ipcMain.handle('files:typescriptCompletions', (_e, id: string, value: unknown) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    const input = typeScriptLanguageInput(value)
-    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', items: [], error: !cwd ? '会话不存在' : '语言请求无效' }
-    return getTypeScriptCompletions(cwd, input)
-  })
-
-  ipcMain.handle('files:typescriptHover', (_e, id: string, value: unknown) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    const input = typeScriptLanguageInput(value)
-    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', markdown: '', error: !cwd ? '会话不存在' : '语言请求无效' }
-    return getTypeScriptHover(cwd, input)
-  })
-
-  ipcMain.handle('files:typescriptDefinitions', (_e, id: string, value: unknown) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    const input = typeScriptLanguageInput(value)
-    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', locations: [], error: !cwd ? '会话不存在' : '语言请求无效' }
-    return getTypeScriptDefinitions(cwd, input)
-  })
-
-  ipcMain.handle('files:typescriptDiagnostics', (_e, id: string, value: unknown) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    const input = typeScriptLanguageInput(value)
-    if (!cwd || !input) return { ok: false, engine: 'typescript-lsp', diagnostics: [], error: !cwd ? '会话不存在' : '语言请求无效' }
-    return getTypeScriptDiagnostics(cwd, input)
-  })
-
-  ipcMain.handle('files:read', (_e, id: string, relPath: string) => {
-    const cwd = sessionManager.get(id)?.meta.cwd
-    if (!cwd) return { ok: false, error: '会话不存在' }
-    return readTextFile(cwd, typeof relPath === 'string' ? relPath : '')
-  })
 
   ipcMain.handle('preview:prepare', (_e, id: string, relPath: string) => {
     const cwd = sessionManager.get(id)?.meta.cwd
@@ -735,7 +653,10 @@ export function registerIpc(): void {
   ipcMain.handle('history:rename', (_e, id: string, title: string) => {
     if (typeof title === 'string') renameHistory(id, title)
   })
-  ipcMain.handle('history:delete', (_e, id: string) => deleteHistory(id))
+  ipcMain.handle('history:delete', (event, id: string) => {
+    assertTrustedWorkflowLedgerSender(event)
+    return sessionManager.deleteHistorySession(id)
+  })
 
   // 会话全文搜索:按历史列表顺序(最近优先)扫描转录文件;防抖在渲染进程做
   ipcMain.handle('transcripts:search', (_e, query: string) => {
@@ -752,17 +673,6 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('settings:get', () => getSettings())
-
-  ipcMain.handle('permissions:gui-grants:list', () => listGuiAutomationGrants())
-  ipcMain.handle('permissions:gui-grants:revoke', (_event, grantId: string) =>
-    revokeGuiAutomationGrant(typeof grantId === 'string' ? grantId : '')
-  )
-  ipcMain.handle('permissions:gui-grants:revoke-all', () => revokeAllGuiAutomationGrants())
-  ipcMain.handle('permissions:tool-grants:list', () => listToolCapabilityGrants())
-  ipcMain.handle('permissions:tool-grants:revoke', (_event, grantId: string) =>
-    revokeToolCapabilityGrant(typeof grantId === 'string' ? grantId : '')
-  )
-  ipcMain.handle('permissions:tool-grants:revoke-all', () => revokeAllToolCapabilityGrants())
 
   ipcMain.handle('settings:update', async (_e, patch: Partial<AppSettings>) => {
     const next = updateSettings(patch ?? {})
@@ -1035,7 +945,7 @@ export function registerIpc(): void {
     const testHome = !app.isPackaged && process.env.CAOGEN_MIGRATION_TEST_MODE === '1'
       ? process.env.CAOGEN_MIGRATION_TEST_HOME
       : undefined
-    return scanMigration(cwd, testHome)
+    return scanMigration(cwd, testHome, app.getPath('userData'))
   })
 
   ipcMain.handle('migration:import', (_e, cwd: string, paths: string[]) => {
@@ -1045,12 +955,18 @@ export function registerIpc(): void {
 
   ipcMain.handle('migration:apply', (_e, input: MigrationApplyInput) => {
     if (!input || typeof input !== 'object') throw new Error('迁移决策格式无效')
-    return applyMigration(input, { backupRoot: migrationBackupRoot() })
+    return executeMigrationApplyEffect(input, {
+      rootDir: app.getPath('userData'),
+      backupRoot: migrationBackupRoot()
+    })
   })
 
   ipcMain.handle('migration:rollback', (_e, backupId: string) => {
     if (typeof backupId !== 'string' || backupId.length === 0) throw new Error('必须指定迁移备份')
-    return rollbackMigration(backupId, migrationBackupRoot())
+    return executeMigrationRollbackEffect(backupId, {
+      rootDir: app.getPath('userData'),
+      backupRoot: migrationBackupRoot()
+    })
   })
 
   ipcMain.handle('projects:list', () => listProjects())

@@ -30,6 +30,24 @@ export type ArtifactRetentionPolicy =
   | { mode: 'retain' }
   | { mode: 'expire'; retainUntil: number }
 
+export interface ArtifactRetentionRevisionRecord {
+  schemaVersion: 1
+  artifactId: string
+  projectId: string
+  revision: number
+  policy: ArtifactRetentionPolicy
+  reason: string
+  createdAt: number
+}
+
+export interface ArtifactRetentionRevisionInput {
+  artifactId: string
+  projectId: string
+  policy: ArtifactRetentionPolicy
+  reason: string
+  createdAt?: number
+}
+
 export type ArtifactContentInput =
   | {
       storageKind: 'blob'
@@ -61,15 +79,22 @@ export interface ArtifactLifecycleRegistrationInput {
   createdAt?: number
 }
 
-export interface PreparedArtifactContent {
-  storageKind: 'blob' | 'source_ref'
-  digest: string
-  sizeBytes: number
-  bytes: Uint8Array
-  sourceRef?: string
-  blobRef?: string
-  locationPath: string
-}
+export type PreparedArtifactContent =
+  | {
+      storageKind: 'blob'
+      digest: string
+      sizeBytes: number
+      bytes: Uint8Array
+      blobRef: string
+      locationPath: string
+    }
+  | {
+      storageKind: 'source_ref'
+      digest: string
+      sizeBytes: number
+      sourceRef: string
+      locationPath: string
+    }
 
 export interface ArtifactProjectOwnership {
   projectId: string
@@ -131,6 +156,12 @@ export interface ArtifactLifecyclePurgeResult {
   lifecycle: ArtifactLifecycleRecord
   purge: ArtifactPurgeRecord
   tombstone: WorkflowArtifactLocationRecord
+}
+
+export interface ArtifactEffectiveRetention {
+  policy: ArtifactRetentionPolicy
+  revision: number
+  revisedAt?: number
 }
 
 export interface ArtifactLifecycleVerification {

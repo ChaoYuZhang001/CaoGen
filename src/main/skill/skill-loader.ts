@@ -27,6 +27,7 @@ export interface SkillDefinition {
   version?: string
   scope: SkillScope
   sourcePath?: string
+  sourceContentDigest?: string
   body: string
   steps: string[]
   verification: string[]
@@ -35,7 +36,7 @@ export interface SkillDefinition {
 }
 
 export interface SkillLoadDiagnostic {
-  code: 'root_missing' | 'read_failed' | 'invalid_skill' | 'materialization_failed'
+  code: 'root_missing' | 'read_failed' | 'invalid_skill' | 'materialization_failed' | 'authorization_blocked'
   path: string
   message: string
 }
@@ -133,6 +134,7 @@ export function parseSkillMarkdown(
     version: cleanText(frontmatter.version),
     scope,
     sourcePath,
+    sourceContentDigest: createHash('sha256').update(raw).digest('hex'),
     body,
     steps: sectionList(body, ['执行步骤', '步骤', 'Steps']),
     verification: sectionList(body, ['验证', '验收', 'Verification']),

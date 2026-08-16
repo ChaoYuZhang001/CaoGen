@@ -7,6 +7,10 @@ export interface StepForm {
   title: string
   description: string
   dependsOn: string
+  expectedArtifacts: string
+  dataEgress: string
+  estimatedCostUsd: string
+  riskLevel: TaskPlanRiskLevel
 }
 
 export interface PlanForm {
@@ -39,7 +43,17 @@ export function emptyPlanForm(): PlanForm {
 
 export function newPlanStep(index: number): StepForm {
   stepKey += 1
-  return { key: `plan-step-${stepKey}`, id: `step-${index}`, title: '', description: '', dependsOn: '' }
+  return {
+    key: `plan-step-${stepKey}`,
+    id: `step-${index}`,
+    title: '',
+    description: '',
+    dependsOn: '',
+    expectedArtifacts: '',
+    dataEgress: '',
+    estimatedCostUsd: '',
+    riskLevel: 'medium'
+  }
 }
 
 export function planFormFromVersion(version: TaskPlanVersion): PlanForm {
@@ -50,7 +64,11 @@ export function planFormFromVersion(version: TaskPlanVersion): PlanForm {
       id: step.id,
       title: step.title,
       description: step.description,
-      dependsOn: step.dependsOn.join('\n')
+      dependsOn: step.dependsOn.join('\n'),
+      expectedArtifacts: step.expectedArtifacts.join('\n'),
+      dataEgress: step.dataEgress.join('\n'),
+      estimatedCostUsd: step.estimatedCostUsd === null ? '' : String(step.estimatedCostUsd),
+      riskLevel: step.riskLevel
     })),
     expectedArtifacts: version.expectedArtifacts.join('\n'),
     dataEgress: version.dataEgress.join('\n'),
@@ -68,7 +86,11 @@ export function taskPlanDraftFromForm(form: PlanForm): TaskPlanDraftInput {
       id: step.id,
       title: step.title,
       description: step.description,
-      dependsOn: lineList(step.dependsOn)
+      dependsOn: lineList(step.dependsOn),
+      expectedArtifacts: lineList(step.expectedArtifacts),
+      dataEgress: lineList(step.dataEgress),
+      estimatedCostUsd: step.estimatedCostUsd.trim() ? Number(step.estimatedCostUsd) : null,
+      riskLevel: step.riskLevel
     })),
     expectedArtifacts: lineList(form.expectedArtifacts),
     dataEgress: lineList(form.dataEgress),

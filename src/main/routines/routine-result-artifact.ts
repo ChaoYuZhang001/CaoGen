@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { RoutineRunRecord } from './routine-runner'
-import { registerPersistedArtifactLifecycle } from '../task/artifact-lifecycle-api'
-import { createWorkflowEvidence } from '../task/workflow-ledger-api'
+import { registerCanonicalProducedArtifact } from '../task/artifact-production-boundary'
 
 export interface RoutineResultEvidenceBinding {
   artifactId: string
@@ -22,51 +21,42 @@ export async function persistRoutineResultEvidence(
   const artifactId = routineResultArtifactId(record.id)
   const evidenceId = routineResultEvidenceId(record.id)
   const content = Buffer.from(resultText ?? '', 'utf8')
-  const persisted = await registerPersistedArtifactLifecycle({
-    id: artifactId,
-    projectId,
-    ...(record.goalId ? { goalId: record.goalId } : {}),
-    workItemId,
-    runId,
-    lineageId: artifactId,
-    kind: 'report',
-    title: resultTitle(record.routineName),
-    version: 1,
-    provenance: 'explicit',
-    mediaType: 'text/markdown; charset=utf-8',
-    retention: { mode: 'retain' },
-    content: { storageKind: 'blob', bytes: content },
-    metadata: {
-      producer: 'routine',
-      routineId: record.routineId,
-      routineRunId: record.id
+  const persisted = await registerCanonicalProducedArtifact({
+    lifecycle: {
+      id: artifactId,
+      projectId,
+      ...(record.goalId ? { goalId: record.goalId } : {}),
+      workItemId,
+      runId,
+      lineageId: artifactId,
+      kind: 'report',
+      title: resultTitle(record.routineName),
+      version: 1,
+      provenance: 'explicit',
+      mediaType: 'text/markdown; charset=utf-8',
+      retention: { mode: 'retain' },
+      content: { storageKind: 'blob', bytes: content },
+      metadata: {
+        producer: 'routine',
+        routineId: record.routineId,
+        routineRunId: record.id
+      },
+      createdAt: observedAt
     },
-    createdAt: observedAt
+    evidence: {
+      id: evidenceId,
+      kind: 'observation',
+      title: resultTitle(record.routineName),
+      summary: 'Routine execution produced a persisted result Artifact.',
+      verifier: 'routine-runtime',
+      metadata: {
+        routineId: record.routineId,
+        routineRunId: record.id
+      }
+    },
+    attachToStage: false
   }, { workflowRoot, workspaceRoot })
-
-  const evidence = await createWorkflowEvidence({
-    evidenceId,
-    projectId,
-    ...(record.goalId ? { goalId: record.goalId } : {}),
-    workItemId,
-    runId,
-    artifactId: persisted.artifact.id,
-    kind: 'observation',
-    title: resultTitle(record.routineName),
-    summary: 'Routine execution produced a persisted result Artifact.',
-    mediaType: persisted.artifact.mediaType,
-    contentDigest: persisted.lifecycle.digest,
-    metadata: {
-      producer: 'routine',
-      routineId: record.routineId,
-      routineRunId: record.id
-    }
-  }, workflowRoot, {
-    source: 'runtime',
-    verifier: 'routine-runtime',
-    observedAt
-  })
-  return { artifactId: persisted.artifact.id, evidenceId: evidence.evidenceId }
+  return { artifactId: persisted.artifact.id, evidenceId: persisted.evidenceId }
 }
 
 function routineResultArtifactId(routineRunId: string): string {

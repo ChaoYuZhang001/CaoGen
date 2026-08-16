@@ -6,6 +6,7 @@ const settingsModal = read('src/renderer/src/components/SettingsModal.tsx')
 const providerList = read('src/renderer/src/components/settings/ProviderList.tsx')
 const providerDiagnostic = read('src/renderer/src/components/ProviderConnectionDiagnostic.tsx')
 const providers = read('src/main/providers.ts')
+const providerDiagnostics = read('src/main/provider/providerDiagnostics.ts')
 const modelDiscovery = read('src/main/provider/modelDiscovery.ts')
 const providerHealth = read('src/main/providerHealth.ts')
 const sessionManager = read('src/main/sessionManager.ts')
@@ -26,17 +27,22 @@ assert(providerDiagnostic.includes('context.generationEndpointPath'), 'connectio
 assert(providerDiagnostic.includes('context.credentialSource'), 'connection diagnostics must expose whether the entered or saved credential was used')
 assert(providerDiagnostic.includes("t('providerDiagnosticCatalogScope')"), 'connection diagnostics must disclose that model discovery is catalog-only')
 
-assert(providers.includes('success: (providerId, latencyMs) => recordProbeSuccess(providerId, latencyMs)'), 'fetchModels success must record probe telemetry without resetting generation health')
-assert(providers.includes('failure: (providerId, message) => recordProbeFailure(providerId, message)'), 'fetchModels failure must record probe telemetry without poisoning generation health')
+assert(providers.includes('return fetchProviderModels(opts, providerDiagnosticsDependencies)'), 'fetchModels must delegate to the bounded diagnostics service')
+assert(providerDiagnostics.includes('success: dependencies.recordProbeSuccess'), 'fetchModels success must record probe telemetry without resetting generation health')
+assert(providerDiagnostics.includes('failure: dependencies.recordProbeFailure'), 'fetchModels failure must record probe telemetry without poisoning generation health')
+assert(providers.includes('recordProbeSuccess,') && providers.includes('recordProbeFailure'), 'provider diagnostics dependencies must bind the probe-only health recorders')
 assert(providerHealth.includes('export function recordProbeSuccess'), 'provider health must expose probe-success telemetry')
 assert(providerHealth.includes('export function recordProbeFailure'), 'provider health must expose probe-failure telemetry')
 assert(modelDiscovery.includes('health.success(context.providerId, latencyMs)'), 'successful model discovery must report provider latency')
 assert(modelDiscovery.includes('health.failure(context.providerId, message)'), 'failed model discovery must report the provider error')
 assert(modelDiscovery.includes('latencyMs,') && modelDiscovery.includes('stale: false'), 'successful model discovery must expose a fresh result with latency')
 assert(modelDiscovery.includes('modelFetchCache.delete(context.cacheKey)') && modelDiscovery.includes('stale: true'), 'failed model discovery must clear cache state and expose a stale result')
-assert(providers.includes('decryptProviderToken(provider)'), 'saved-provider model fetch must use the active key helper')
 assert(
-  providers.includes('providerCredentialHeaders({ credentialHeaderNames, authMode }, token)'),
+  providerDiagnostics.includes('dependencies.decryptProviderToken(provider)'),
+  'saved-provider model fetch must use the active key helper'
+)
+assert(
+  providerDiagnostics.includes('providerCredentialHeaders({ credentialHeaderNames, authMode }, token)'),
   'model discovery must inject Broker-managed credential headers'
 )
 assert(
@@ -45,10 +51,10 @@ assert(
   'model discovery must send only the resolved managed credential headers'
 )
 assert(
-  providers.includes('bindProviderModelDiscoveryInput(opts, provider)')
-    && providers.includes('const credentialProvider = bound.usesStoredCredential ? provider : undefined')
-    && providers.includes('resolveModelDiscoveryCredentials(input, credentialProvider)')
-    && providers.includes('discoverProviderModels(input,'),
+  providerDiagnostics.includes('bindProviderModelDiscoveryInput(opts, provider)')
+    && providerDiagnostics.includes('const credentialProvider = bound.usesStoredCredential ? provider : undefined')
+    && providerDiagnostics.includes('resolveModelDiscoveryCredentials(input, credentialProvider, dependencies)')
+    && providerDiagnostics.includes('discoverProviderModels('),
   'saved-provider model discovery must bind stored credentials to the saved network target'
 )
 assert(

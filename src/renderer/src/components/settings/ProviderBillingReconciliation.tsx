@@ -19,25 +19,43 @@ export default function ProviderBillingReconciliation({
   period: { from: number; to: number }
 }): React.JSX.Element {
   const t = useT()
-  const [rows, setRows] = useState<ProviderBillingReconciliationView[]>([])
-  const [editing, setEditing] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [capability, setCapability] = useState<ProviderBillingQueryCapabilityView | null>(null)
-  const [periodStart, setPeriodStart] = useState(toLocalInput(period.from))
-  const [periodEnd, setPeriodEnd] = useState(toLocalInput(Math.min(period.to, Date.now())))
-  const [amount, setAmount] = useState('')
-  const [source, setSource] = useState<ProviderBillingStatementSource>('provider-console')
+  const data = useBillingData(providerId, t)
+  const editor = useBillingEditor({ providerId, period, data, t })
   const providerName = providers.find((provider) => provider.id === providerId)?.name ?? providerId
 
+  return (
+    <section className="provider-billing-reconciliation" data-provider-billing-reconciliation aria-label={t('providerBillingTitle')}>
+      <BillingHeader providerId={providerId} providerName={providerName} period={period} data={data} editor={editor} />
+      {editor.editing && providerId && <BillingForm editor={editor} loading={data.loading} />}
+      {data.error && <div className="notice notice-error" role="alert">{data.error}</div>}
+      {editor.notice && <div className="notice notice-success" role="status">{editor.notice}</div>}
+      {providerId && data.capability && !data.capability.supported && !editor.editing && (
+        <div className="field-hint">{t('providerBillingSyncNotConfigured')}</div>
+      )}
+      {providerId && !editor.editing && data.rows.length === 0 && !data.loading && (
+        <div className="provider-billing-empty">{t('providerBillingEmpty')}</div>
+      )}
+      {data.rows.length > 0 && (
+        <div className="provider-billing-list">
+          {data.rows.map((row) => (
+            <BillingReconciliationRow key={row.statement.id} row={row} disabled={data.loading} onRemove={editor.remove} />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+type Translate = ReturnType<typeof useT>
+
+function useBillingData(providerId: string, t: Translate) {
+  const [rows, setRows] = useState<ProviderBillingReconciliationView[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [capability, setCapability] = useState<ProviderBillingQueryCapabilityView | null>(null)
   const reload = useCallback(async (): Promise<void> => {
-    if (!providerId) {
-      setRows([])
-      return
-    }
-    setLoading(true)
-    setError('')
+    if (!providerId) { setRows([]); return }
+    setLoading(true); setError('')
     try {
       setRows(await window.agentDesk.reconcileProviderBilling(providerId))
     } catch {
@@ -46,180 +64,99 @@ export default function ProviderBillingReconciliation({
       setLoading(false)
     }
   }, [providerId, t])
-
   const inspectCapability = useCallback(async (): Promise<void> => {
-    if (!providerId) {
-      setCapability(null)
-      return
-    }
+    if (!providerId) { setCapability(null); return }
     try {
       setCapability(await window.agentDesk.inspectProviderBillingQuery(providerId))
     } catch {
       setCapability({ providerId, supported: false })
     }
   }, [providerId])
-
   useEffect(() => { void Promise.all([reload(), inspectCapability()]) }, [inspectCapability, reload])
+  return { rows, loading, error, capability, setLoading, setError, reload }
+}
+
+type BillingData = ReturnType<typeof useBillingData>
+
+function useBillingEditor({ providerId, period, data, t }: { providerId: string; period: { from: number; to: number }; data: BillingData; t: Translate }) {
+  const [editing, setEditing] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [periodStart, setPeriodStart] = useState(toLocalInput(period.from))
+  const [periodEnd, setPeriodEnd] = useState(toLocalInput(Math.min(period.to, Date.now())))
+  const [amount, setAmount] = useState('')
+  const [source, setSource] = useState<ProviderBillingStatementSource>('provider-console')
   useEffect(() => {
     if (editing) return
     setPeriodStart(toLocalInput(period.from))
     setPeriodEnd(toLocalInput(Math.min(period.to, Date.now())))
   }, [editing, period.from, period.to])
-
+  const prepare = (): void => { data.setLoading(true); data.setError(''); setNotice('') }
   const save = async (): Promise<void> => {
-    const billedCostUsd = Number(amount)
-    setLoading(true)
-    setError('')
-    setNotice('')
+    prepare()
     try {
-      await window.agentDesk.saveProviderBillingStatement({
-        providerId,
-        periodStart: new Date(periodStart).getTime(),
-        periodEnd: new Date(periodEnd).getTime(),
-        billedCostUsd,
-        source
-      })
-      setEditing(false)
-      setAmount('')
-      await reload()
+      await window.agentDesk.saveProviderBillingStatement({ providerId, periodStart: new Date(periodStart).getTime(), periodEnd: new Date(periodEnd).getTime(), billedCostUsd: Number(amount), source })
+      setEditing(false); setAmount(''); await data.reload()
     } catch {
-      setError(t('providerBillingSaveFailed'))
+      data.setError(t('providerBillingSaveFailed'))
     } finally {
-      setLoading(false)
+      data.setLoading(false)
     }
   }
-
   const remove = async (statementId: string): Promise<void> => {
     if (!window.confirm(t('providerBillingRemoveConfirm'))) return
-    setLoading(true)
-    setError('')
-    setNotice('')
+    prepare()
     try {
-      await window.agentDesk.removeProviderBillingStatement(providerId, statementId)
-      await reload()
+      await window.agentDesk.removeProviderBillingStatement(providerId, statementId); await data.reload()
     } catch {
-      setError(t('providerBillingRemoveFailed'))
+      data.setError(t('providerBillingRemoveFailed'))
     } finally {
-      setLoading(false)
+      data.setLoading(false)
     }
   }
-
   const syncOfficialBill = async (): Promise<void> => {
-    const syncStart = period.from
     const syncEnd = Math.min(period.to, Date.now())
-    if (!providerId || syncEnd <= syncStart) return
-    setLoading(true)
-    setError('')
-    setNotice('')
+    if (!providerId || syncEnd <= period.from) return
+    prepare()
     try {
-      const result = await window.agentDesk.syncProviderBillingStatement({
-        providerId,
-        periodStart: syncStart,
-        periodEnd: syncEnd
-      })
-      if (result.status === 'ready') {
-        setNotice(t('providerBillingSyncReady'))
-        await reload()
-      } else if (result.status === 'expired') {
-        setError(t('providerBillingSyncExpired'))
-      } else {
-        setError(syncErrorMessage(result.errorCode, t))
-      }
+      const result = await window.agentDesk.syncProviderBillingStatement({ providerId, periodStart: period.from, periodEnd: syncEnd })
+      if (result.status === 'ready') { setNotice(t('providerBillingSyncReady')); await data.reload() }
+      else if (result.status === 'expired') data.setError(t('providerBillingSyncExpired'))
+      else data.setError(syncErrorMessage(result.errorCode, t))
     } catch {
-      setError(t('providerBillingSyncUnavailable'))
+      data.setError(t('providerBillingSyncUnavailable'))
     } finally {
-      setLoading(false)
+      data.setLoading(false)
     }
   }
+  return { editing, notice, periodStart, periodEnd, amount, source, setEditing, setPeriodStart, setPeriodEnd, setAmount, setSource, save, remove, syncOfficialBill }
+}
 
-  return (
-    <section className="provider-billing-reconciliation" data-provider-billing-reconciliation aria-label={t('providerBillingTitle')}>
-      <div className="provider-billing-head">
-        <div>
-          <h4>{t('providerBillingTitle')}</h4>
-          <p>{providerId ? providerName : t('providerBillingSelectProvider')}</p>
-        </div>
-        <div className="provider-billing-actions">
-          {capability?.supported && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm provider-billing-sync"
-              disabled={!providerId || loading || Math.min(period.to, Date.now()) <= period.from}
-              onClick={() => void syncOfficialBill()}
-            >
-              <RefreshCw size={14} aria-hidden="true" className={loading ? 'provider-usage-spin' : ''} />
-              {loading ? t('providerBillingSyncing') : t('providerBillingSync')}
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            aria-label={t('providerBillingRefresh')}
-            title={t('providerBillingRefresh')}
-            disabled={!providerId || loading}
-            onClick={() => void reload()}
-          >
-            <RefreshCw size={14} aria-hidden="true" className={loading ? 'provider-usage-spin' : ''} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            aria-label={t('providerBillingAdd')}
-            title={t('providerBillingAdd')}
-            disabled={!providerId || loading}
-            onClick={() => setEditing((value) => !value)}
-          >
-            <Plus size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
+type BillingEditor = ReturnType<typeof useBillingEditor>
 
-      {editing && providerId && (
-        <div className="provider-billing-form">
-          <label>
-            <span>{t('providerBillingPeriodStart')}</span>
-            <input className="input" type="datetime-local" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} />
-          </label>
-          <label>
-            <span>{t('providerBillingPeriodEnd')}</span>
-            <input className="input" type="datetime-local" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} />
-          </label>
-          <label>
-            <span>{t('providerBillingAmount')}</span>
-            <input className="input" type="number" min="0" max="1000000000" step="0.000001" value={amount} onChange={(event) => setAmount(event.target.value)} />
-          </label>
-          <label>
-            <span>{t('providerBillingSource')}</span>
-            <select className="select" value={source} onChange={(event) => setSource(event.target.value as ProviderBillingStatementSource)}>
-              {(['provider-api', 'provider-console', 'invoice', 'balance-export', 'other'] as const).map((value) => (
-                <option key={value} value={value} disabled={value === 'provider-api'}>{t(`providerBillingSource_${value}`)}</option>
-              ))}
-            </select>
-          </label>
-          <div className="provider-billing-form-actions">
-            <button type="button" className="btn btn-ghost btn-sm" disabled={loading} onClick={() => setEditing(false)}>{t('cancel')}</button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={loading || !amount || !periodStart || !periodEnd} onClick={() => void save()}>{t('save')}</button>
-          </div>
-        </div>
-      )}
+function BillingHeader({ providerId, providerName, period, data, editor }: { providerId: string; providerName: string; period: { from: number; to: number }; data: BillingData; editor: BillingEditor }): React.JSX.Element {
+  const t = useT()
+  return <div className="provider-billing-head">
+    <div><h4>{t('providerBillingTitle')}</h4><p>{providerId ? providerName : t('providerBillingSelectProvider')}</p></div>
+    <div className="provider-billing-actions">
+      {data.capability?.supported && <button type="button" className="btn btn-secondary btn-sm provider-billing-sync" disabled={!providerId || data.loading || Math.min(period.to, Date.now()) <= period.from} onClick={() => void editor.syncOfficialBill()}><RefreshCw size={14} aria-hidden="true" className={data.loading ? 'provider-usage-spin' : ''} />{data.loading ? t('providerBillingSyncing') : t('providerBillingSync')}</button>}
+      <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('providerBillingRefresh')} title={t('providerBillingRefresh')} disabled={!providerId || data.loading} onClick={() => void data.reload()}><RefreshCw size={14} aria-hidden="true" className={data.loading ? 'provider-usage-spin' : ''} /></button>
+      <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('providerBillingAdd')} title={t('providerBillingAdd')} disabled={!providerId || data.loading} onClick={() => editor.setEditing((value) => !value)}><Plus size={14} aria-hidden="true" /></button>
+    </div>
+  </div>
+}
 
-      {error && <div className="notice notice-error" role="alert">{error}</div>}
-      {notice && <div className="notice notice-success" role="status">{notice}</div>}
-      {providerId && capability && !capability.supported && !editing && (
-        <div className="field-hint">{t('providerBillingSyncNotConfigured')}</div>
-      )}
-      {providerId && !editing && rows.length === 0 && !loading && (
-        <div className="provider-billing-empty">{t('providerBillingEmpty')}</div>
-      )}
-      {rows.length > 0 && (
-        <div className="provider-billing-list">
-          {rows.map((row) => (
-            <BillingReconciliationRow key={row.statement.id} row={row} disabled={loading} onRemove={remove} />
-          ))}
-        </div>
-      )}
-    </section>
-  )
+function BillingForm({ editor, loading }: { editor: BillingEditor; loading: boolean }): React.JSX.Element {
+  const t = useT()
+  return <div className="provider-billing-form">
+    <label><span>{t('providerBillingPeriodStart')}</span><input className="input" type="datetime-local" value={editor.periodStart} onChange={(event) => editor.setPeriodStart(event.target.value)} /></label>
+    <label><span>{t('providerBillingPeriodEnd')}</span><input className="input" type="datetime-local" value={editor.periodEnd} onChange={(event) => editor.setPeriodEnd(event.target.value)} /></label>
+    <label><span>{t('providerBillingAmount')}</span><input className="input" type="number" min="0" max="1000000000" step="0.000001" value={editor.amount} onChange={(event) => editor.setAmount(event.target.value)} /></label>
+    <label><span>{t('providerBillingSource')}</span><select className="select" value={editor.source} onChange={(event) => editor.setSource(event.target.value as ProviderBillingStatementSource)}>{(['provider-api', 'provider-console', 'invoice', 'balance-export', 'other'] as const).map((value) => <option key={value} value={value} disabled={value === 'provider-api'}>{t(`providerBillingSource_${value}`)}</option>)}</select></label>
+    <div className="provider-billing-form-actions">
+      <button type="button" className="btn btn-ghost btn-sm" disabled={loading} onClick={() => editor.setEditing(false)}>{t('cancel')}</button>
+      <button type="button" className="btn btn-primary btn-sm" disabled={loading || !editor.amount || !editor.periodStart || !editor.periodEnd} onClick={() => void editor.save()}>{t('save')}</button>
+    </div>
+  </div>
 }
 
 function BillingReconciliationRow({

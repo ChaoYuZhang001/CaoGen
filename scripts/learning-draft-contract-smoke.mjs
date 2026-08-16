@@ -48,6 +48,7 @@ try {
   const codingTools = await loadCompiled('openaiTools.js')
   const memoryWriter = await loadCompiled('memory-writer.js')
   const layeredMemory = await loadCompiled('memory-manager.js')
+  const pluginRuntime = await loadCompiled('plugin-runtime-authorization.js')
 
   const memoryDraft = await memoryStore.proposeMemoryDraft(
     projectRoot,
@@ -204,7 +205,7 @@ try {
       source: 'auto-skill-review:auto-review-session',
       confidence: 0.8,
       actorId: 'auto-skill-review',
-      actorSource: 'session:auto-review-session',
+      actorSource: 'session-ref:auto-review-session',
       project: learningStore.learningProjectHash(projectRoot)
     })
     equal(record.payload.relativePath, path.relative(path.join(projectRoot, '.caogen', 'skills'), result.materializationPath).split('\\').join('/'), 'auto review materialization target')
@@ -218,6 +219,19 @@ try {
     const beforeMarkdown = readFileSync(skillPath, 'utf8')
     const beforeIds = new Set(readPersistedLearningRecords(tempRoot).map((record) => record.id))
 
+    const blocked = await codingTools.executeCodingTool(
+      'optimize_skill',
+      {
+        id: 'Existing Skill',
+        outcome: 'corrected',
+        summary: 'An unapproved Skill must remain unavailable to the optimizer.'
+      },
+      projectRoot
+    )
+    equal(blocked.ok, false, 'optimize_skill must reject an unapproved project Skill')
+    equal(parseJsonObject(blocked.output).status, 'not_found', 'unapproved Skill result status')
+    pluginRuntime.approveManagedLearningSkillRuntime(projectRoot, skillPath)
+
     const result = await codingTools.executeCodingTool(
       'optimize_skill',
       {
@@ -230,7 +244,11 @@ try {
       projectRoot
     )
 
-    equal(result.ok, true, 'optimize_skill should successfully propose a review draft')
+    equal(
+      result.ok,
+      true,
+      `optimize_skill should successfully propose a review draft: ${result.output}`
+    )
     equal(readFileSync(skillPath, 'utf8'), beforeMarkdown, 'optimize_skill must not mutate active SKILL.md before approval')
 
     const output = parseJsonObject(result.output)

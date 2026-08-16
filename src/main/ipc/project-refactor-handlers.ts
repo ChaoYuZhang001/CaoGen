@@ -1,12 +1,13 @@
-import type { IpcMainInvokeEvent } from 'electron'
+import { app, type IpcMainInvokeEvent } from 'electron'
 import type { ProjectRefactorInput } from '../../shared/types'
 import { applyProjectRefactor, previewTypeScriptRename, rollbackProjectRefactor } from '../projectRefactor'
 import { sessionManager } from '../sessionManager'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
+import { registerProjectRefactorReport } from '../task/workbench-report-artifacts'
 
 type ProjectRefactorAction = 'preview-rename' | 'apply' | 'rollback'
 
-export function handleProjectRefactorIpc(
+export async function handleProjectRefactorIpc(
   event: IpcMainInvokeEvent,
   rawAction: unknown,
   rawSessionId: unknown,
@@ -18,8 +19,40 @@ export function handleProjectRefactorIpc(
   const session = sessionManager.get(sessionId)
   if (!session) throw new Error('Session was not found')
   if (action === 'preview-rename') return previewTypeScriptRename(session.meta.cwd, sessionId, requiredInput(rawValue))
-  if (action === 'apply') return applyProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
-  return rollbackProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
+  if (action === 'apply') {
+    const result = await applyProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
+    return finalizeRefactorReport(sessionId, 'apply', result)
+  }
+  const result = await rollbackProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
+  return finalizeRefactorReport(sessionId, 'rollback', result)
+}
+
+async function finalizeRefactorReport(
+  sessionId: string,
+  action: 'apply' | 'rollback',
+  result: Awaited<ReturnType<typeof applyProjectRefactor | typeof rollbackProjectRefactor>>
+) {
+  const session = sessionManager.get(sessionId)
+  const projectId = session?.meta.workspaceId ?? session?.meta.projectId
+  const creatingRun = sessionManager.getTaskRun(sessionId)
+  if (!projectId || !creatingRun) {
+    result.evidenceError = 'Canonical refactor report requires a Project-owned current TaskRun'
+    return result
+  }
+  try {
+    const binding = await registerProjectRefactorReport({
+      sessionId,
+      projectId,
+      creatingRunId: creatingRun.id,
+      rootInput: { workflowRoot: app.getPath('userData'), workspaceRoot: app.getPath('userData') }
+    }, action, result)
+    result.workflowArtifactId = binding.artifactId
+    result.workflowEvidenceId = binding.evidenceId
+    result.workflowAcceptanceId = binding.acceptanceId
+  } catch (error) {
+    result.evidenceError = `Canonical refactor report finalization failed: ${error instanceof Error ? error.message : String(error)}`
+  }
+  return result
 }
 
 function requiredAction(value: unknown): ProjectRefactorAction {

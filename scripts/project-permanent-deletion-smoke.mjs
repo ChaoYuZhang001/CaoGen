@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,6 +13,7 @@ require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-project-deletion-'))
 const outDir = path.join(tempRoot, 'compiled')
 const userData = path.join(tempRoot, 'user-data')
+const foreignUserData = path.join(tempRoot, 'foreign-user-data')
 const externalRoot = path.join(tempRoot, 'external-project-resource')
 const credentialCanary = 'SYNTHETIC_PROJECT_DELETION_SECRET_CANARY'
 
@@ -20,6 +21,9 @@ try {
   mkdirSync(userData, { recursive: true })
   mkdirSync(externalRoot, { recursive: true })
   writeFileSync(path.join(externalRoot, 'must-survive.txt'), 'external owner\n')
+  const externalSkill = path.join(externalRoot, '.caogen', 'skills', 'delete-survivor', 'SKILL.md')
+  mkdirSync(path.dirname(externalSkill), { recursive: true })
+  writeFileSync(externalSkill, '# Delete survivor\n\nExternal Skill bytes must survive Project deletion.\n')
   compileSources()
   installElectronStub()
 
@@ -34,9 +38,13 @@ try {
   const snapshotApi = await importCompiled('main/task/task-snapshot.js')
   const modelAttemptApi = await importCompiled('main/task/model-attempt-api.js')
   const workflowApi = await importCompiled('main/task/workflow-ledger-api.js')
+  const workflowStore = await importCompiled('main/task/workflow-ledger-store.js')
+  const artifactLifecycleApi = await importCompiled('main/task/artifact-lifecycle-api.js')
+  const artifactContentApi = await importCompiled('main/task/artifact-lifecycle-content.js')
   const readinessApi = await importCompiled('main/task/workflow-ledger-readiness.js')
   const continuityApi = await importCompiled('main/task/workflow-ledger-migration-continuity.js')
   const authorizedPurgeApi = await importCompiled('main/task/workflow-ledger-authorized-purge.js')
+  const deletionTargetApi = await importCompiled('main/project-deletion-effect-target.js')
 
   await verifyWorkflowChainPurge({
     workflowPurgeApi,
@@ -56,6 +64,80 @@ try {
     resources: [{ id: 'alpha-external', kind: 'directory', path: externalRoot }]
   })
   const bravo = await workspaceStore.createWorkspace({ id: 'project-bravo', name: 'Bravo' })
+  const alphaGoal = await workspaceStore.createGoal({
+    id: 'goal-alpha', projectId: alpha.id, title: 'Delete Alpha', objective: 'Verify complete deletion'
+  })
+  const alphaWorkItem = await workspaceStore.createWorkItem({
+    id: 'work-item-alpha', projectId: alpha.id, goalId: alphaGoal.id, title: 'Delete source Artifact',
+    type: 'testing', runRefs: ['run-alpha'], artifactRefs: ['artifact-source-alpha']
+  })
+  await workflowApi.createWorkflowGoal({
+    id: alphaGoal.id, projectId: alpha.id, title: alphaGoal.title, objective: alphaGoal.objective,
+    status: alphaGoal.status, revision: alphaGoal.revision, source: 'explicit',
+    createdAt: alphaGoal.createdAt, updatedAt: alphaGoal.updatedAt
+  }, userData)
+  await workflowApi.createWorkflowWorkItem({
+    id: alphaWorkItem.id, projectId: alpha.id, goalId: alphaGoal.id, type: alphaWorkItem.type,
+    title: alphaWorkItem.title, status: alphaWorkItem.status, revision: alphaWorkItem.revision,
+    source: 'explicit', runIds: alphaWorkItem.runRefs, currentRunId: 'run-alpha',
+    createdAt: alphaWorkItem.createdAt, updatedAt: alphaWorkItem.updatedAt
+  }, userData)
+  const uniqueEffectArtifact = seedDeletionEffectArtifact('a', 'alpha-only frozen index bytes\n')
+  const sharedEffectArtifact = seedDeletionEffectArtifact('b', 'shared frozen index bytes\n')
+  const alphaRun = projectTaskRunFixture([uniqueEffectArtifact, sharedEffectArtifact])
+  await snapshotApi.mutateTaskSnapshotDatabase(userData, (db) => {
+    workflowStore.setupWorkflowLedgerSchema(db)
+    workflowStore.projectTaskRun(db, alphaRun, {
+      projectId: alpha.id,
+      goalId: alphaGoal.id,
+      workItemId: alphaWorkItem.id,
+      source: 'explicit',
+      canonicalSourceAuthority: true
+    })
+  })
+  const bravoEffectRun = effectArtifactTaskRun(
+    'run-bravo-effect-artifact',
+    'session-bravo-effect-artifact',
+    [sharedEffectArtifact]
+  )
+  await snapshotApi.saveTaskSnapshot(snapshotApi.buildTaskSnapshot({
+    meta: buildWorkflowMeta(
+      bravoEffectRun.sessionId,
+      bravo.id,
+      bravoEffectRun.taskId,
+      userData
+    ),
+    transcript: [],
+    lastSeq: 0,
+    eventCount: 0,
+    reason: 'created',
+    run: bravoEffectRun
+  }), userData)
+  const userOwnedSource = path.join(externalRoot, 'artifact-source-alpha.txt')
+  const sourceBytes = Buffer.from('user-owned source Artifact must survive\n')
+  writeFileSync(userOwnedSource, sourceBytes)
+  const sourceRegistration = await artifactLifecycleApi.registerPersistedArtifactLifecycle({
+    id: 'artifact-source-alpha', projectId: alpha.id, goalId: alphaGoal.id,
+    workItemId: alphaWorkItem.id, runId: alphaRun.id, lineageId: 'artifact-source-alpha-lineage',
+    kind: 'document', title: 'Deletion Office Artifact', version: 1, provenance: 'explicit',
+    mediaType: 'application/pdf', retention: { mode: 'retain' },
+    content: { storageKind: 'source_ref', sourceRef: userOwnedSource },
+    metadata: {
+      producer: 'office_delivery', effectId: 'effect-office-delete-alpha', outputBindingVersion: 1,
+      expectedSha256: `sha256:${createHash('sha256').update(sourceBytes).digest('hex')}`,
+      expectedBytes: sourceBytes.byteLength
+    }
+  }, { workflowRoot: userData, workspaceRoot: userData })
+  const appOwnedSourceCopy = artifactContentApi.artifactSourceFilePath(
+    userData, alpha.id, sourceRegistration.lifecycle.artifactId, '.txt'
+  )
+  await artifactContentApi.materializeArtifactSourceFile({
+    locationPath: appOwnedSourceCopy,
+    bytes: sourceBytes,
+    digest: sourceRegistration.lifecycle.digest,
+    sizeBytes: sourceBytes.byteLength
+  })
+  assert(existsSync(appOwnedSourceCopy), 'app-owned portable source copy exists before Project deletion')
   const workerStore = new workerApi.DigitalWorkerStore(userData)
   const role = await workerStore.createRoleTemplate({
     id: 'role-project-deletion',
@@ -137,6 +219,11 @@ try {
   assert(verifiedAlphaProof.proof.backup.readbackVerified === true, 'private aggregate backup passes readback')
   assert(Object.values(verifiedAlphaProof.proof.residuals).every((value) => value === 0),
     'durable proof binds a zero residual scan')
+  await assertDeletionReconciliationRootIsolation(
+    deletionTargetApi,
+    resumed[0],
+    deletedAlpha.revision
+  )
   assertEqual(verifiedAlphaProof.proof.externalResources.before.length, 1, 'proof inventories external resources')
   assertEqual(verifiedAlphaProof.proof.externalResources.before[0].state, 'directory',
     'proof captures the pre-delete external directory state')
@@ -153,14 +240,41 @@ try {
   assertEqual((await supervisor.listRuns({ projectId: alpha.id })).length, 0, 'alpha Supervisor runs are purged')
   assertEqual((await supervisor.listRuns({ projectId: bravo.id })).length, 1, 'bravo Supervisor run remains')
   assert(statSync(path.join(externalRoot, 'must-survive.txt')).isFile(), 'external resource remains untouched')
+  assertEqual(readFileSync(externalSkill, 'utf8'),
+    '# Delete survivor\n\nExternal Skill bytes must survive Project deletion.\n',
+  'Project deletion leaves the Resource-owned Skill untouched')
   const activeSessionRegistry = JSON.parse(readFileSync(path.join(userData, 'active-sessions.json'), 'utf8'))
   assertEqual(activeSessionRegistry.schemaVersion, 1, 'legacy active session registry migrates during Project purge')
   assertEqual(activeSessionRegistry.sessions.length, 0, 'purged Project leaves no active session records')
+  assert(!existsSync(projectTestEvidencePath()), 'Project-owned test evidence is removed by permanent deletion')
+  assert(!existsSync(appOwnedSourceCopy), 'Project-owned portable source copy is removed by permanent deletion')
+  assertEqual(resumed[0].residuals.artifactSourceFiles, 0,
+    'deletion proof residual scan includes portable source files')
+  assertEqual(resumed[0].residuals.effectArtifacts, 0,
+    'deletion proof residual scan includes Project Effect artifacts')
+  assert(!existsSync(uniqueEffectArtifact.artifactRoot),
+    'Project deletion removes an unshared app-owned Effect artifact')
+  assert(existsSync(sharedEffectArtifact.artifactRoot),
+    'Project deletion preserves an Effect artifact still referenced by another Project')
+  assertEqual(readFileSync(userOwnedSource, 'utf8'), sourceBytes.toString('utf8'),
+    'user-owned source Artifact remains untouched')
 
   const backup = resumed[0].backupPath
   const backupText = readFileSync(backup, 'utf8')
   assert(!backupText.includes(credentialCanary), 'private backup contains no credential canary')
   assert(backupText.includes('[REDACTED]'), 'private backup records explicit redaction')
+  assert(backupText.includes('project-test-evidence-importable.json'),
+    'private backup contains Project-owned test evidence bytes')
+  assert(backupText.includes(sourceBytes.toString('base64')),
+    'private backup contains source_ref Artifact bytes')
+  assert(backupText.includes('.caogen/skills/delete-survivor/SKILL.md') &&
+    backupText.includes('external_manifest_only'),
+  'private backup contains the Resource-owned Skill digest manifest')
+  assert(backupText.includes('office_artifact') && backupText.includes('artifact_source_bytes'),
+    'private backup binds the Office external manifest to packaged Artifact bytes')
+  assert(backupText.includes(uniqueEffectArtifact.indexBytes.toString('base64')) &&
+    backupText.includes(sharedEffectArtifact.indexBytes.toString('base64')),
+  'private backup contains exact Project-owned Effect artifact bytes')
   if (process.platform !== 'win32') assertEqual(statSync(backup).mode & 0o777, 0o600, 'private backup mode')
   const proofText = readFileSync(resumed[0].proofPath, 'utf8')
   assert(!proofText.includes(credentialCanary), 'private deletion proof contains no credential canary')
@@ -200,6 +314,8 @@ try {
   assertEqual(proofResumed.length, 1, 'restart resumes proof-written deletion')
   const verifiedBravoProof = await deletionApi.verifyProjectDeletionProof(userData, proofResumed[0].operationId)
   assertEqual(verifiedBravoProof.proofDigest, proofResumed[0].proofDigest, 'proof-written restart verifies its receipt')
+  assert(!existsSync(sharedEffectArtifact.artifactRoot),
+    'last Project owner deletion removes the shared app-owned Effect artifact')
 
   const tamperedProof = JSON.parse(proofText)
   tamperedProof.residuals.workspace = 1
@@ -225,13 +341,16 @@ try {
 }
 
 function seedSessionData(projectId) {
+  const now = Date.now()
   const session = {
     id: 'session-alpha',
     sdkSessionId: 'sdk-alpha',
     workspaceId: projectId,
     projectId,
     title: 'Alpha session',
-    cwd: externalRoot
+    cwd: externalRoot,
+    createdAt: now,
+    updatedAt: now
   }
   writeFileSync(path.join(userData, 'sessions.json'), `${JSON.stringify({ schemaVersion: 1, entries: [session] }, null, 2)}\n`)
   writeFileSync(path.join(userData, 'active-sessions.json'), `${JSON.stringify([session], null, 2)}\n`)
@@ -253,6 +372,126 @@ function seedSessionData(projectId) {
       }
     }
   }, null, 2)}\n`)
+  const evidencePath = projectTestEvidencePath()
+  const workspaceDigest = path.basename(path.dirname(evidencePath))
+  mkdirSync(path.dirname(evidencePath), { recursive: true })
+  writeFileSync(evidencePath, `${JSON.stringify({
+    kind: 'caogen-project-test-evidence',
+    schemaVersion: 2,
+    evidenceId: 'project-test-evidence-importable',
+    workspaceDigest,
+    sessionId: session.id,
+    projectId,
+    status: 'passed',
+    outputDigest: createHash('sha256').update('project deletion evidence').digest('hex')
+  }, null, 2)}\n`)
+}
+
+function projectTestEvidencePath() {
+  const workspaceDigest = createHash('sha256').update(path.resolve(externalRoot)).digest('hex').slice(0, 24)
+  return path.join(userData, 'project-test-evidence', workspaceDigest, 'project-test-evidence-importable.json')
+}
+
+function projectTaskRunFixture(effectArtifacts = []) {
+  return effectArtifactTaskRun('run-alpha', 'session-alpha', effectArtifacts)
+}
+
+function effectArtifactTaskRun(id, sessionId, effectArtifacts) {
+  return {
+    schemaVersion: 1,
+    id,
+    sessionId,
+    taskId: `task-${id}`,
+    status: 'completed',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 100,
+    updatedAt: 101,
+    completedAt: 101,
+    steps: [],
+    toolExecutions: [],
+    effects: effectArtifacts.map((artifact, index) => ({
+      schemaVersion: 1,
+      id: `effect-${id}-${index}`,
+      effectKey: `effect-key-${id}-${index}`,
+      resourceKey: `resource-key-${id}-${index}`,
+      sessionId,
+      runId: id,
+      toolUseId: `tool-${id}-${index}`,
+      toolName: 'git_stage_all',
+      generation: 1,
+      revision: 1,
+      status: 'confirmed',
+      reconcilability: 'queryable',
+      target: artifact.target,
+      targetDigest: `target-${id}-${index}`,
+      intentDigest: `intent-${id}-${index}`,
+      inputDigest: `input-${id}-${index}`,
+      evidence: [],
+      createdAt: 100,
+      updatedAt: 101,
+      terminalAt: 101
+    }))
+  }
+}
+
+function seedDeletionEffectArtifact(keyCharacter, text) {
+  const key = keyCharacter.repeat(64)
+  const artifactRef = `git-index/${key}`
+  const artifactRoot = path.join(userData, 'effect-artifacts', 'git-index', key)
+  const indexBytes = Buffer.from(text)
+  const indexSha256 = createHash('sha256').update(indexBytes).digest('hex')
+  const expectedIndexEntriesDigest = `expected-${keyCharacter}-index-entries`
+  const manifest = {
+    schemaVersion: 1,
+    expectedIndexEntriesDigest,
+    indexSha256,
+    indexBytes: indexBytes.byteLength,
+    objects: []
+  }
+  const manifestBytes = Buffer.from(JSON.stringify(manifest))
+  mkdirSync(artifactRoot, { recursive: true })
+  writeFileSync(path.join(artifactRoot, 'index'), indexBytes)
+  writeFileSync(path.join(artifactRoot, 'manifest.json'), manifestBytes)
+  const identity = { device: `device-${keyCharacter}`, inode: `inode-${keyCharacter}` }
+  return {
+    artifactRef,
+    artifactRoot,
+    indexBytes,
+    target: {
+      kind: 'git_index_update',
+      repoRoot: externalRoot,
+      repoRootIdentity: identity,
+      gitCommonDir: path.join(externalRoot, '.git'),
+      gitCommonDirIdentity: identity,
+      worktreeGitDir: path.join(externalRoot, '.git'),
+      worktreeGitDirIdentity: identity,
+      objectDir: path.join(externalRoot, '.git', 'objects'),
+      objectDirIdentity: identity,
+      objectFormat: 'sha1',
+      indexPath: path.join(externalRoot, '.git', 'index'),
+      preHeadState: 'unborn',
+      headRef: 'refs/heads/main',
+      preIndexState: 'absent',
+      preIndexEntriesDigest: `pre-${keyCharacter}-index-entries`,
+      expectedIndexEntriesDigest,
+      operation: 'stage_all',
+      paths: [],
+      worktreeReadScope: 'all',
+      artifactRef,
+      artifactRoot,
+      artifactRootIdentity: identity,
+      indexArtifactPath: path.join(artifactRoot, 'index'),
+      indexArtifactIdentity: identity,
+      indexArtifactSha256: indexSha256,
+      indexArtifactBytes: indexBytes.byteLength,
+      objectManifestPath: path.join(artifactRoot, 'manifest.json'),
+      objectManifestIdentity: identity,
+      objectManifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+      objectCount: 0
+    }
+  }
 }
 
 function verifyActiveSessionPurgeFormat(sessionPurgeApi) {
@@ -288,12 +527,15 @@ function compileSources() {
   execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
     'src/main/data-lifecycle/project-deletion-coordinator.ts',
+    'src/main/project-deletion-effect-target.ts',
     'src/main/project-workspace/index.ts',
     'src/main/digital-worker/index.ts',
     'src/main/project-aggregate/index.ts',
     'src/main/task/supervisor-state.ts',
     'src/main/task/model-attempt-api.ts',
+    'src/main/task/artifact-lifecycle-api.ts',
     'src/main/task/workflow-ledger-api.ts',
+    'src/main/task/workflow-ledger-store.ts',
     '--outDir', outDir,
     '--target', 'ES2022',
     '--module', 'NodeNext',
@@ -302,6 +544,29 @@ function compileSources() {
     '--skipLibCheck',
     '--esModuleInterop'
   ], { cwd: repoRoot, stdio: 'inherit' })
+}
+
+async function assertDeletionReconciliationRootIsolation(deletionTargetApi, result, expectedWorkspaceRevision) {
+  const target = {
+    kind: 'project_permanent_deletion',
+    deletionOperationId: result.operationId,
+    deletedProjectId: result.projectId,
+    expectedWorkspaceRevision,
+    projectId: 'project-system-deletion-report',
+    goalId: 'goal-system-deletion-report',
+    workItemId: 'work-system-deletion-report',
+    runId: `operation:${result.operationId}`,
+    artifactId: `artifact:project-permanent-deletion:${result.operationId}`,
+    evidenceId: `evidence:project-permanent-deletion:${result.operationId}`,
+    acceptanceId: `acceptance:project-permanent-deletion:${result.operationId}`
+  }
+  const matchingRoot = await deletionTargetApi.reconcileProjectPermanentDeletionEffectTarget(target, userData)
+  assertEqual(matchingRoot.kind, 'unresolved',
+    'matching deletion root reaches completed proof verification before the missing report check')
+  const foreignRoot = await deletionTargetApi.reconcileProjectPermanentDeletionEffectTarget(target, foreignUserData)
+  assertEqual(foreignRoot.kind, 'not_applied', 'foreign deletion root cannot observe another root journal')
+  const unbound = await deletionTargetApi.reconcileProjectPermanentDeletionEffectTarget(target)
+  assertEqual(unbound.kind, 'unresolved', 'unbound deletion reconciliation fails closed')
 }
 
 async function verifyWorkflowChainPurge({

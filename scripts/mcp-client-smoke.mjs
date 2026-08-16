@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,12 +9,17 @@ const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-mcp-client-'))
 const outDir = path.join(tempRoot, 'compiled')
 const stdioServerPath = path.join(tempRoot, 'fake-mcp-server.cjs')
+const projectRoot = path.join(tempRoot, 'project')
+const userDataRoot = path.join(tempRoot, 'user-data')
 const expectedClientVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version
 process.env.CAOGEN_APP_VERSION = expectedClientVersion
 const inheritedSecretCanary = 'inherited-secret-must-not-reach-mcp'
 const explicitEnvCanary = 'explicit-config-env-reaches-mcp'
+const explicitEnvName = 'MCP_EXPLICIT_API_TOKEN'
 const previousInheritedSecretCanary = process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY
+const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
 process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY = inheritedSecretCanary
+process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
 try {
   writeFileSync(stdioServerPath, fakeStdioServer(), 'utf8')
@@ -23,6 +28,7 @@ try {
   const adapter = await import(pathToFileURL(findCompiled(outDir, 'mcp-tool-adapter.js')).href)
   const probe = await import(pathToFileURL(findCompiled(outDir, 'mcpProbe.js')).href)
   const network = await import(pathToFileURL(findCompiled(outDir, 'mcp-network-policy.js')).href)
+  const registry = await import(pathToFileURL(findCompiled(outDir, 'pluginRegistry.js')).href)
   const networkPolicySource = readFileSync(path.join(repoRoot, 'src/main/mcp/mcp-network-policy.ts'), 'utf8')
 
   assert(networkPolicySource.includes('rejectUnauthorized: true'), 'TLS verification must remain enabled')
@@ -48,7 +54,7 @@ try {
     {
       command: process.execPath,
       args: [stdioServerPath],
-      env: { CAOGEN_MCP_EXPLICIT_ENV_CANARY: explicitEnvCanary }
+      env: { [explicitEnvName]: explicitEnvCanary }
     },
     'env_probe',
     {}
@@ -63,7 +69,7 @@ try {
     config: {
       command: process.execPath,
       args: [stdioServerPath],
-      env: { CAOGEN_MCP_EXPLICIT_ENV_CANARY: explicitEnvCanary }
+      env: { [explicitEnvName]: explicitEnvCanary }
     }
   }])
   assertEqual(probeResult[0].ok, true)
@@ -233,7 +239,21 @@ try {
 
   const tools = adapter.toCaoGenTools('demo', stdioDiscovery)
   assertEqual(tools[0].function.name, 'mcp__demo__echo')
-  const runtime = adapter.createMcpToolRuntime({ demo: { command: process.execPath, args: [stdioServerPath] } })
+  mkdirSync(projectRoot, { recursive: true })
+  writeFileSync(
+    path.join(projectRoot, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        demo: { command: process.execPath, args: [stdioServerPath] }
+      }
+    }, null, 2),
+    'utf8'
+  )
+  approveRegistryItems(registry, [path.join(projectRoot, '.claude')], (item) => item.kind === 'mcp' && item.name === 'demo')
+  const runtime = adapter.createMcpToolRuntime(
+    { demo: { command: process.execPath, args: [stdioServerPath] } },
+    projectRoot
+  )
   assert(runtime.canHandle('mcp__demo__echo'), 'runtime should route generated MCP tool name')
   const runtimeCall = await runtime.execute('mcp__demo__echo', { text: 'runtime' })
   assertEqual(runtimeCall.ok, true)
@@ -242,7 +262,20 @@ try {
 } finally {
   if (previousInheritedSecretCanary === undefined) delete process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY
   else process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY = previousInheritedSecretCanary
+  if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
+  else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function approveRegistryItems(registry, roots, select) {
+  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const items = view.items.filter(select)
+  assert(items.length > 0, 'expected Plugin Registry MCP fixture to approve')
+  const state = items.reduce(
+    (current, item) => registry.approvePluginRegistryItem(current, item),
+    registry.emptyPluginRegistryState()
+  )
+  registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
 }
 
 function fakeStdioServer() {
@@ -257,7 +290,7 @@ rl.on('line', (line) => {
 function handle(method, params) {
   if (method === 'initialize') {
     const inherited = process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY ? '-inherited' : ''
-    const explicit = process.env.CAOGEN_MCP_EXPLICIT_ENV_CANARY ? '-explicit' : ''
+    const explicit = process.env.MCP_EXPLICIT_API_TOKEN ? '-explicit' : ''
     return { serverInfo: { name: 'fake-mcp' + inherited + explicit, version: '1.0.0' } }
   }
   if (method === 'tools/list') return { tools: [{ name: 'echo', description: 'Echo text', inputSchema: { type: 'object' } }] }
@@ -269,7 +302,7 @@ function handle(method, params) {
         type: 'text',
         text: JSON.stringify({
           inheritedSecret: process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY || null,
-          explicitValue: process.env.CAOGEN_MCP_EXPLICIT_ENV_CANARY || null,
+          explicitValue: process.env.MCP_EXPLICIT_API_TOKEN || null,
           pathAvailable: typeof process.env.PATH === 'string' && process.env.PATH.length > 0
         })
       }]

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
   ProjectAggregateExportBundle,
+  ProjectConnectorMutation,
+  ProjectKnowledgePreview,
+  ProjectKnowledgeSearchResult,
   ProjectResourceInput,
   ProjectWorkspace,
   ProjectWorkspacePatch
@@ -23,6 +26,7 @@ interface LifecycleActions {
   updateProject: (patch: ProjectWorkspacePatch) => Promise<void>
   addResource: (resource: ProjectResourceInput) => Promise<void>
   removeResource: (resourceId: string) => Promise<void>
+  mutateConnector: (resourceId: string, mutation: ProjectConnectorMutation) => Promise<void>
   archiveProject: () => Promise<void>
   restoreProject: () => Promise<void>
   exportManifest: () => Promise<void>
@@ -30,6 +34,14 @@ interface LifecycleActions {
   copyManifest: () => Promise<void>
   softDeleteProject: () => Promise<void>
   purgeProject: () => Promise<void>
+  knowledge: ProjectKnowledgePreview | null
+  knowledgeLoading: boolean
+  knowledgeError: string
+  refreshKnowledge: () => Promise<void>
+  knowledgeSearch: ProjectKnowledgeSearchResult | null
+  knowledgeSearchLoading: boolean
+  knowledgeSearchError: string
+  searchKnowledge: (query: string) => Promise<void>
 }
 
 type MutationRunner = <T>(
@@ -43,6 +55,12 @@ export function useProjectWorkspaceLifecycle(options: LifecycleOptions): Lifecyc
   const { onMutationSuccess, project, refreshContents, refreshProjects } = options
   const feedback = useLifecycleFeedback(project.id, onMutationSuccess)
   const [manifest, setManifest] = useState<ProjectAggregateExportBundle | null>(null)
+  const [knowledge, setKnowledge] = useState<ProjectKnowledgePreview | null>(null)
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false)
+  const [knowledgeError, setKnowledgeError] = useState('')
+  const [knowledgeSearch, setKnowledgeSearch] = useState<ProjectKnowledgeSearchResult | null>(null)
+  const [knowledgeSearchLoading, setKnowledgeSearchLoading] = useState(false)
+  const [knowledgeSearchError, setKnowledgeSearchError] = useState('')
   const refreshProject = useCallback(async (updated: ProjectWorkspace): Promise<void> => {
     await refreshProjects(updated.id)
   }, [refreshProjects])
@@ -55,7 +73,42 @@ export function useProjectWorkspaceLifecycle(options: LifecycleOptions): Lifecyc
     run: feedback.run
   })
 
-  useEffect(() => setManifest(null), [project.id])
+  useEffect(() => {
+    setManifest(null)
+    setKnowledgeSearch(null)
+    setKnowledgeSearchError('')
+  }, [project.id])
+
+  const refreshKnowledge = useCallback(async (): Promise<void> => {
+    if (project.status !== 'active') {
+      setKnowledge(null)
+      setKnowledgeError('')
+      return
+    }
+    setKnowledgeLoading(true)
+    setKnowledgeError('')
+    try {
+      setKnowledge(await window.agentDesk.previewProjectKnowledge(project.id))
+    } catch (cause) {
+      setKnowledgeError(errorText(cause))
+    } finally {
+      setKnowledgeLoading(false)
+    }
+  }, [project.id, project.status])
+
+  useEffect(() => { void refreshKnowledge() }, [project.revision, refreshKnowledge])
+
+  const searchKnowledge = useCallback(async (query: string): Promise<void> => {
+    setKnowledgeSearchLoading(true)
+    setKnowledgeSearchError('')
+    try {
+      setKnowledgeSearch(await window.agentDesk.searchProjectKnowledge({ projectId: project.id, query, limit: 8 }))
+    } catch (cause) {
+      setKnowledgeSearchError(errorText(cause))
+    } finally {
+      setKnowledgeSearchLoading(false)
+    }
+  }, [project.id])
 
   const exportManifest = useCallback(async (): Promise<void> => {
     feedback.begin('export')
@@ -91,7 +144,15 @@ export function useProjectWorkspaceLifecycle(options: LifecycleOptions): Lifecyc
     ...statusMutations,
     exportManifest,
     closeManifest,
-    copyManifest
+    copyManifest,
+    knowledge,
+    knowledgeLoading,
+    knowledgeError,
+    refreshKnowledge,
+    knowledgeSearch,
+    knowledgeSearchLoading,
+    knowledgeSearchError,
+    searchKnowledge
   }
 }
 
@@ -162,7 +223,25 @@ function useProjectMutations(
     refreshProject,
     TEXT.resourceRemoved
   ), [project.id, project.resources, project.revision, refreshProject, run])
-  return { updateProject, addResource, removeResource }
+  const mutateConnector = useCallback((resourceId: string, mutation: ProjectConnectorMutation) => run(
+    'resource',
+    () => window.agentDesk.mutateProjectConnector(project.id, resourceId, mutation, { expectedRevision: project.revision }),
+    refreshProject,
+    connectorMutationMessage(mutation)
+  ), [project.id, project.revision, refreshProject, run])
+  return { updateProject, addResource, removeResource, mutateConnector }
+}
+
+function connectorMutationMessage(mutation: ProjectConnectorMutation): string {
+  if (mutation.kind === 'bind_authorization') return '连接器授权账户已更新，旧缓存已清理'
+  if (mutation.kind === 'set_auto_refresh') return mutation.intervalMs === 0 ? '连接器自动刷新已关闭' : '连接器自动刷新周期已更新'
+  if (mutation.kind === 'request_refresh') return TEXT.connectorRefreshRequested
+  if (mutation.kind === 'purge_cache') return TEXT.connectorCachePurged
+  if (mutation.kind === 'set_authorization') return mutation.status === 'active'
+    ? TEXT.connectorAuthorizationRestored
+    : TEXT.connectorAuthorizationRevoked
+  if (mutation.kind === 'set_enabled') return mutation.enabled ? TEXT.connectorEnabled : TEXT.connectorDisabled
+  return TEXT.projectUpdated
 }
 
 function useProjectStatusMutations({

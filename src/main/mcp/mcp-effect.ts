@@ -11,12 +11,19 @@ import {
   type McpToolDefinition,
   type McpTransport
 } from './mcp-client'
+import {
+  authorizeMcpRuntimeBinding,
+  authorizeMcpRuntimeConfig,
+  publicMcpRuntimeConfig,
+  type PluginRuntimeBinding
+} from '../plugin/plugin-runtime-authorization'
 
 type McpEffectTarget = Extract<EffectTarget, { kind: 'mcp_tool_call' }>
 
 interface ApprovedDiscovery {
   discovery: McpDiscoveryResult
   discoveryDigest: string
+  binding: PluginRuntimeBinding
 }
 
 interface McpReconciliationInput {
@@ -58,25 +65,45 @@ export function mcpServerConfigFromToolInput(input: Record<string, unknown>): Mc
 
 export function recordApprovedMcpDiscovery(
   config: McpServerConfig,
+  binding: PluginRuntimeBinding,
   discovery: McpDiscoveryResult
 ): void {
-  const normalized = effectSafeConfig(config)
+  const normalized = effectSafeConfig(publicMcpRuntimeConfig(config))
   const serverIdentityDigest = mcpServerIdentityDigest(normalized)
   approvedDiscoveries.set(serverIdentityDigest, {
     discovery: cloneDiscovery(discovery),
-    discoveryDigest: mcpDiscoveryDigest(discovery)
+    discoveryDigest: mcpDiscoveryDigest(discovery),
+    binding: { ...binding }
   })
 }
 
-export function buildMcpEffectTarget(input: Record<string, unknown>): McpEffectTarget | undefined {
+export function buildMcpEffectTarget(
+  input: Record<string, unknown>,
+  projectRoot?: string
+): McpEffectTarget | undefined {
   const raw = input.reconciliation
   if (raw === undefined) return undefined
   if (!isRecord(raw)) throw new Error('MCP reconciliation 必须是对象')
-  const config = mcpServerConfigFromToolInput(input)
+  const requestedConfig = input.command !== undefined || input.url !== undefined
+    ? mcpServerConfigFromToolInput(input)
+    : undefined
+  const authorized = authorizeMcpRuntimeConfig({
+    projectRoot,
+    serverId: requiredText(input.serverId, 'MCP serverId'),
+    requestedConfig
+  })
+  const config = authorized.publicConfig
   const serverIdentityDigest = mcpServerIdentityDigest(config)
   const approved = approvedDiscoveries.get(serverIdentityDigest)
   if (!approved) {
     throw new Error('可查询 MCP 调用要求先对同一服务器显式执行 mcp_discover 并获得批准')
+  }
+  if (
+    approved.binding.registryItemKey !== authorized.binding.registryItemKey ||
+    approved.binding.contentDigest !== authorized.binding.contentDigest ||
+    approved.binding.capabilityDigest !== authorized.binding.capabilityDigest
+  ) {
+    throw new Error('MCP Plugin Registry approval changed after discovery')
   }
   const toolName = requiredText(input.toolName, 'MCP toolName')
   requireDiscoveredTool(approved.discovery, toolName, false)
@@ -91,6 +118,10 @@ export function buildMcpEffectTarget(input: Record<string, unknown>): McpEffectT
     kind: 'mcp_tool_call',
     ...persistedConfig(config),
     serverIdentityDigest,
+    pluginRegistryItemKey: approved.binding.registryItemKey,
+    pluginContentDigest: approved.binding.contentDigest,
+    pluginCapabilityDigest: approved.binding.capabilityDigest,
+    pluginServerId: approved.binding.serverId,
     discoveryDigest: approved.discoveryDigest,
     toolName,
     toolArgumentsDigest: stableValueDigest(toolArguments),
@@ -113,7 +144,7 @@ export async function executeMcpEffectTarget(
     if (!before.complete) return { ok: false, error: before.error ?? 'MCP 前置对账失败' }
     if (before.matches) return { ok: true, existing: true, result: before.result }
     const result = await callMcpTool(
-      configFromTarget(target),
+      authorizedConfigFromTarget(target),
       target.toolName,
       record(input.arguments),
       timeoutMs
@@ -161,7 +192,7 @@ async function observeMcpEffectTarget(
   error?: string
 }> {
   try {
-    const config = configFromTarget(target)
+    const config = authorizedConfigFromTarget(target)
     const discovery = await discoverMcpServer(config, timeoutMs)
     if (mcpDiscoveryDigest(discovery) !== target.discoveryDigest) {
       return { complete: false, matches: false, error: 'MCP server capability snapshot 已变化，拒绝运行旧对账查询' }
@@ -188,8 +219,23 @@ async function observeMcpEffectTarget(
 }
 
 function assertMcpExecutionMatchesTarget(target: McpEffectTarget, input: Record<string, unknown>): void {
-  const config = mcpServerConfigFromToolInput(input)
-  if (mcpServerIdentityDigest(config) !== target.serverIdentityDigest) {
+  assertRuntimeBoundTarget(target)
+  if (requiredText(input.serverId, 'MCP serverId') !== target.pluginServerId) {
+    throw new Error('MCP serverId 已偏离效果审批时 Plugin Registry 身份')
+  }
+  const requestedConfig = input.command !== undefined || input.url !== undefined
+    ? mcpServerConfigFromToolInput(input)
+    : undefined
+  const authorized = authorizeMcpRuntimeBinding({
+    binding: {
+      registryItemKey: target.pluginRegistryItemKey,
+      contentDigest: target.pluginContentDigest,
+      capabilityDigest: target.pluginCapabilityDigest,
+      serverId: target.pluginServerId
+    },
+    requestedConfig
+  })
+  if (mcpServerIdentityDigest(authorized.publicConfig) !== target.serverIdentityDigest) {
     throw new Error('MCP server 配置已偏离效果审批时身份')
   }
   if (requiredText(input.toolName, 'MCP toolName') !== target.toolName) {
@@ -198,8 +244,14 @@ function assertMcpExecutionMatchesTarget(target: McpEffectTarget, input: Record<
   if (stableValueDigest(record(input.arguments)) !== target.toolArgumentsDigest) {
     throw new Error('MCP arguments 已偏离效果审批时意图')
   }
-  const rebuilt = buildMcpEffectTarget(input)
-  if (!rebuilt || stableValueDigest(rebuilt) !== stableValueDigest(target)) {
+  if (!isRecord(input.reconciliation)) throw new Error('MCP reconciliation contract 已缺失')
+  const reconciliation = reconciliationInput(input.reconciliation)
+  if (
+    reconciliation.toolName !== target.queryToolName ||
+    stableValueDigest(reconciliation.arguments) !== target.queryArgumentsDigest ||
+    reconciliation.jsonPointer !== target.jsonPointer ||
+    stableValueDigest(reconciliation.expectedValue) !== target.expectedValueDigest
+  ) {
     throw new Error('MCP reconciliation contract 已偏离效果审批时意图')
   }
 }
@@ -333,7 +385,7 @@ function persistedConfig(config: McpServerConfig): Pick<
   }
 }
 
-function configFromTarget(target: McpEffectTarget): McpServerConfig {
+function publicConfigFromTarget(target: McpEffectTarget): McpServerConfig {
   const config: McpServerConfig = {
     ...(target.command ? { command: target.command } : {}),
     ...(target.commandArgs?.length ? { args: [...target.commandArgs] } : {}),
@@ -344,6 +396,34 @@ function configFromTarget(target: McpEffectTarget): McpServerConfig {
     throw new Error('MCP EffectTarget server identity digest 不匹配')
   }
   return config
+}
+
+function authorizedConfigFromTarget(target: McpEffectTarget): McpServerConfig {
+  assertRuntimeBoundTarget(target)
+  const publicConfig = publicConfigFromTarget(target)
+  return authorizeMcpRuntimeBinding({
+    binding: {
+      registryItemKey: target.pluginRegistryItemKey,
+      contentDigest: target.pluginContentDigest,
+      capabilityDigest: target.pluginCapabilityDigest,
+      serverId: target.pluginServerId
+    },
+    requestedConfig: publicConfig
+  }).config
+}
+
+function assertRuntimeBoundTarget(target: McpEffectTarget): asserts target is McpEffectTarget & {
+  pluginRegistryItemKey: string
+  pluginContentDigest: string
+  pluginCapabilityDigest: string
+  pluginServerId: string
+} {
+  if (
+    !target.pluginRegistryItemKey || !target.pluginContentDigest ||
+    !target.pluginCapabilityDigest || !target.pluginServerId
+  ) {
+    throw new Error('Legacy MCP Effect lacks a Plugin Registry runtime binding; automatic replay is blocked')
+  }
 }
 
 function mcpObservationRoot(result: McpCallToolResult): Record<string, unknown> {

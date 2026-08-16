@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +18,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { runProviderProfileRestartServiceWorker } from './lib/provider-profile-restart-service-worker.mjs'
 
 const repoRoot = process.cwd()
+const require = createRequire(import.meta.url)
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
+  .filter(Boolean)
+  .join(path.delimiter)
+require('node:module').Module._initPaths()
 const scriptPath = fileURLToPath(import.meta.url)
 const workerAction = process.env.CAOGEN_PROVIDER_PROFILE_RESTART_ACTION
 
@@ -123,7 +129,7 @@ async function runGracefulReleaseContentionScenario() {
     assert.equal(result.acquired, true, `${scenarioName} contender acquisition`)
     assert.ok(result.attempts >= 2, `${scenarioName} must observe contention before acquisition`)
     assert.deepEqual(result.observedCodes, ['LOCK_HELD'], `${scenarioName} contention error codes`)
-    const storedProviders = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
+    const storedProviders = readCurrentProviderStore(userDataDir)
     assert.equal(storedProviders.some((provider) => provider.name === 'Contended Provider writer'), true,
       `${scenarioName} real Provider writer must commit after release`)
     assert.deepEqual(lockArtifactSnapshot(userDataDir), [], `${scenarioName} must leave no lock artifacts`)
@@ -224,7 +230,7 @@ function runStrongKillScenario(operation, checkpoint) {
   const userDataDir = path.join(scenarioRoot, 'userData')
   const importPath = path.join(scenarioRoot, 'profile.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -261,7 +267,7 @@ function runStrongKillScenario(operation, checkpoint) {
   assert.equal(existsSync(activeLockPath), true, `${scenarioName} must strand the killed writer lock`)
 
   const afterKillStore = readFileSync(storePath, 'utf8')
-  const afterKillProviders = JSON.parse(afterKillStore)
+  const afterKillProviders = currentProviderStoreEntries(JSON.parse(afterKillStore))
   const expectedModel = checkpoint === 'after_prepare'
     ? operation === 'rollback' ? 'changed-model' : 'base-model'
     : operation === 'rollback' ? 'base-model' : 'changed-model'
@@ -356,7 +362,7 @@ function runSameProcessConflictConvergenceScenario() {
   const userDataDir = path.join(scenarioRoot, 'userData')
   const importPath = path.join(scenarioRoot, 'profile.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -387,7 +393,7 @@ function runPendingWriterMatrixScenario() {
   const userDataDir = path.join(scenarioRoot, 'userData')
   const importPath = path.join(scenarioRoot, 'profile.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -425,7 +431,7 @@ function runInflightBackupBindingScenario(checkpoint) {
   const importPath = path.join(scenarioRoot, 'profile.json')
   const originalBackupPath = path.join(scenarioRoot, 'frozen-backup.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -632,7 +638,7 @@ function prepareKilledImportScenario(scenarioName, checkpoint = 'after_prepare')
   const userDataDir = path.join(scenarioRoot, 'userData')
   const importPath = path.join(scenarioRoot, 'profile.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -663,7 +669,7 @@ function prepareKilledRollbackScenario(scenarioName) {
   const userDataDir = path.join(scenarioRoot, 'userData')
   const importPath = path.join(scenarioRoot, 'profile.json')
   mkdirSync(userDataDir, { recursive: true })
-  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify([seedProvider()], null, 2)}\n`, {
+  writeFileSync(path.join(userDataDir, 'providers.json'), `${JSON.stringify(providerStoreFixture([seedProvider()]), null, 2)}\n`, {
     mode: 0o600
   })
   writeFileSync(importPath, `${JSON.stringify(importProfile(), null, 2)}\n`, { mode: 0o600 })
@@ -798,6 +804,18 @@ function invokeWorker(action, input) {
   return JSON.parse(output)
 }
 
+function readCurrentProviderStore(userDataDir) {
+  const document = JSON.parse(readFileSync(path.join(userDataDir, 'providers.json'), 'utf8'))
+  return currentProviderStoreEntries(document)
+}
+
+function currentProviderStoreEntries(document) {
+  assert.equal(document?.schemaVersion, 1, 'Provider Store must migrate to schema version 1')
+  assert.equal(document?.format, 'caogen.provider-store.v1', 'Provider Store must use the current format')
+  assert.ok(Array.isArray(document?.entries), 'Provider Store entries must be an array')
+  return document.entries
+}
+
 function invokeWorkerExpectFailure(action, input) {
   const result = spawnSync(process.execPath, [scriptPath], {
     cwd: repoRoot,
@@ -844,6 +862,14 @@ function waitForChildExit(child) {
     child.once('exit', () => resolve())
     child.once('error', reject)
   })
+}
+
+function providerStoreFixture(entries) {
+  return {
+    schemaVersion: 1,
+    format: 'caogen.provider-store.v1',
+    entries
+  }
 }
 
 function seedProvider() {

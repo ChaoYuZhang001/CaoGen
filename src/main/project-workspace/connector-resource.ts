@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import type {
   ConnectorReadResult,
   ConnectorResourceContract,
-  ProjectResource
+  ProjectResource,
+  ProjectWorkspace
 } from '../../shared/project-workspace-types'
 
 export interface ConnectorWriteExecutionContext {
@@ -16,7 +17,7 @@ export function connectorResourceAvailability(resource: ProjectResource): { avai
   const contract = resource.connector
   if (!contract || contract.schemaVersion !== 1) return { available: false, reason: 'Connector contract is missing' }
   if (contract.authorization.status !== 'active') return { available: false, reason: 'Connector authorization is revoked' }
-  if (resource.metadata?.disabled === true || resource.metadata?.revokedAt !== undefined) {
+  if (contract.lifecycle?.enabled === false || resource.metadata?.disabled === true || resource.metadata?.revokedAt !== undefined) {
     return { available: false, reason: 'Connector resource is disabled or revoked' }
   }
   return { available: true }
@@ -70,10 +71,69 @@ export function assertConnectorWriteExecution(
   if (!connectorSupportsWrite(resource)) throw new Error('Connector is not authorized for write operations')
   const contract = resource.connector!
   if (contract.writePolicy.effect !== 'required') throw new Error('Connector writes require an Effect record')
-  if (!requiredText(context.effectId, 'effectId')) throw new Error('Connector writes require an Effect record')
+  if (!requiredText(context.projectId, 'projectId') || !requiredText(context.effectId, 'effectId')) {
+    throw new Error('Connector writes require Project ownership and an Effect record')
+  }
   if (context.reconciliation !== contract.writePolicy.reconciliation) {
     throw new Error('Connector reconciliation policy does not match the approved resource contract')
   }
+}
+
+export function projectConnectorResource(
+  workspace: ProjectWorkspace,
+  resourceId: string
+): ProjectResource {
+  const resource = workspace.resources.find((candidate) => candidate.id === resourceId)
+  if (!resource || resource.kind !== 'connector') {
+    throw new Error(`Connector resource does not belong to Project:${workspace.id}`)
+  }
+  return resource
+}
+
+export function createProjectConnectorReadResult<T>(
+  workspace: ProjectWorkspace,
+  resourceId: string,
+  input: {
+    data: T
+    source: string
+    version: string
+    retrievedAt?: number
+    contentDigest?: string
+  }
+): ConnectorReadResult<T> {
+  const resource = projectConnectorResource(workspace, resourceId)
+  return createConnectorReadResult(resource, workspace.id, input)
+}
+
+export function assertProjectConnectorWriteExecution(
+  workspace: ProjectWorkspace,
+  resourceId: string,
+  context: ConnectorWriteExecutionContext
+): void {
+  const resource = projectConnectorResource(workspace, resourceId)
+  if (context.projectId !== workspace.id) throw new Error('Connector write crosses Project ownership')
+  assertConnectorWriteExecution(resource, context)
+}
+
+export function connectorLifecycleEnabled(resource: ProjectResource): boolean {
+  return resource.connector?.lifecycle?.enabled !== false
+}
+
+/**
+ * Stable, content-free identity for the authorization that produced a cache.
+ * Credential material is never included, but changing the credential reference,
+ * subject, principal, scopes, or status invalidates the cached source.
+ */
+export function connectorAuthorizationDigest(resource: ProjectResource): string {
+  const authorization = resource.connector?.authorization
+  if (!authorization) throw new Error('Connector authorization is missing')
+  return digestData({
+    subject: authorization.subject,
+    principalId: authorization.principalId,
+    credentialRef: authorization.credentialRef ?? null,
+    scopes: [...authorization.scopes].sort(),
+    status: authorization.status
+  })
 }
 
 function digestData(value: unknown): string {

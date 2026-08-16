@@ -21,6 +21,7 @@ process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_P
   .filter(Boolean)
   .join(path.delimiter)
 require('node:module').Module._initPaths()
+const mcpServerId = 'external-effect-fixture'
 
 const mode = process.argv[2]
 if (mode === '--crash-worker' || mode === '--restart-probe') {
@@ -62,14 +63,16 @@ try {
   mkdirSync(fixtureBin, { recursive: true })
   compileSources(outDir)
   installElectronStub(outDir)
-  installFakeGitHubCli(ghScript)
+  installFakeGitHubCli(ghScript, ghState, ghAudit)
   installMcpServer(mcpServer)
   initializeGitHubState(ghState)
   initializeMcpState(mcpState)
   initializeRepository(workspace)
+  initializeMcpRegistry(workspace, mcpServer, mcpState)
   configureWorkerEnvironment({ userData, fixtureBin, ghScript, ghState, ghAudit })
 
-  const api = await loadApi(outDir)
+  const api = await loadApi(outDir, userData)
+  approveMcpRegistry(api, workspace, userData)
   await runIssueNegativeCases(api, { userData, workspace, ghState })
   const directMcpMutations = await runMcpCases(api, { userData, workspace, mcpServer, mcpState })
 
@@ -248,8 +251,7 @@ async function runIssueNegativeCases(api, paths) {
 async function runMcpCases(api, paths) {
   initializeMcpState(paths.mcpState)
   const config = mcpConfig(paths.mcpServer, paths.mcpState)
-  const discovery = await api.mcpClient.discoverMcpServer(config, 5_000)
-  api.mcpEffect.recordApprovedMcpDiscovery(config, discovery)
+  const discovery = await discoverApprovedMcpServer(api, paths.workspace, config)
   assertEqual(discovery.tools.find((item) => item.name === 'read_state')?.annotations?.readOnlyHint, true)
   check('MCP discovery approves a distinct readOnlyHint reconciliation tool')
 
@@ -365,10 +367,9 @@ async function runMcpCases(api, paths) {
 }
 
 async function runCrashWorker(payload) {
-  const api = await loadApi(payload.outDir)
+  const api = await loadApi(payload.outDir, payload.userData)
   const config = mcpConfig(payload.mcpServer, payload.mcpState)
-  const discovery = await api.mcpClient.discoverMcpServer(config, 5_000)
-  api.mcpEffect.recordApprovedMcpDiscovery(config, discovery)
+  await discoverApprovedMcpServer(api, payload.workspace, config)
   const sessionId = 'external-effects-hard-kill'
   const issueToolUseId = 'hard-kill-issue-tool'
   const mcpToolUseId = 'hard-kill-mcp-tool'
@@ -419,8 +420,19 @@ async function runCrashWorker(payload) {
   setInterval(() => undefined, 60_000)
 }
 
+async function discoverApprovedMcpServer(api, projectRoot, config) {
+  const authorized = api.pluginRuntime.authorizeMcpRuntimeConfig({
+    projectRoot,
+    serverId: mcpServerId,
+    requestedConfig: config
+  })
+  const discovery = await api.mcpClient.discoverMcpServer(authorized.config, 5_000)
+  api.mcpEffect.recordApprovedMcpDiscovery(authorized.publicConfig, authorized.binding, discovery)
+  return discovery
+}
+
 async function runRestartProbe(payload) {
-  const api = await loadApi(payload.outDir)
+  const api = await loadApi(payload.outDir, payload.userData)
   const stored = await api.snapshot.getTaskSnapshot(payload.sessionId, payload.userData)
   assert(stored?.run, 'restart probe requires the persisted crash Run')
   const first = await api.effectRuntime.reconcilePersistedTaskSnapshot(stored)
@@ -610,6 +622,7 @@ function mcpConfig(serverPath, statePath) {
 function mcpToolInput(serverPath, statePath, id, value) {
   return {
     ...mcpConfig(serverPath, statePath),
+    serverId: mcpServerId,
     toolName: 'mutate',
     arguments: { id, value },
     reconciliation: {
@@ -663,6 +676,26 @@ function initializeMcpState(statePath) {
   })
 }
 
+function initializeMcpRegistry(projectRoot, serverPath, statePath) {
+  writeJson(path.join(projectRoot, '.mcp.json'), {
+    mcpServers: { [mcpServerId]: mcpConfig(serverPath, statePath) }
+  })
+}
+
+function approveMcpRegistry(api, projectRoot, userDataRoot) {
+  const view = api.pluginRegistry.scanPluginRegistry(
+    [path.join(projectRoot, '.claude')],
+    { includeSiblingProjectMcp: true }
+  )
+  const matches = view.items.filter((item) => item.kind === 'mcp' && item.name === mcpServerId)
+  assertEqual(matches.length, 1, 'Plugin Registry MCP fixture count')
+  const state = api.pluginRegistry.approvePluginRegistryItem(
+    api.pluginRegistry.emptyPluginRegistryState(),
+    matches[0]
+  )
+  api.pluginRegistry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
+}
+
 function initializeRepository(cwd) {
   gitOutput(cwd, ['init'])
   gitOutput(cwd, ['config', 'user.name', 'CaoGen Effect Gate'])
@@ -673,12 +706,11 @@ function initializeRepository(cwd) {
   gitOutput(cwd, ['remote', 'add', 'origin', 'https://github.com/acme/caogen-effect-fixture.git'])
 }
 
-function installFakeGitHubCli(file) {
+function installFakeGitHubCli(file, stateFile, auditFile) {
   writeFileSync(file, `#!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
-const statePath = process.env.CAOGEN_EXTERNAL_GH_STATE
-const auditPath = process.env.CAOGEN_EXTERNAL_GH_AUDIT
-if (!statePath || !auditPath) throw new Error('fake gh state is not configured')
+const statePath = ${JSON.stringify(stateFile)}
+const auditPath = ${JSON.stringify(auditFile)}
 const args = process.argv.slice(2)
 appendFileSync(auditPath, JSON.stringify({ args }) + '\\n', 'utf8')
 const state = JSON.parse(readFileSync(statePath, 'utf8'))
@@ -825,17 +857,40 @@ export const safeStorage = {
   writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n', 'utf8')
 }
 
-async function loadApi(compiledRoot) {
-  const [effectRuntime, snapshot, registry, idempotency, pullRequest, mcpEffect, mcpClient] = await Promise.all([
+async function loadApi(compiledRoot, userDataRoot) {
+  const [
+    effectRuntime,
+    snapshot,
+    registry,
+    idempotency,
+    pullRequest,
+    mcpEffect,
+    mcpClient,
+    pluginRuntime,
+    pluginRegistry
+  ] = await Promise.all([
     importCompiled(compiledRoot, 'main/task/effect-runtime.js'),
     importCompiled(compiledRoot, 'main/task/task-snapshot.js'),
     importCompiled(compiledRoot, 'main/task/task-runtime-registry.js'),
     importCompiled(compiledRoot, 'main/task/tool-idempotency.js'),
     importCompiled(compiledRoot, 'main/git/pull-request-effect.js'),
     importCompiled(compiledRoot, 'main/mcp/mcp-effect.js'),
-    importCompiled(compiledRoot, 'main/mcp/mcp-client.js')
+    importCompiled(compiledRoot, 'main/mcp/mcp-client.js'),
+    importCompiled(compiledRoot, 'main/plugin/plugin-runtime-authorization.js'),
+    importCompiled(compiledRoot, 'main/pluginRegistry.js')
   ])
-  return { effectRuntime, snapshot, registry, idempotency, pullRequest, mcpEffect, mcpClient }
+  pluginRuntime.configurePluginRuntimeAuthorization(userDataRoot)
+  return {
+    effectRuntime,
+    snapshot,
+    registry,
+    idempotency,
+    pullRequest,
+    mcpEffect,
+    mcpClient,
+    pluginRuntime,
+    pluginRegistry
+  }
 }
 
 async function importCompiled(root, suffix) {
@@ -860,8 +915,6 @@ function findCompiled(root, suffix) {
 
 function configureWorkerEnvironment(payload) {
   if (payload.userData) process.env.CAOGEN_EXTERNAL_EFFECT_USER_DATA = payload.userData
-  if (payload.ghState) process.env.CAOGEN_EXTERNAL_GH_STATE = payload.ghState
-  if (payload.ghAudit) process.env.CAOGEN_EXTERNAL_GH_AUDIT = payload.ghAudit
   if (payload.ghScript) {
     process.env.CAOGEN_GH_EXECUTABLE = process.execPath
     process.env.CAOGEN_GH_SCRIPT = payload.ghScript
@@ -873,8 +926,6 @@ function workerEnv(payload) {
   return {
     ...process.env,
     CAOGEN_EXTERNAL_EFFECT_USER_DATA: payload.userData,
-    CAOGEN_EXTERNAL_GH_STATE: payload.ghState,
-    CAOGEN_EXTERNAL_GH_AUDIT: payload.ghAudit,
     CAOGEN_GH_EXECUTABLE: process.execPath,
     CAOGEN_GH_SCRIPT: payload.ghScript,
     PATH: `${payload.fixtureBin}${path.delimiter}${process.env.PATH ?? ''}`

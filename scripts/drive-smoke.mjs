@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 
 const repoRoot = process.cwd()
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-drive-build-'))
@@ -32,6 +33,16 @@ try {
     ],
     { cwd: repoRoot, stdio: 'inherit' }
   )
+  const electronDir = path.join(buildDir, 'node_modules', 'electron')
+  mkdirSync(electronDir, { recursive: true })
+  writeFileSync(path.join(electronDir, 'index.js'), [
+    'exports.app = { getPath: () => process.env.CAOGEN_USER_DATA || process.cwd(), isPackaged: false }',
+    'exports.safeStorage = { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0), decryptString: () => "" }'
+  ].join('\n') + '\n', 'utf8')
+  process.env.NODE_PATH = [path.join(buildDir, 'node_modules'), path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
+    .filter(Boolean)
+    .join(path.delimiter)
+  createRequire(import.meta.url)('node:module').Module._initPaths()
 
   const stats = await import(pathToFileURL(findCompiled(buildDir, 'modelStats.js')).href)
   const drive = await import(pathToFileURL(findCompiled(buildDir, 'drive.js')).href)

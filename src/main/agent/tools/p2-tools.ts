@@ -20,6 +20,8 @@ import type { ToolDefinition } from './tool-types'
 import { DigitalWorkerStore } from '../../digital-worker/domain-store'
 import { openProjectWorkspaceStore } from '../../project-workspace/store'
 import { verifyProductionProjectMutation } from '../../project-aggregate/project-mutation-ingress'
+import { searchProjectKnowledge } from '../../project-workspace/project-knowledge-search'
+import { taskRuntimeRegistry } from '../../task/task-runtime-registry'
 
 export const P2_TOOL_NAMES = [
   'draft_skill',
@@ -27,6 +29,7 @@ export const P2_TOOL_NAMES = [
   'route_model',
   'china_notify',
   'send_notification',
+  'project_knowledge_search',
   'work_item_comment',
   'gitee_prepare'
 ] as const
@@ -78,6 +81,21 @@ export const P2_TOOLS: ToolDefinition[] = [
           linkUrl: { type: 'string' }
         },
         required: ['title', 'text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'project_knowledge_search',
+      description: '在当前 Project 已授权的本地知识与可用只读连接器中检索，并返回带 source/version/retrievedAt/Evidence 的有界引用。Project、Goal、WorkItem 身份由当前会话注入，不能由参数覆盖。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要检索的关键词或问题' },
+          limit: { type: 'number', description: '最多返回多少条引用，默认 8，最多 20' }
+        },
+        required: ['query']
       }
     }
   },
@@ -273,6 +291,7 @@ export async function executeP2Tool(
   }
 
   if (name === 'china_notify') return executeChinaNotifyPreview(args)
+  if (name === 'project_knowledge_search') return executeProjectKnowledgeSearch(args, context)
   if (name === 'work_item_comment') return executeWorkItemComment(args, context)
   if (name === 'send_notification') {
     if (context.effectTarget?.kind !== 'webhook_message_send') {
@@ -282,6 +301,31 @@ export async function executeP2Tool(
     return { ok: result.ok, output: JSON.stringify(result, null, 2) }
   }
   return executeGiteePreview(args)
+}
+
+async function executeProjectKnowledgeSearch(
+  args: Record<string, unknown>,
+  context: P2ToolExecutionContext
+): Promise<P2ToolResult> {
+  const meta = context.sessionMeta
+  const root = context.userDataRoot
+  const projectId = meta?.workspaceId
+  if (!meta || !root || !projectId || meta.unassigned) {
+    return { ok: false, output: 'project_knowledge_search 只允许绑定当前 Project 的会话调用' }
+  }
+  const limit = args.limit === undefined ? undefined : optionalNumber(args.limit)
+  const run = taskRuntimeRegistry.get(meta.id)
+  const result = await searchProjectKnowledge(root, {
+    projectId,
+    query: requiredString(args.query, 'query'),
+    ...(limit === undefined ? {} : { limit })
+  }, {
+    ...(meta.goalId ? { goalId: meta.goalId } : {}),
+    ...(meta.workItemId ? { workItemId: meta.workItemId } : {}),
+    ...(run ? { runId: run.id } : {})
+  })
+  await verifyProductionProjectMutation(root, projectId)
+  return { ok: true, output: JSON.stringify(result, null, 2) }
 }
 
 async function executeWorkItemComment(
@@ -496,27 +540,51 @@ function providerView(value: unknown): ProviderView | undefined {
   const models = stringArray(value.models)
   if (!id || !name || !models) return undefined
   const hasToken = value.hasToken === true
-  const baseUrl = optionalString(value.baseUrl) ?? ''
-  const authMode = value.authMode === 'none' && isLoopbackUrl(baseUrl) ? 'none' : 'api-key'
+  const baseUrl = valueOr(optionalString(value.baseUrl), '')
+  const authMode = providerAuthMode(value.authMode, baseUrl)
   return {
     id,
     name,
     baseUrl,
     models,
     authMode,
-    ready: authMode === 'none' || hasToken,
-    engine: value.engine === 'anthropic' || value.engine === 'claude'
-      ? 'anthropic' : value.engine === 'gemini' ? 'gemini' : 'openai',
-    budgetUsd: optionalNumber(value.budgetUsd) ?? 0,
+    ready: providerReady(authMode, hasToken),
+    engine: providerEngine(value.engine),
+    budgetUsd: valueOr(optionalNumber(value.budgetUsd), 0),
     customHeaders: optionalString(value.customHeaders),
     credentialHeaderNames: stringArray(value.credentialHeaderNames),
-    openaiProtocol: value.openaiProtocol === 'chat' || value.openaiProtocol === 'responses' ? value.openaiProtocol : undefined,
+    openaiProtocol: providerOpenAiProtocol(value.openaiProtocol),
     note: optionalString(value.note),
-    createdAt: optionalNumber(value.createdAt) ?? Date.now(),
+    createdAt: valueOr(optionalNumber(value.createdAt), Date.now()),
     hasToken,
     credentialRoutingMode: providerCredentialRoutingMode(value.credentialRoutingMode),
-    credentialStorage: hasToken ? 'encrypted' : 'none'
+    credentialStorage: providerCredentialStorage(hasToken)
   }
+}
+
+function valueOr<T>(value: T | undefined, fallback: T): T {
+  return value === undefined ? fallback : value
+}
+
+function providerAuthMode(value: unknown, baseUrl: string): ProviderView['authMode'] {
+  return value === 'none' && isLoopbackUrl(baseUrl) ? 'none' : 'api-key'
+}
+
+function providerReady(authMode: ProviderView['authMode'], hasToken: boolean): boolean {
+  return authMode === 'none' || hasToken
+}
+
+function providerEngine(value: unknown): ProviderView['engine'] {
+  if (value === 'anthropic' || value === 'claude') return 'anthropic'
+  return value === 'gemini' ? 'gemini' : 'openai'
+}
+
+function providerOpenAiProtocol(value: unknown): ProviderView['openaiProtocol'] {
+  return value === 'chat' || value === 'responses' ? value : undefined
+}
+
+function providerCredentialStorage(hasToken: boolean): ProviderView['credentialStorage'] {
+  return hasToken ? 'encrypted' : 'none'
 }
 
 function providerCredentialRoutingMode(value: unknown): ProviderView['credentialRoutingMode'] {

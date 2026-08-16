@@ -157,11 +157,13 @@ function verifyProductionWiring() {
   assert.match(rootIpc, /assertExecutionAuthorized: \(id, action\) => sessionManager\.assertInteractiveExecutionAuthorized\(id, action\)/)
   assert.match(interactiveIpc, /authorize\(id, '保存项目文件'\)/)
   assert.match(taskPlanIpc, /handleTaskPlanIpc/)
-  assert.match(preload, /'appFeatures:invoke', 'task-plan'/)
+  assert.match(preload, /invokeAppFeature\('task-plan', action, sessionId, payload\)/)
   assert.match(taskPlanIpc, /action === 'create-version'/)
   assert.match(preload, /invoke\('create-version', sessionId, draft\)/)
   assert.match(editor, /data-task-plan-approve-execute/)
   assert.match(workbench, /version: current\.version, digest: current\.digest/)
+  assert.match(manager, /dispatchTaskDag\(id, \{ dag, isolated: this\.sessions\.get\(id\)\?\.meta\.isolated === true \}\)/)
+  assert.match(coordinator, /executionAuthoritySessionId\(session\.meta\)/)
 }
 
 function source(relativePath) {

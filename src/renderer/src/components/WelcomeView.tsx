@@ -318,6 +318,208 @@ function WelcomeProjectSelector({
   )
 }
 
+type WelcomeDraftController = ReturnType<typeof useWelcomeDraftController>
+type WelcomeModelOptions = ReturnType<typeof modelOptionsForProvider>
+type WelcomeStartActions = ReturnType<typeof useWelcomeStartActions>
+
+function buildWelcomeSessionDraft(
+  welcome: WelcomeDraftController,
+  welcomeDraft: WelcomeStoreState['welcomeDraft'],
+  taskStrategy: TaskStrategy
+): WelcomeSessionDraft {
+  return {
+    cwd: welcome.cwd,
+    driveMode: welcome.driveMode,
+    model: welcome.model,
+    taskStrategy,
+    projectId: welcome.availableProjects.some((project) => project.id === welcome.projectChoice)
+      ? welcome.projectChoice
+      : undefined,
+    providerId: welcome.providerId,
+    routingMode: welcome.routingMode,
+    unassigned: welcome.projectChoice === UNASSIGNED,
+    forkFromSdkSessionId: welcomeDraft.forkFromSdkSessionId,
+    forkCheckpointId: welcomeDraft.forkCheckpointId
+  }
+}
+
+function useWelcomeModelOptions(
+  welcome: WelcomeDraftController,
+  providers: WelcomeStoreState['providers'],
+  schedulerStrategy: WelcomeStoreState['settings']['schedulerStrategy']
+): { fixedModelOptions: WelcomeModelOptions; routingStrategyLabel: string } {
+  const t = useT()
+  const routingStrategy = welcome.driveMode === 'core'
+    ? schedulerStrategy
+    : caogenDrivePolicyView(welcome.driveMode).schedulerStrategy
+  const routingStrategyLabel = t(
+    routingStrategy === 'quality'
+      ? 'routingStrategyQuality'
+      : routingStrategy === 'cost'
+        ? 'routingStrategyCost'
+        : routingStrategy === 'speed'
+          ? 'routingStrategySpeed'
+          : 'routingStrategyBalanced'
+  )
+  const modelOptions = useMemo(() => modelOptionsForProvider(
+    providers,
+    welcome.providerId,
+    `${t('autoRoute')} · ${routingStrategyLabel}`,
+    welcome.model
+  ), [providers, routingStrategyLabel, t, welcome.model, welcome.providerId])
+  return {
+    fixedModelOptions: modelOptions.filter((option) => option.value !== AUTO_MODEL),
+    routingStrategyLabel
+  }
+}
+
+function WelcomePresetGrid({
+  busy,
+  onSelect
+}: {
+  busy: boolean
+  onSelect: (tool: WelcomeTool) => void
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <div className="welcome-suggestion-grid">
+      {WELCOME_TOOLS.map((tool) => {
+        const ToolIcon = tool.icon
+        return (
+          <button
+            key={tool.key}
+            type="button"
+            className="welcome-suggestion"
+            data-welcome-preset={tool.key}
+            data-preset-strategy={tool.taskStrategy}
+            disabled={busy}
+            title={t('welcomePresetStartsNow')}
+            onClick={() => onSelect(tool)}
+          >
+            <ToolIcon size={17} strokeWidth={1.8} aria-hidden="true" />
+            <span>{t(tool.labelKey)}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function WelcomeComposer({
+  actions,
+  computeAvailable,
+  fixedModelOptions,
+  localComputeStatus,
+  onBrowse,
+  onKeyDown,
+  onOpenSettings,
+  onProjectChange,
+  onRoutingModeChange,
+  projection,
+  providers,
+  routingStrategyLabel,
+  taskStrategy,
+  textareaRef,
+  welcome,
+  welcomeDraft
+}: {
+  actions: WelcomeStartActions
+  computeAvailable: boolean
+  fixedModelOptions: WelcomeModelOptions
+  localComputeStatus: ReturnType<typeof useLocalComputeActivation>['localComputeStatus']
+  onBrowse: () => void
+  onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onOpenSettings: () => void
+  onProjectChange: (choice: string) => void
+  onRoutingModeChange: (mode: WelcomeRoutingMode) => void
+  projection: WelcomeProjection
+  providers: WelcomeStoreState['providers']
+  routingStrategyLabel: string
+  taskStrategy: TaskStrategy
+  textareaRef: React.RefObject<HTMLTextAreaElement>
+  welcome: WelcomeDraftController
+  welcomeDraft: WelcomeStoreState['welcomeDraft']
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <div className="welcome-compose-dock">
+      <div className="welcome-composer">
+        {welcomeDraft.forkFromSdkSessionId ? (
+          <div className="welcome-fork-source">
+            {t('conversationForkSource', { title: welcomeDraft.forkSourceTitle ?? t('conversation') })}
+          </div>
+        ) : (
+          <WelcomeProjectSelector
+            availableProjects={welcome.availableProjects}
+            cwd={welcome.cwd}
+            projectChoice={welcome.projectChoice}
+            onBrowse={onBrowse}
+            onCwdChange={(cwd) => welcome.update({ cwd })}
+            onProjectChange={onProjectChange}
+          />
+        )}
+        <textarea
+          ref={textareaRef}
+          className="welcome-composer-input"
+          placeholder={t('welcomeInputPlaceholder')}
+          value={welcome.text}
+          rows={1}
+          onChange={(event) => welcome.update({ text: event.target.value })}
+          onKeyDown={onKeyDown}
+          autoFocus
+        />
+        <div className="welcome-composer-bar">
+          <TaskStrategyControl
+            value={taskStrategy}
+            onChange={(nextStrategy) => welcome.update({ taskStrategy: nextStrategy })}
+            compact
+          />
+          {projection === 'assistant' && !welcomeDraft.forkFromSdkSessionId ? (
+            <AssistantComputeIndicator
+              available={computeAvailable || localComputeStatus === 'ready'}
+              checking={localComputeStatus === 'checking'}
+            />
+          ) : (
+            <WelcomeRoutingControls
+              driveMode={welcome.driveMode}
+              fixedModelOptions={fixedModelOptions}
+              model={welcome.model}
+              providerId={welcome.providerId}
+              providers={providers}
+              routingMode={welcome.routingMode}
+              routingStrategyLabel={routingStrategyLabel}
+              onDriveChange={welcome.setDriveMode}
+              onModelChange={(model) => welcome.update({ computeSelectionSource: 'user', model })}
+              onProviderChange={welcome.setProvider}
+              onRoutingModeChange={onRoutingModeChange}
+            />
+          )}
+          <button
+            type="button"
+            className="welcome-send"
+            aria-label={t('send')}
+            title={t('send')}
+            disabled={actions.busy || !welcome.text.trim()}
+            onClick={() => void actions.submit()}
+          >
+            {actions.busy
+              ? <LoaderCircle className="welcome-send-spinner" size={17} aria-hidden="true" />
+              : <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />}
+          </button>
+        </div>
+      </div>
+      <AssistantStartNotice
+        busy={actions.busy}
+        computeReason={actions.computeReason}
+        error={actions.error}
+        recoveryKind={actions.recoveryKind}
+        onOpenSettings={onOpenSettings}
+        onRetry={() => void actions.retryCompute()}
+      />
+    </div>
+  )
+}
+
 /** 首屏打开即输入，任务策略决定后端派生的权限模式。 */
 export default function WelcomeView(): React.JSX.Element {
   const t = useT()
@@ -333,18 +535,8 @@ export default function WelcomeView(): React.JSX.Element {
   const activateLocalCompute = useStore((state) => state.activateLocalCompute)
   const setShowSettings = useStore((state) => state.setShowSettings)
   const welcome = useWelcomeDraftController({ projects, providers, requestedProjectId, settings })
-  const {
-    availableProjects,
-    cwd,
-    driveMode,
-    model,
-    projectChoice,
-    providerId,
-    routingMode,
-    text
-  } = welcome
+  const { text } = welcome
   const taskStrategy = welcomeDraft.taskStrategy ?? settings.defaultTaskStrategy
-  const taskExperienceMode = welcomeDraft.experienceModeOverride ?? projection
   const taRef = useRef<HTMLTextAreaElement>(null)
   const computeAvailable = hasAvailableCompute(providers)
   const { localComputeStatus, ensureLocalCompute } = useLocalComputeActivation(
@@ -354,22 +546,12 @@ export default function WelcomeView(): React.JSX.Element {
     activateLocalCompute,
     welcome.update
   )
-  const sessionDraft: WelcomeSessionDraft = {
-    cwd,
-    driveMode,
-    model,
-    taskStrategy,
-    experienceModeOverride: taskExperienceMode,
-    projectId: availableProjects.some((project) => project.id === projectChoice)
-      ? projectChoice
-      : undefined,
-    providerId,
-    routingMode,
-    unassigned: projectChoice === UNASSIGNED,
-    forkFromSdkSessionId: welcomeDraft.forkFromSdkSessionId,
-    forkCheckpointId: welcomeDraft.forkCheckpointId
-  }
-  const { busy, clearError, computeReason, error, recoveryKind, retryCompute, submit } = useWelcomeStartActions({
+  const sessionDraft = buildWelcomeSessionDraft(
+    welcome,
+    welcomeDraft,
+    taskStrategy
+  )
+  const actions = useWelcomeStartActions({
     projection,
     sessionDraft,
     text,
@@ -379,26 +561,11 @@ export default function WelcomeView(): React.JSX.Element {
     startSessionWithPrompt,
     refreshProviders
   })
-
-  const routingStrategy = driveMode === 'core'
-    ? settings.schedulerStrategy
-    : caogenDrivePolicyView(driveMode).schedulerStrategy
-  const routingStrategyLabel = t(
-    routingStrategy === 'quality'
-      ? 'routingStrategyQuality'
-      : routingStrategy === 'cost'
-        ? 'routingStrategyCost'
-        : routingStrategy === 'speed'
-          ? 'routingStrategySpeed'
-          : 'routingStrategyBalanced'
-  )
-  const modelOptions = useMemo(() => modelOptionsForProvider(
+  const { fixedModelOptions, routingStrategyLabel } = useWelcomeModelOptions(
+    welcome,
     providers,
-    providerId,
-    `${t('autoRoute')} · ${routingStrategyLabel}`,
-    model
-  ), [model, providerId, providers, routingStrategyLabel, t])
-  const fixedModelOptions = modelOptions.filter((option) => option.value !== AUTO_MODEL)
+    settings.schedulerStrategy
+  )
 
   const onRoutingModeChange = (mode: WelcomeRoutingMode): void => {
     welcome.setRoutingMode(mode, fixedModelOptions[0]?.value ?? '')
@@ -406,27 +573,27 @@ export default function WelcomeView(): React.JSX.Element {
 
   const onProjectChange = (choice: string): void => {
     welcome.setProject(choice)
-    clearError()
+    actions.clearError()
   }
 
   const browse = async (): Promise<void> => {
     const dir = await window.agentDesk.pickDirectory()
     if (!dir) return
     welcome.setPickedDirectory(dir)
-    clearError()
+    actions.clearError()
   }
 
   const startPreset = (tool: WelcomeTool): void => {
     const prompt = t(tool.promptKey)
     welcome.update({ text: prompt, taskStrategy: tool.taskStrategy })
-    if (tool.key !== 'understand') void submit(prompt, tool.taskStrategy, t(tool.labelKey))
+    if (tool.key !== 'understand') void actions.submit(prompt, tool.taskStrategy, t(tool.labelKey))
     else taRef.current?.focus()
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()
-    void submit()
+    void actions.submit()
   }
 
   return (
@@ -435,127 +602,26 @@ export default function WelcomeView(): React.JSX.Element {
         <div className="welcome-hero-inner">
           <img className="welcome-logo" src={APP_ICON_URL} alt={APP_NAME} />
           <h1 className="welcome-ask">{t('welcomeAsk')}</h1>
-          <div className="welcome-suggestion-grid">
-            {WELCOME_TOOLS.map((tool) => {
-              const ToolIcon = tool.icon
-              return (
-                <button
-                  key={tool.key}
-                  type="button"
-                  className="welcome-suggestion"
-                  data-welcome-preset={tool.key}
-                  data-preset-strategy={tool.taskStrategy}
-                  disabled={busy}
-                  title={t('welcomePresetStartsNow')}
-                  onClick={() => startPreset(tool)}
-                >
-                  <ToolIcon size={17} strokeWidth={1.8} aria-hidden="true" />
-                  <span>{t(tool.labelKey)}</span>
-                </button>
-              )
-            })}
-          </div>
+          <WelcomePresetGrid busy={actions.busy} onSelect={startPreset} />
         </div>
-
-        <div className="welcome-compose-dock">
-          <div className="welcome-composer">
-            {welcomeDraft.forkFromSdkSessionId ? (
-              <div className="welcome-fork-source">
-                {t('conversationForkSource', {
-                  title: welcomeDraft.forkSourceTitle ?? t('conversation')
-                })}
-              </div>
-            ) : (
-              <WelcomeProjectSelector
-                availableProjects={availableProjects}
-                cwd={cwd}
-                projectChoice={projectChoice}
-                onBrowse={() => void browse()}
-                onCwdChange={(nextCwd) => welcome.update({ cwd: nextCwd })}
-                onProjectChange={onProjectChange}
-              />
-            )}
-            <textarea
-              ref={taRef}
-              className="welcome-composer-input"
-              placeholder={t('welcomeInputPlaceholder')}
-              value={text}
-              rows={1}
-              onChange={(event) => welcome.update({ text: event.target.value })}
-              onKeyDown={onKeyDown}
-              autoFocus
-            />
-            <div className="welcome-composer-bar">
-              <div
-                className="welcome-experience-override"
-                role="group"
-                aria-label={t('taskExperienceMode')}
-                data-task-experience-mode={taskExperienceMode}
-              >
-                {(['assistant', 'studio'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={taskExperienceMode === mode}
-                    className={taskExperienceMode === mode ? 'active' : ''}
-                    title={t(mode === 'assistant' ? 'taskExperienceAssistantHint' : 'taskExperienceStudioHint')}
-                    onClick={() => welcome.update({ experienceModeOverride: mode })}
-                  >
-                    {t(mode === 'assistant' ? 'taskExperienceAssistant' : 'taskExperienceStudio')}
-                  </button>
-                ))}
-              </div>
-              <TaskStrategyControl
-                value={taskStrategy}
-                onChange={(nextStrategy) => welcome.update({ taskStrategy: nextStrategy })}
-                compact
-              />
-              {projection === 'assistant' && !welcomeDraft.forkFromSdkSessionId ? (
-                <AssistantComputeIndicator
-                  available={computeAvailable || localComputeStatus === 'ready'}
-                  checking={localComputeStatus === 'checking'}
-                />
-              ) : (
-                <WelcomeRoutingControls
-                  driveMode={driveMode}
-                  fixedModelOptions={fixedModelOptions}
-                  model={model}
-                  providerId={providerId}
-                  providers={providers}
-                  routingMode={routingMode}
-                  routingStrategyLabel={routingStrategyLabel}
-                  onDriveChange={welcome.setDriveMode}
-                  onModelChange={(nextModel) => welcome.update({
-                    computeSelectionSource: 'user',
-                    model: nextModel
-                  })}
-                  onProviderChange={welcome.setProvider}
-                  onRoutingModeChange={onRoutingModeChange}
-                />
-              )}
-              <button
-                type="button"
-                className="welcome-send"
-                aria-label={t('send')}
-                title={t('send')}
-                disabled={busy || !text.trim()}
-                onClick={() => void submit()}
-              >
-                {busy
-                  ? <LoaderCircle className="welcome-send-spinner" size={17} aria-hidden="true" />
-                  : <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />}
-              </button>
-            </div>
-          </div>
-          <AssistantStartNotice
-            busy={busy}
-            computeReason={computeReason}
-            error={error}
-            recoveryKind={recoveryKind}
-            onOpenSettings={() => setShowSettings(true, 'providers', 'welcome-provider-recovery')}
-            onRetry={() => void retryCompute()}
-          />
-        </div>
+        <WelcomeComposer
+          actions={actions}
+          computeAvailable={computeAvailable}
+          fixedModelOptions={fixedModelOptions}
+          localComputeStatus={localComputeStatus}
+          onBrowse={() => void browse()}
+          onKeyDown={onKeyDown}
+          onOpenSettings={() => setShowSettings(true, 'providers', 'welcome-provider-recovery')}
+          onProjectChange={onProjectChange}
+          onRoutingModeChange={onRoutingModeChange}
+          projection={projection}
+          providers={providers}
+          routingStrategyLabel={routingStrategyLabel}
+          taskStrategy={taskStrategy}
+          textareaRef={taRef}
+          welcome={welcome}
+          welcomeDraft={welcomeDraft}
+        />
       </div>
     </div>
   )

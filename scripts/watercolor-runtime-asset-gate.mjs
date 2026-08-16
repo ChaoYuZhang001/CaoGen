@@ -2,13 +2,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { inflateSync } from 'node:zlib'
-
-const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
-  let value = index
-  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
-  return value >>> 0
-})
+import { decodeRgbaPng } from './lib/png-rgba.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -219,86 +213,6 @@ function isCinnabarPixel(pixels, offset) {
   return alpha > 96 && red >= 125 && red - green >= 30 && red - blue >= 25
 }
 
-function decodeRgbaPng(bytes) {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(signature)) throw new Error('invalid PNG signature')
-  let offset = 8
-  let ihdr
-  const idat = []
-  let sawEnd = false
-  while (offset + 12 <= bytes.length) {
-    const length = bytes.readUInt32BE(offset)
-    const typeStart = offset + 4
-    const dataStart = offset + 8
-    const dataEnd = dataStart + length
-    const crcEnd = dataEnd + 4
-    if (crcEnd > bytes.length) throw new Error('truncated PNG chunk')
-    const typeBytes = bytes.subarray(typeStart, dataStart)
-    const type = typeBytes.toString('ascii')
-    const data = bytes.subarray(dataStart, dataEnd)
-    const expectedCrc = bytes.readUInt32BE(dataEnd)
-    const actualCrc = crc32(Buffer.concat([typeBytes, data]))
-    if (actualCrc !== expectedCrc) throw new Error(`PNG CRC mismatch in ${type}`)
-    if (type === 'IHDR') ihdr = parseHeader(data)
-    else if (type === 'IDAT') idat.push(data)
-    else if (type === 'IEND') { sawEnd = true; break }
-    offset = crcEnd
-  }
-  if (!ihdr || idat.length === 0 || !sawEnd) throw new Error('PNG is missing IHDR, IDAT, or IEND')
-  if (ihdr.bitDepth !== 8 || ihdr.colorType !== 6 || ihdr.compression !== 0 || ihdr.filter !== 0 || ihdr.interlace !== 0) {
-    throw new Error(`PNG must be non-interlaced 8-bit RGBA; observed bitDepth=${ihdr.bitDepth}, colorType=${ihdr.colorType}, interlace=${ihdr.interlace}`)
-  }
-  const stride = ihdr.width * 4
-  const inflated = inflateSync(Buffer.concat(idat), { maxOutputLength: (stride + 1) * ihdr.height })
-  if (inflated.length !== (stride + 1) * ihdr.height) throw new Error('unexpected PNG scanline length')
-  const pixels = Buffer.alloc(stride * ihdr.height)
-  for (let y = 0; y < ihdr.height; y += 1) {
-    const sourceOffset = y * (stride + 1)
-    const filter = inflated[sourceOffset]
-    for (let x = 0; x < stride; x += 1) {
-      const raw = inflated[sourceOffset + 1 + x]
-      const left = x >= 4 ? pixels[y * stride + x - 4] : 0
-      const up = y > 0 ? pixels[(y - 1) * stride + x] : 0
-      const upperLeft = y > 0 && x >= 4 ? pixels[(y - 1) * stride + x - 4] : 0
-      pixels[y * stride + x] = unfilter(filter, raw, left, up, upperLeft)
-    }
-  }
-  return { ...ihdr, pixels }
-}
-
-function parseHeader(data) {
-  if (data.length !== 13) throw new Error('invalid IHDR length')
-  const width = data.readUInt32BE(0)
-  const height = data.readUInt32BE(4)
-  if (width < 1 || height < 1 || width > 4096 || height > 4096) throw new Error(`invalid PNG dimensions ${width}x${height}`)
-  return {
-    width,
-    height,
-    bitDepth: data[8],
-    colorType: data[9],
-    compression: data[10],
-    filter: data[11],
-    interlace: data[12]
-  }
-}
-
-function unfilter(filter, raw, left, up, upperLeft) {
-  if (filter === 0) return raw
-  if (filter === 1) return (raw + left) & 0xff
-  if (filter === 2) return (raw + up) & 0xff
-  if (filter === 3) return (raw + Math.floor((left + up) / 2)) & 0xff
-  if (filter === 4) return (raw + paeth(left, up, upperLeft)) & 0xff
-  throw new Error(`unsupported PNG filter ${filter}`)
-}
-
-function paeth(left, up, upperLeft) {
-  const estimate = left + up - upperLeft
-  const leftDistance = Math.abs(estimate - left)
-  const upDistance = Math.abs(estimate - up)
-  const diagonalDistance = Math.abs(estimate - upperLeft)
-  return leftDistance <= upDistance && leftDistance <= diagonalDistance ? left : upDistance <= diagonalDistance ? up : upperLeft
-}
-
 function alphaMetrics({ width, height, pixels }) {
   const total = width * height
   let transparent = 0
@@ -353,10 +267,4 @@ function alphaMetrics({ width, height, pixels }) {
 
 function ratio(numerator, denominator) {
   return Number((numerator / denominator).toFixed(6))
-}
-
-function crc32(bytes) {
-  let crc = 0xffffffff
-  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
-  return (crc ^ 0xffffffff) >>> 0
 }

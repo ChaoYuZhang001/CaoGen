@@ -573,7 +573,8 @@ function providerInfrastructure(options = {}) {
       getSettings: () => ({
         failoverEnabled: true,
         fallbackProviderId: options.fallbackProviderId ?? 'anthropic-backup',
-        fallbackModel: options.fallbackModel ?? 'claude-backup'
+        fallbackModel: options.fallbackModel ?? 'claude-backup',
+        routingExpertPolicy: { allowedProviderIds: [], locality: 'any' }
       }),
       rotateProviderKey: rotate,
       pickFailoverTarget: (input) => {

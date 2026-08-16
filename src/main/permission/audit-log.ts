@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { SandboxMode, SessionMeta, ToolRiskLevel, ToolSemanticCapability } from '../../shared/types'
+import { redactSensitiveText, redactSensitiveValue } from '../security/secret-redaction'
 import { resolveWritableProjectPathSync } from '../utils/safe-project-path'
 
 export type AuditAction = 'allow' | 'deny' | 'ask' | 'execute'
@@ -90,15 +91,15 @@ function sessionAuditUserDataRoot(): string {
 
 function writeAuditRecord(logPath: string, event: ToolAuditEvent): void {
   const { input, message, fallbackReason, ...safeEvent } = event
-  const record: AuditLogRecordV1 = {
+  const record = redactSensitiveValue<AuditLogRecordV1>({
     ...safeEvent,
     schemaVersion: 1,
     ts: new Date().toISOString(),
     inputSummary: summarizeInput(event.toolName, input),
     inputDigest: input === undefined ? undefined : digest(input),
-    message: redactSensitiveText(message),
-    fallbackReason: redactSensitiveText(fallbackReason)
-  }
+    message: optionalRedactedText(message),
+    fallbackReason: optionalRedactedText(fallbackReason)
+  })
   appendDurableRecord(logPath, Buffer.from(`${JSON.stringify(record)}\n`, 'utf8'))
 }
 
@@ -223,7 +224,8 @@ function summarizeInput(toolName: string, input: unknown): string | undefined {
 }
 
 function clip(text: string): string {
-  return text.length > 500 ? `${text.slice(0, 500)}...[truncated]` : text
+  const redacted = redactSensitiveText(text)
+  return redacted.length > 500 ? `${redacted.slice(0, 500)}...[truncated]` : redacted
 }
 
 function digest(value: unknown): string {
@@ -249,10 +251,7 @@ function isSensitiveKey(value: string): boolean {
   return /(authorization|cookie|password|secret|token|api[-_]?key|credential)/i.test(value)
 }
 
-function redactSensitiveText(value: string | undefined): string | undefined {
+function optionalRedactedText(value: string | undefined): string | undefined {
   if (!value) return value
-  return value
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
-    .replace(/\b(api[-_]?key|token|password|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
-    .replace(/\b(https?:\/\/)([^\s/@]+):([^\s/@]+)@/gi, '$1[REDACTED]@')
+  return redactSensitiveText(value)
 }

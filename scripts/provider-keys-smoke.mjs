@@ -4,11 +4,13 @@ import path from 'node:path'
 const repoRoot = process.cwd()
 const brokerSource = read('src/main/providerCredentialBroker.ts')
 const providers = read('src/main/providers.ts')
+const durableFile = read('src/main/durable-file.ts')
 const providerStoreRepository = read('src/main/provider/providerStoreRepository.ts')
 const providerCredentialHeaders = read('src/main/provider/providerCredentialHeaders.ts')
 const types = read('src/shared/types.ts')
 const editor = read('src/renderer/src/components/ProviderEditor.tsx')
 const settings = read('src/renderer/src/components/SettingsModal.tsx')
+const providerCredentialFields = read('src/renderer/src/components/settings/ProviderCredentialFields.tsx')
 const providerSavedKeys = read('src/renderer/src/components/settings/ProviderSavedKeys.tsx')
 const providerList = read('src/renderer/src/components/settings/ProviderList.tsx')
 const controlCenter = read('src/renderer/src/controlCenter.ts')
@@ -94,7 +96,10 @@ staticAssert(
   'providers.ts must filter session-only credentials out of persisted snapshots'
 )
 staticAssert(
-  providerStoreRepository.includes('renameSync('),
+  providerStoreRepository.includes('writeDurableFileSync(')
+    && durableFile.includes('fsyncSync(descriptor)')
+    && durableFile.includes('renameSync(temporary, target)')
+    && durableFile.includes('syncDirectorySync(parent)'),
   'Provider Store repository must atomically replace provider storage'
 )
 staticAssert(
@@ -129,7 +134,9 @@ staticAssert(
 )
 staticAssert(
   providerCredentialHeaders.includes('export function resolvedProviderCredentialHeaderNames')
-    && providerCredentialHeaders.includes("provider?.engine === 'anthropic' ? 'x-api-key' : 'authorization'"),
+    && providerCredentialHeaders.includes("if (provider?.engine === 'anthropic') return ['x-api-key']")
+    && providerCredentialHeaders.includes("if (provider?.engine === 'gemini') return ['x-goog-api-key']")
+    && providerCredentialHeaders.includes("return ['authorization']"),
   'API-key Providers must have engine-aware managed credential-header defaults'
 )
 staticAssert(
@@ -143,7 +150,7 @@ staticAssert(
   'failed credential migration writes must fall back to honest legacy runtime state'
 )
 staticAssert(
-  /!firstRun[\s\S]{0,100}chmodSync\(file, 0o600\)/.test(providerStoreRepository),
+  /process\.platform !== 'win32'\) chmodSync\(file, 0o600\)/.test(providerStoreRepository),
   'existing provider files must have permissions tightened on load'
 )
 staticAssert(
@@ -163,8 +170,10 @@ for (const file of walk(path.join(repoRoot, 'src/main'))) {
 }
 
 staticAssert(
-  editor.includes("import ProviderSavedKeys from './settings/ProviderSavedKeys'")
-    && editor.includes('<ProviderSavedKeys')
+  editor.includes("import ProviderCredentialFields")
+    && editor.includes('<ProviderCredentialFields')
+    && providerCredentialFields.includes("import ProviderSavedKeys")
+    && providerCredentialFields.includes('<ProviderSavedKeys')
     && providerSavedKeys.includes('function SavedKeyRow'),
   'ProviderEditor must render saved key metadata rows'
 )
@@ -173,13 +182,13 @@ staticAssert(
   'ProviderEditor must show key failure metadata'
 )
 staticAssert(
-  editor.includes('additionalApiKeysLabel'),
+  providerCredentialFields.includes('additionalApiKeysLabel'),
   'ProviderEditor must expose additional API key input'
 )
-staticAssert(editor.includes('type="password"'), 'ProviderEditor must keep API key entry as a password field')
+staticAssert(providerCredentialFields.includes('type="password"'), 'ProviderEditor must keep API key entry as a password field')
 staticAssert(!editor.includes('encryptedToken'), 'ProviderEditor must not render encrypted token fields')
 staticAssert(
-  editor.includes('credentialStorage'),
+  providerCredentialFields.includes('credentialStorage'),
   'ProviderEditor must render credential storage state'
 )
 staticAssert(
@@ -206,7 +215,7 @@ staticAssert(
 )
 staticAssert(
   editor.includes("window.confirm(t('providerAuthModeNoneDeleteKeysConfirm'")
-    && editor.includes("providerAuthModeNoneDeletesKeysHint")
+    && providerCredentialFields.includes("providerAuthModeNoneDeletesKeysHint")
     && editor.includes('requiresCredentialDeletionConfirmation(provider, authMode, existingCredentialCount)')
     && editor.includes("if (state.authMode === 'none') return {}")
     && editor.includes('...buildProviderCredentialPatch(state)'),

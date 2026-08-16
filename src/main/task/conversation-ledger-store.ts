@@ -59,6 +59,12 @@ export interface ConversationLedgerProjectSessionInventory {
   sdkSessionIds: string[]
 }
 
+export interface ConversationLedgerSessionPurgeResult {
+  streams: number
+  generations: number
+  events: number
+}
+
 interface StreamRow {
   sdkSessionId: string
   originSessionId: string
@@ -353,6 +359,65 @@ export function purgeConversationLedgerProject(
   db.run(`DELETE FROM conversation_ledger_streams WHERE sdk_session_id IN (${placeholders})`, sdkSessionIds)
   verifyConversationLedgerArchive(db)
   return { streams: sdkSessionIds.length, generations, events }
+}
+
+/**
+ * Conversation archive rows are private Session content. Canonical workflow
+ * records intentionally remain untouched when a user deletes visible history.
+ */
+export function purgeConversationLedgerSession(
+  db: WorkflowLedgerDatabase,
+  sdkSessionIdInput: string
+): ConversationLedgerSessionPurgeResult {
+  setupConversationLedgerSchema(db)
+  verifyConversationLedgerArchive(db)
+  const sdkSessionId = requiredText(sdkSessionIdInput, 'Conversation Ledger purge sdkSessionId')
+  const streams = countRows(
+    db,
+    'SELECT COUNT(*) AS count FROM conversation_ledger_streams WHERE sdk_session_id = ?',
+    [sdkSessionId]
+  )
+  if (streams === 0) return { streams: 0, generations: 0, events: 0 }
+  const generations = countRows(
+    db,
+    'SELECT COUNT(*) AS count FROM conversation_ledger_generations WHERE sdk_session_id = ?',
+    [sdkSessionId]
+  )
+  const events = countRows(
+    db,
+    'SELECT COUNT(*) AS count FROM conversation_ledger_events WHERE sdk_session_id = ?',
+    [sdkSessionId]
+  )
+  db.run('DELETE FROM conversation_ledger_events WHERE sdk_session_id = ?', [sdkSessionId])
+  db.run('DELETE FROM conversation_ledger_generations WHERE sdk_session_id = ?', [sdkSessionId])
+  db.run('DELETE FROM conversation_ledger_streams WHERE sdk_session_id = ?', [sdkSessionId])
+  verifyConversationLedgerArchive(db)
+  return { streams, generations, events }
+}
+
+export function countConversationLedgerSessionResiduals(
+  db: WorkflowLedgerDatabase,
+  sdkSessionIdInput: string
+): ConversationLedgerSessionPurgeResult {
+  setupConversationLedgerSchema(db)
+  const sdkSessionId = requiredText(sdkSessionIdInput, 'Conversation Ledger residual sdkSessionId')
+  return {
+    streams: countRows(
+      db,
+      'SELECT COUNT(*) AS count FROM conversation_ledger_streams WHERE sdk_session_id = ?',
+      [sdkSessionId]
+    ),
+    generations: countRows(
+      db,
+      'SELECT COUNT(*) AS count FROM conversation_ledger_generations WHERE sdk_session_id = ?',
+      [sdkSessionId]
+    ),
+    events: countRows(
+      db,
+      'SELECT COUNT(*) AS count FROM conversation_ledger_events WHERE sdk_session_id = ?',
+      [sdkSessionId]
+    )
+  }
 }
 
 export function countConversationLedgerProjectResiduals(

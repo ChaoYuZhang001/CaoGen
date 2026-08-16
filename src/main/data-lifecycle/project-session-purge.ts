@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   existsSync,
   lstatSync,
+  readdirSync,
   readFileSync,
   rmSync
 } from 'node:fs'
@@ -17,6 +18,20 @@ import {
   sessionCreationJournalRecordsFromDocument
 } from '../session-creation-journal-format'
 import { writeDurableFileSync } from '../durable-file'
+import {
+  inspectManagedWorktreeRegistryRecord,
+  purgeRemovedManagedWorktreeRecordAtRoot
+} from '../managed-worktree-lifecycle'
+import { TaskPlanContractStore } from '../task/task-plan-contract-store'
+import { purgeTaskPlanLedgerForSession } from '../task/task-plan-ledger'
+import {
+  countWorktreeMergeReceiptsForSession,
+  purgeWorktreeMergeReceipts
+} from '../worktrees'
+import {
+  countOwnedProjectTestEvidence,
+  purgeOwnedProjectTestEvidence
+} from './project-test-evidence'
 
 export interface ProjectSessionInventory {
   sessionIds: string[]
@@ -24,6 +39,13 @@ export interface ProjectSessionInventory {
 }
 
 export interface ProjectSessionPurgeResult extends ProjectSessionInventory {
+  removedRecords: Record<string, number>
+  removedPaths: string[]
+}
+
+export interface StandaloneSessionPurgeResult {
+  sessionId: string
+  sdkSessionId: string
   removedRecords: Record<string, number>
   removedPaths: string[]
 }
@@ -102,6 +124,7 @@ export function purgeProjectSessionData(
   const inventory = collectProjectSessionInventory(root, project, knownSessionIds)
   const sessionIds = new Set(inventory.sessionIds)
   const sdkSessionIds = new Set([...inventory.sdkSessionIds, ...knownSdkSessionIds.map((value) => requiredId(value, 'sdkSessionId'))])
+  assertProjectSessionPurgeable(root, sessionIds)
   const removedRecords: Record<string, number> = {}
   removedRecords.history = filterHistoryDocument(join(root, 'sessions.json'), (record) =>
     !matchesSessionOrProject(record, sessionIds, project))
@@ -113,16 +136,30 @@ export function purgeProjectSessionData(
 
   const removedPaths: string[] = []
   for (const sessionId of sessionIds) {
-    const component = safeComponent(sessionId, 'sessionId')
+    const component = sessionFileComponent(sessionId)
+    if (!component) continue
     removeOwned(root, join(root, 'attachments', component), removedPaths)
+    removeOwned(root, join(root, 'browser-annotations', component), removedPaths)
     removeOwned(root, join(root, 'preview-annotations', component), removedPaths)
     removeOwned(root, join(root, 'task-audit', `${component}.jsonl`), removedPaths)
     removeOwned(root, join(root, 'patches', `${component}.patch`), removedPaths)
+    removeOwnedTimestampedPatches(root, component, removedPaths)
   }
   for (const sdkSessionId of sdkSessionIds) {
     const component = safeComponent(sdkSessionId, 'sdkSessionId')
     removeOwned(root, join(root, 'transcripts', `${component}.jsonl`), removedPaths)
     removeOwned(root, join(root, 'event-receipts', `${component}.jsonl`), removedPaths)
+  }
+  const removedTestEvidence = purgeOwnedProjectTestEvidence(root, project, sessionIds)
+  removedRecords.projectTestEvidence = removedTestEvidence.length
+  removedPaths.push(...removedTestEvidence)
+  removedRecords.managedWorktreeRegistry = 0
+  removedRecords.worktreeMergeReceipts = 0
+  for (const sessionId of sessionIds) {
+    if (purgeRemovedManagedWorktreeRecordAtRoot(sessionId, root)) {
+      removedRecords.managedWorktreeRegistry += 1
+    }
+    removedRecords.worktreeMergeReceipts += purgeWorktreeMergeReceipts(sessionId, root)
   }
   removeOwned(root, workspaceExecutionRoot(root, project), removedPaths)
   return {
@@ -148,16 +185,24 @@ export function scanProjectSessionResiduals(
     activeSessions: activeSessionArrayDocument(join(root, 'active-sessions.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
     sessionCreationJournal: sessionCreationArrayDocument(join(root, 'session-creation-journal.json')).filter((record) => matchesSessionOrProject(record, sessionIds, project)).length,
     taskPlans: countTaskPlanSessions(join(root, 'task-plans', 'task-plan-contracts.json'), sessionIds, project),
+    projectTestEvidence: countOwnedProjectTestEvidence(root, project, sessionIds),
     ownedPaths: 0
   }
   for (const sessionId of sessionIds) {
-    const component = safeComponent(sessionId, 'sessionId')
+    const component = sessionFileComponent(sessionId)
+    if (!component) continue
     for (const target of [
       join(root, 'attachments', component),
+      join(root, 'browser-annotations', component),
       join(root, 'preview-annotations', component),
       join(root, 'task-audit', `${component}.jsonl`),
       join(root, 'patches', `${component}.patch`)
     ]) if (existsSync(target)) counts.ownedPaths += 1
+    counts.ownedPaths += countTimestampedPatches(root, component)
+    const worktree = inspectManagedWorktreeRegistryRecord(sessionId, root)
+    if ('error' in worktree) throw new Error(worktree.error)
+    if (worktree.record) counts.ownedPaths += 1
+    counts.ownedPaths += countWorktreeMergeReceiptsForSession(sessionId, root)
   }
   for (const sdkSessionId of sdkSessionIds) {
     const component = safeComponent(sdkSessionId, 'sdkSessionId')
@@ -167,6 +212,116 @@ export function scanProjectSessionResiduals(
     ]) if (existsSync(target)) counts.ownedPaths += 1
   }
   if (existsSync(workspaceExecutionRoot(root, project))) counts.ownedPaths += 1
+  return counts
+}
+
+export function assertProjectSessionPurgeable(
+  rootDir: string,
+  sessionIdsInput: Iterable<string>
+): void {
+  const root = requiredRoot(rootDir)
+  for (const sessionIdInput of sessionIdsInput) {
+    const sessionId = requiredId(sessionIdInput, 'sessionId')
+    const lookup = inspectManagedWorktreeRegistryRecord(sessionId, root)
+    if ('error' in lookup) throw new Error(lookup.error)
+    if (lookup.record?.state === 'active') {
+      throw new Error(`Project Session ${sessionId} still owns an active managed worktree`)
+    }
+  }
+}
+
+/**
+ * Deletes private Session projections while preserving canonical Run, Attempt,
+ * Artifact, Evidence, and budget records owned by their Workflow contracts.
+ */
+export async function purgeStandaloneSessionData(
+  rootDir: string,
+  sessionIdInput: string,
+  sdkSessionIdInput: string
+): Promise<StandaloneSessionPurgeResult> {
+  const stores = await purgeStandaloneSessionStores(rootDir, sessionIdInput, sdkSessionIdInput)
+  const removedPaths = purgeStandaloneSessionFiles(rootDir, sessionIdInput, sdkSessionIdInput)
+  return { ...stores, removedPaths }
+}
+
+export async function purgeStandaloneSessionStores(
+  rootDir: string,
+  sessionIdInput: string,
+  sdkSessionIdInput: string
+): Promise<Omit<StandaloneSessionPurgeResult, 'removedPaths'>> {
+  const root = requiredRoot(rootDir)
+  const sessionId = requiredId(sessionIdInput, 'sessionId')
+  const sdkSessionId = requiredId(sdkSessionIdInput, 'sdkSessionId')
+  const removedRecords: Record<string, number> = {}
+  removedRecords.history = filterHistoryDocument(join(root, 'sessions.json'), (record) =>
+    !matchesStandaloneSession(record, sessionId, sdkSessionId))
+  removedRecords.activeSessions = filterActiveSessionDocument(join(root, 'active-sessions.json'), (record) =>
+    !matchesStandaloneSession(record, sessionId, sdkSessionId))
+  removedRecords.sessionCreationJournal = filterSessionCreationDocument(
+    join(root, 'session-creation-journal.json'),
+    (record) => !matchesStandaloneSession(record, sessionId, sdkSessionId)
+  )
+  removedRecords.taskPlanLedgerEvents = await purgeTaskPlanLedgerForSession(root, sessionId)
+  removedRecords.taskPlans = new TaskPlanContractStore(() => root).deleteSession(sessionId) ? 1 : 0
+
+  return { sessionId, sdkSessionId, removedRecords }
+}
+
+export function purgeStandaloneSessionFiles(
+  rootDir: string,
+  sessionIdInput: string,
+  sdkSessionIdInput: string
+): string[] {
+  const root = requiredRoot(rootDir)
+  const sessionId = requiredId(sessionIdInput, 'sessionId')
+  const sdkSessionId = requiredId(sdkSessionIdInput, 'sdkSessionId')
+  const component = safeComponent(sessionId, 'sessionId')
+  const sdkComponent = safeComponent(sdkSessionId, 'sdkSessionId')
+  const removedPaths: string[] = []
+  for (const target of [
+    join(root, 'attachments', component),
+    join(root, 'browser-annotations', component),
+    join(root, 'preview-annotations', component),
+    join(root, 'task-audit', `${component}.jsonl`),
+    join(root, 'patches', `${component}.patch`),
+    join(root, 'transcripts', `${sdkComponent}.jsonl`),
+    join(root, 'event-receipts', `${sdkComponent}.jsonl`)
+  ]) removeOwned(root, target, removedPaths)
+  removeOwnedTimestampedPatches(root, component, removedPaths)
+  return removedPaths.sort()
+}
+
+export function scanStandaloneSessionResiduals(
+  rootDir: string,
+  sessionIdInput: string,
+  sdkSessionIdInput: string
+): Record<string, number> {
+  const root = requiredRoot(rootDir)
+  const sessionId = requiredId(sessionIdInput, 'sessionId')
+  const sdkSessionId = requiredId(sdkSessionIdInput, 'sdkSessionId')
+  const component = safeComponent(sessionId, 'sessionId')
+  const sdkComponent = safeComponent(sdkSessionId, 'sdkSessionId')
+  const taskPlans = new TaskPlanContractStore(() => root)
+  const counts: Record<string, number> = {
+    history: historyArrayDocument(join(root, 'sessions.json')).filter((record) =>
+      matchesStandaloneSession(record, sessionId, sdkSessionId)).length,
+    activeSessions: activeSessionArrayDocument(join(root, 'active-sessions.json')).filter((record) =>
+      matchesStandaloneSession(record, sessionId, sdkSessionId)).length,
+    sessionCreationJournal: sessionCreationArrayDocument(join(root, 'session-creation-journal.json')).filter((record) =>
+      matchesStandaloneSession(record, sessionId, sdkSessionId)).length,
+    taskPlans: taskPlans.hasPlan(sessionId) ? 1 : 0,
+    ownedPaths: 0
+  }
+  for (const target of [
+    join(root, 'attachments', component),
+    join(root, 'browser-annotations', component),
+    join(root, 'preview-annotations', component),
+    join(root, 'task-audit', `${component}.jsonl`),
+    join(root, 'patches', `${component}.patch`),
+    join(root, 'transcripts', `${sdkComponent}.jsonl`),
+    join(root, 'event-receipts', `${sdkComponent}.jsonl`)
+  ]) if (existsSync(target)) counts.ownedPaths += 1
+  counts.ownedPaths += countTimestampedPatches(root, component)
   return counts
 }
 
@@ -188,6 +343,18 @@ function belongsToProject(record: Record<string, unknown>, projectId: string): b
 
 function sessionIdOf(record: Record<string, unknown>): string | undefined {
   return stringAt(record, 'sessionId') ?? stringAt(record, 'id') ?? stringAt(nested(record, 'draft', 'baseMeta'), 'id')
+}
+
+function sdkSessionIdOf(record: Record<string, unknown>): string | undefined {
+  return stringAt(record, 'sdkSessionId') ?? stringAt(nested(record, 'draft', 'baseMeta'), 'sdkSessionId')
+}
+
+function matchesStandaloneSession(
+  record: Record<string, unknown>,
+  sessionId: string,
+  sdkSessionId: string
+): boolean {
+  return sessionIdOf(record) === sessionId || sdkSessionIdOf(record) === sdkSessionId
 }
 
 function filterSessionCreationDocument(file: string, keep: (record: Record<string, unknown>) => boolean): number {
@@ -220,15 +387,18 @@ function purgeTaskPlanSessions(file: string, sessionIds: ReadonlySet<string>, pr
   assertTaskPlanStoreVersion(state, file)
   const sessions = objectAt(state, 'sessions')
   let removed = 0
+  let removedEntries = 0
   for (const [sessionId, value] of Object.entries(sessions)) {
     const record = isRecord(value) ? value : {}
     if (sessionIds.has(sessionId) || taskPlanBelongsToProject(record, projectId)) {
       delete sessions[sessionId]
       removed += 1
+      removedEntries += (Array.isArray(record.versions) ? record.versions.length : 0) +
+        (Array.isArray(record.approvalEvents) ? record.approvalEvents.length : 0)
     }
   }
   if (removed > 0) {
-    if (typeof state.revision === 'number') state.revision += 1
+    if (typeof state.revision === 'number') state.revision -= removedEntries
     atomicJsonWrite(file, state)
   }
   return removed
@@ -316,6 +486,22 @@ function removeOwned(root: string, target: string, removed: string[]): void {
   removed.push(resolved)
 }
 
+function removeOwnedTimestampedPatches(root: string, component: string, removed: string[]): void {
+  const directory = join(root, 'patches')
+  if (!existsSync(directory)) return
+  for (const name of readdirSync(directory)) {
+    if (!name.startsWith(`${component}-`) || !name.endsWith('.patch')) continue
+    removeOwned(root, join(directory, name), removed)
+  }
+}
+
+function countTimestampedPatches(root: string, component: string): number {
+  const directory = join(root, 'patches')
+  if (!existsSync(directory)) return 0
+  return readdirSync(directory).filter((name) =>
+    name.startsWith(`${component}-`) && name.endsWith('.patch')).length
+}
+
 function atomicJsonWrite(file: string, value: unknown): void {
   writeDurableFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
@@ -323,6 +509,11 @@ function atomicJsonWrite(file: string, value: unknown): void {
 function safeComponent(value: string, label: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(value) || value === '.' || value === '..') throw new Error(`${label} is not a safe path component`)
   return value
+}
+
+function sessionFileComponent(sessionId: string): string | undefined {
+  if (/^operation:[A-Za-z0-9._-]+$/.test(sessionId)) return undefined
+  return safeComponent(sessionId, 'sessionId')
 }
 
 function requiredRoot(value: string): string {

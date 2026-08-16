@@ -1,5 +1,5 @@
 import { execFileSync, fork } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -43,7 +43,8 @@ async function runParent() {
     mkdirSync(electronDir, { recursive: true })
     writeFileSync(path.join(electronDir, 'index.js'), `export const app = { getPath: () => ${JSON.stringify(userData)} }\n`)
     writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n')
-    const compiledPath = findCompiledModule(outDir)
+    const compiledPath = path.join(outDir, 'main', 'transcript.js')
+    assert(existsSync(compiledPath), `compiled transcript.js not found at ${compiledPath}`)
     const transcript = await import(pathToFileURL(compiledPath).href)
 
     const crashed = await forkWorker('--worker-crash', compiledPath)
@@ -169,19 +170,6 @@ function forkWorker(workerMode, compiledPath) {
       resolve({ ...evidence, processExited: true, exitCode: code, exitSignal: signal })
     })
   })
-}
-
-function findCompiledModule(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const fullPath = path.join(root, entry.name)
-    if (entry.isDirectory()) {
-      const found = findCompiledModule(fullPath)
-      if (found) return found
-    } else if (entry.isFile() && entry.name === 'transcript.js') {
-      return fullPath
-    }
-  }
-  throw new Error(`compiled transcript.js not found under ${root}`)
 }
 
 function assertEqual(actual, expected) {

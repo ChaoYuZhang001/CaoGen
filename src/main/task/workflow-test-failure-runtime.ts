@@ -78,6 +78,7 @@ export interface WorkflowTestFailureContext {
 export interface WorkflowTestFailureRuntimeDependencies {
   context(sessionId: string): Omit<WorkflowTestFailureContext, 'event' | 'identity'> | undefined
   captureEventBarrier(sessionId: string, identity: AgentEventIdentity): () => Promise<void>
+  onAcceptanceFailure?(result: WorkflowAcceptanceFailureResult): Promise<void> | void
   rootDir?: string
 }
 
@@ -245,6 +246,7 @@ export class WorkflowTestFailureRuntime {
     return this.enqueue(sessionId, plan.input.sourceEventId, async () => {
       await persistEventBarrier()
       const ingress = await ingestWorkflowAcceptanceFailure(plan.input, this.dependencies.rootDir)
+      await this.dependencies.onAcceptanceFailure?.(ingress)
       return { plan, ingress }
     })
   }

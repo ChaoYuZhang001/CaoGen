@@ -564,16 +564,31 @@ async function assertRetiredIdentity(runtime, fixture) {
     }
   }
   const currentWorker = await store.getDigitalWorker(worker.id)
+  await assertRejects(
+    store.retireDigitalWorker(worker.id, {
+      expectedRevision: currentWorker.revision,
+      now: now + 1_999
+    }),
+    /cannot retire with active Assignment/,
+    'retirement rejects an active Assignment'
+  )
+  const releasedAssignment = await store.releaseAssignment(
+    retireAssignment.id,
+    { expectedRevision: retireAssignment.revision },
+    { now: now + 2_000, reason: 'retirement identity test' }
+  )
+  assertEqual(releasedAssignment.status, 'released', 'retirement test releases the active Assignment first')
+  const releasableWorker = await store.getDigitalWorker(worker.id)
   await store.retireDigitalWorker(worker.id, {
-    expectedRevision: currentWorker.revision,
-    now: now + 2_000
+    expectedRevision: releasableWorker.revision,
+    now: now + 2_001
   })
   assertDenied(runtime.policy.preflightDigitalWorkerAction({
     rootDir: identityRoot,
     meta: retireMeta,
     action: 'provider_send',
-    now: now + 2_001
-  }), 'worker_unavailable', 'retired original DigitalWorker fails closed')
+    now: now + 2_002
+  }), 'assignment_conflict', 'retired original DigitalWorker with released Assignment fails closed')
 }
 
 async function assertUnscopedIdentity(runtime, fixture) {

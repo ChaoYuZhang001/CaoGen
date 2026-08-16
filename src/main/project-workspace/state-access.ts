@@ -1,10 +1,12 @@
 import type {
   Goal,
+  ProjectMember,
   ProjectSquad,
   ProjectWorkspace,
   ProjectWorkspaceState,
   WorkItem,
-  WorkItemComment
+  WorkItemComment,
+  WorkItemSharedApproval
 } from '../../shared/project-workspace-types'
 import { ProjectWorkspaceError } from './errors'
 
@@ -41,6 +43,18 @@ export function commentFrom(state: ProjectWorkspaceState, id: string): WorkItemC
   const comment = state.comments.find((candidate) => candidate.id === id)
   if (!comment) throw new ProjectWorkspaceError('not_found', `comment ${id} was not found`)
   return comment
+}
+
+export function memberFrom(state: ProjectWorkspaceState, id: string): ProjectMember {
+  const member = state.members.find((candidate) => candidate.id === id)
+  if (!member) throw new ProjectWorkspaceError('not_found', `member ${id} was not found`)
+  return member
+}
+
+export function sharedApprovalFrom(state: ProjectWorkspaceState, id: string): WorkItemSharedApproval {
+  const approval = state.sharedApprovals.find((candidate) => candidate.id === id)
+  if (!approval) throw new ProjectWorkspaceError('not_found', `shared approval ${id} was not found`)
+  return approval
 }
 
 export function assertProject(state: ProjectWorkspaceState, projectId: string, allowDeleted = false): ProjectWorkspace {

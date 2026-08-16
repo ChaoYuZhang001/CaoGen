@@ -1,4 +1,5 @@
 import { loadSkills, serializeSkill, type SkillDefinition, type SkillLoadResult } from './skill-loader'
+import { authorizeSkillRuntime, filterAuthorizedSkills } from '../plugin/plugin-runtime-authorization'
 
 export interface SkillMatch {
   skill: SkillDefinition
@@ -23,7 +24,7 @@ export class SkillManager {
   }
 
   reload(): SkillLoadResult {
-    const result = loadSkills(this.projectRoot)
+    const result = filterAuthorizedSkills(this.projectRoot, loadSkills(this.projectRoot))
     this.skills = result.skills
     this.diagnostics = result.diagnostics
     return result
@@ -51,7 +52,13 @@ export class SkillManager {
 
   exportSkill(skillId: string): string | null {
     const skill = this.list().find((item) => item.id === skillId)
-    return skill ? serializeSkill(skill) : null
+    if (!skill) return null
+    authorizeSkillRuntime(this.projectRoot, skill)
+    return serializeSkill(skill)
+  }
+
+  authorize(skill: SkillDefinition): void {
+    authorizeSkillRuntime(this.projectRoot, skill)
   }
 }
 

@@ -37,8 +37,8 @@ try {
     if (request === 'electron') return { app: { getPath: () => userDataRoot } }
     return originalLoad.call(this, request, parent, isMain)
   }
-  const modelStats = require(path.join(buildDir, 'modelStats.js'))
-  const pluginRegistry = require(path.join(buildDir, 'pluginRegistry.js'))
+  const modelStats = require(path.join(buildDir, 'main', 'modelStats.js'))
+  const pluginRegistry = require(path.join(buildDir, 'main', 'pluginRegistry.js'))
   const backup = require(path.join(backupBuildDir, 'main', 'utils', 'backup.js'))
 
   for (const stage of ['write', 'fsync', 'rename']) {

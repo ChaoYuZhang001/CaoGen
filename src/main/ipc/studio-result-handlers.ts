@@ -1,5 +1,9 @@
-import { BrowserWindow, dialog, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { basename } from 'node:path'
+import { app, BrowserWindow, dialog, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import JSZip from 'jszip'
+import { createHash } from 'node:crypto'
+import { lstat, readFile } from 'node:fs/promises'
+import { basename, extname } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createProductionProjectAggregateService } from '../project-aggregate'
 import { writeDurableFile } from '../task/workflow-ledger-migration-storage'
 import { sessionManager } from '../sessionManager'
@@ -14,6 +18,7 @@ import { queryPersistedModelAttempts } from '../task/model-attempt-api'
 import type { ModelAttemptRecord } from '../../shared/model-attempt-types'
 import type { StudioAuditTimelineQuery } from '../../shared/studio-result-types'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
+import { registerSessionProducedArtifacts } from '../task/session-artifact-producer'
 
 type StudioResultAction = 'get' | 'audit' | 'export' | 'save'
 
@@ -88,13 +93,174 @@ async function saveStudioResult(
   const win = BrowserWindow.fromWebContents(sender) ?? BrowserWindow.getAllWindows()[0]
   const title = snapshot.workItems[0]?.title ?? snapshot.goal?.title ?? snapshot.workspace?.name ?? 'delivery'
   const result = await dialog.showSaveDialog(win, {
-    title: '导出 CaoGen 结果与交付报告',
-    defaultPath: `caogen-result-${safeFileStem(title)}-${new Date(snapshot.generatedAt).toISOString().slice(0, 10)}.json`,
-    filters: [{ name: 'JSON', extensions: ['json'] }]
+    title: '导出 CaoGen 可移植交付包',
+    defaultPath: `caogen-delivery-${safeFileStem(title)}-${new Date(snapshot.generatedAt).toISOString().slice(0, 10)}.zip`,
+    filters: [{ name: 'CaoGen delivery package', extensions: ['zip'] }]
   })
   if (result.canceled || !result.filePath) return { canceled: true }
-  await writeDurableFile(result.filePath, Buffer.from(json, 'utf8'), { replace: true })
-  return { canceled: false, filePath: result.filePath, exportDigest }
+  const creatingRun = [...snapshot.runs]
+    .filter((run) => run.sessionId === snapshot.scope.sessionId)
+    .sort((left, right) => left.updatedAt - right.updatedAt || left.id.localeCompare(right.id))
+    .at(-1)
+  if (!creatingRun || !snapshot.scope.workspaceId) {
+    throw new Error('STUDIO_RESULT_RUN_REQUIRED: canonical Project-owned Run is required before saving a delivery report')
+  }
+  const packageBytes = await buildPortableDeliveryPackage(snapshot, json, exportDigest)
+  await writeDurableFile(result.filePath, packageBytes, { replace: true })
+  const [binding] = await registerSessionProducedArtifacts({
+    sessionId: snapshot.scope.sessionId,
+    projectId: snapshot.scope.workspaceId,
+    creatingRunId: creatingRun.id,
+    producerInvocationId: `studio-result-export:${exportDigest}`,
+    artifacts: [{
+      kind: 'release_package',
+      title: `CaoGen portable delivery package: ${title}`,
+      content: { storageKind: 'blob', bytes: packageBytes },
+      lineageKey: [
+        'studio-result',
+        snapshot.scope.level,
+        snapshot.scope.workspaceId,
+        snapshot.scope.goalId ?? '-',
+        snapshot.scope.workItemId ?? '-'
+      ].join(':'),
+      mediaType: 'application/zip',
+      producer: 'studio_result_export',
+      metadata: {
+        exportDigest,
+        resultDigest: snapshot.verification.resultDigest,
+        aggregateDigest: snapshot.verification.aggregateDigest,
+        scopeLevel: snapshot.scope.level,
+        openItems: snapshot.summary.openItems,
+        risks: snapshot.summary.risks,
+        packageFormat: 'caogen.studio-delivery.v1'
+      },
+      evidenceKind: 'delivery_check',
+      evidenceSummary: 'The saved portable package contains the canonical result snapshot, delivery manifest and verified Artifact bytes where available.',
+      evidenceVerifier: 'studio-result-export',
+      acceptanceCriterion: 'The portable package must preserve the canonical result bytes, manifest, Artifact digests, ownership and available delivery files.',
+      externalLocation: {
+        kind: 'external',
+        uri: pathToFileURL(result.filePath).href,
+        metadata: { userExport: true }
+      },
+      createdAt: snapshot.generatedAt
+    }],
+    rootInput: {
+      workflowRoot: app.getPath('userData'),
+      workspaceRoot: app.getPath('userData')
+    }
+  })
+  return {
+    canceled: false,
+    filePath: result.filePath,
+    exportDigest,
+    workflowArtifactId: binding.artifactId,
+    workflowEvidenceId: binding.evidenceId,
+    workflowAcceptanceId: binding.acceptanceId
+  }
+}
+
+const PORTABLE_ARTIFACT_MAX_BYTES = 128 * 1024 * 1024
+const PORTABLE_PACKAGE_MAX_BYTES = 512 * 1024 * 1024
+
+async function buildPortableDeliveryPackage(
+  snapshot: Awaited<ReturnType<typeof studioResultSnapshotForSession>>,
+  resultJson: string,
+  exportDigest: string
+): Promise<Buffer> {
+  const zip = new JSZip()
+  zip.file('result.json', resultJson)
+  const files: Array<Record<string, unknown>> = []
+  const includedPathByDigest = new Map<string, string>()
+  let includedBytes = 0
+
+  for (const [index, artifact] of snapshot.artifacts.entries()) {
+    const location = artifact.locations.find((candidate) =>
+      candidate.availability === 'available' && typeof candidate.path === 'string' && candidate.path.length > 0)
+    const entry: Record<string, unknown> = {
+      artifactId: artifact.id,
+      title: artifact.title,
+      kind: artifact.kind,
+      version: artifact.version,
+      deliveryScope: artifact.deliveryScope,
+      digest: artifact.digest,
+      mediaType: artifact.mediaType,
+      locationId: location?.id,
+      locationKind: location?.kind,
+      sizeBytes: location?.sizeBytes
+    }
+    if (location?.path) {
+      try {
+        const info = await lstat(location.path)
+        if (info.isFile() && !info.isSymbolicLink() && info.size <= PORTABLE_ARTIFACT_MAX_BYTES) {
+          const bytes = await readFile(location.path)
+          const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+          const withinPackageLimit = includedBytes + bytes.byteLength <= PORTABLE_PACKAGE_MAX_BYTES
+          if (digest === artifact.digest && (withinPackageLimit || includedPathByDigest.has(artifact.digest))) {
+            const fileDigest = artifact.digest
+            const existingPath = includedPathByDigest.get(fileDigest)
+            const extension = safeArtifactExtension(location.path, artifact.mediaType)
+            const relativePath = existingPath ?? `artifacts/${String(index + 1).padStart(3, '0')}-${safeFileStem(artifact.title)}${extension}`
+            if (!existingPath) {
+              zip.file(relativePath, bytes)
+              includedPathByDigest.set(fileDigest, relativePath)
+              includedBytes += bytes.byteLength
+            }
+            entry.includedPath = relativePath
+            entry.contentIncluded = true
+            entry.contentDeduplicated = Boolean(existingPath)
+          } else {
+            entry.contentStatus = digest === artifact.digest ? 'package_limit' : 'digest_mismatch'
+          }
+        } else {
+          entry.contentStatus = info.isFile() && !info.isSymbolicLink() ? 'artifact_too_large' : 'not_regular_file'
+        }
+      } catch {
+        entry.contentStatus = 'unreadable'
+      }
+    } else {
+      entry.contentStatus = 'no_available_file_location'
+    }
+    if (entry.contentIncluded !== true) entry.contentIncluded = false
+    files.push(entry)
+  }
+
+  const manifest = {
+    schemaVersion: 1,
+    format: 'caogen.studio-delivery.v1',
+    generatedAt: snapshot.generatedAt,
+    scope: snapshot.scope,
+    exportDigest,
+    resultDigest: snapshot.verification.resultDigest,
+    aggregateDigest: snapshot.verification.aggregateDigest,
+    verification: snapshot.verification,
+    summary: snapshot.summary,
+    files,
+    includedBytes
+  }
+  zip.file('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`)
+  const bytes = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  if (bytes.byteLength > PORTABLE_PACKAGE_MAX_BYTES + 8 * 1024 * 1024) {
+    throw new Error('STUDIO_RESULT_PACKAGE_TOO_LARGE: portable delivery package exceeds the safe size limit')
+  }
+  return bytes
+}
+
+function safeArtifactExtension(path: string, mediaType?: string): string {
+  const pathExtension = extname(path).toLowerCase()
+  if (/^\.[a-z0-9]{1,12}$/.test(pathExtension)) return pathExtension
+  const mediaExtensions: Record<string, string> = {
+    'application/pdf': '.pdf',
+    'application/zip': '.zip',
+    'application/json': '.json',
+    'text/plain': '.txt',
+    'text/markdown': '.md',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'video/mp4': '.mp4',
+    'audio/mpeg': '.mp3'
+  }
+  return mediaType ? (mediaExtensions[mediaType] ?? '') : ''
 }
 
 function normalizeAction(value: unknown): StudioResultAction {

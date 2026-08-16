@@ -10,7 +10,8 @@ import type {
 } from '../../shared/project-workspace-types'
 import type { SessionMeta } from '../../shared/types'
 import { openProjectWorkspaceStore } from './store'
-import { connectorResourceAvailability } from './connector-resource'
+import { connectorAuthorizationDigest, connectorResourceAvailability } from './connector-resource'
+import { readProjectConnectorCache } from './project-connector-cache'
 
 const MAX_DISCOVERED_FILES = 24
 const MAX_SOURCE_BYTES = 1024 * 1024
@@ -89,24 +90,7 @@ export async function buildProjectResourceContext(
   const external = workspace.resources.filter((resource) =>
     (resource.kind === 'connector' || resource.kind === 'url') && projectResourceIsEnabled(resource))
   const sourceIds = new Set(sources.map((source) => source.resourceId))
-  const items: OutboundContextItemView[] = []
-  for (const resource of [...workspace.resources].sort((left, right) => left.id.localeCompare(right.id))) {
-    const dataClass = projectResourceDataClass(resource)
-    const egressPolicy = projectResourceEgressPolicy(resource)
-    if (!projectResourceIsEnabled(resource)) {
-      const availability = resource.kind === 'connector' ? connectorResourceAvailability(resource) : undefined
-      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded', availability?.reason || 'Resource is disabled or revoked'))
-      continue
-    }
-    if (egressPolicy === 'deny') {
-      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded',
-        dataClass === 'S3' ? 'S3 resources never enter Provider context' : 'Resource is configured as no-egress'))
-      continue
-    }
-    if (!sourceIds.has(resource.id) && resource.kind !== 'connector' && resource.kind !== 'url') {
-      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded', 'No readable bounded context was discovered'))
-    }
-  }
+  const items = excludedResourceContextItems(workspace, sourceIds)
 
   const retrievedAt = new Date().toISOString()
   const lines = [
@@ -117,64 +101,11 @@ export async function buildProjectResourceContext(
   ]
 
   for (const source of sources) {
-    const resource = workspace.resources.find((candidate) => candidate.id === source.resourceId)
-    if (!resource) continue
-    items.push({
-      id: `resource:${source.resourceId}:sha256:${source.digest}`,
-      kind: 'project_resource',
-      label: resource.label?.trim() || resource.kind,
-      dataClass: projectResourceDataClass(resource),
-      egressPolicy: projectResourceEgressPolicy(resource),
-      decision: 'included',
-      resourceId: source.resourceId,
-      bytes: source.bytes,
-      digest: `sha256:${source.digest}`,
-      ...(source.truncated ? { reason: 'Content is bounded and truncated before dispatch' } : {})
-    })
-    lines.push(
-      '',
-      `## ${basename(source.path)}`,
-      `source: ${source.path}`,
-      `resourceId: ${source.resourceId}`,
-      `resourceKind: ${source.resourceKind}`,
-      `version: sha256:${source.digest}`,
-      `modifiedAt: ${new Date(source.modifiedAt).toISOString()}`,
-      `bytes: ${source.bytes}${source.truncated ? ' (content truncated)' : ''}`,
-      '',
-      source.content
-    )
+    appendKnowledgeSourceContext(workspace, source, items, lines)
   }
 
   for (const resource of external) {
-    const dataClass = projectResourceDataClass(resource)
-    const egressPolicy = projectResourceEgressPolicy(resource)
-    const included = egressPolicy !== 'deny'
-    if (!included) continue
-    items.push(resourceContextItem(
-      resource,
-      dataClass,
-      egressPolicy,
-      'included',
-      'Registered metadata only; connector content is not injected here'
-    ))
-    lines.push(
-      '',
-      `## ${resource.label?.trim() || resource.kind}`,
-      `resourceId: ${resource.id}`,
-      `resourceKind: ${resource.kind}`,
-      `source: ${sanitizedExternalLocation(resource)}`,
-      ...(resource.kind === 'connector' && resource.connector ? [
-        `connectorVersion: ${resource.connector.version}`,
-        `usage: ${resource.connector.usage.join(', ')}`,
-        `capabilities: ${resource.connector.capabilities.join(', ')}`,
-        `dataDirection: ${resource.connector.dataDirection}`,
-        `authorizationSubject: ${resource.connector.authorization.subject}`,
-        `authorizationPrincipal: ${resource.connector.authorization.principalId}`,
-        `authorizationScopes: ${resource.connector.authorization.scopes.join(', ')}`,
-        `writePolicy: effect_required/${resource.connector.writePolicy.reconciliation}`
-      ] : []),
-      'availability: registered metadata only; use the authorized connector runtime to retrieve content and preserve source/version/retrievedAt evidence.'
-    )
+    await appendExternalResourceContext(rootDir, workspace, resource, items, lines)
   }
 
   const hasIncluded = items.some((item) => item.decision === 'included')
@@ -187,6 +118,166 @@ export async function buildProjectResourceContext(
     promptDigest: prompt ? `sha256:${createHash('sha256').update(prompt).digest('hex')}` : undefined,
     items
   }
+}
+
+function excludedResourceContextItems(
+  workspace: ProjectWorkspace,
+  sourceIds: Set<string>
+): OutboundContextItemView[] {
+  const items: OutboundContextItemView[] = []
+  for (const resource of [...workspace.resources].sort((left, right) => left.id.localeCompare(right.id))) {
+    const dataClass = projectResourceDataClass(resource)
+    const egressPolicy = projectResourceEgressPolicy(resource)
+    if (!projectResourceIsEnabled(resource)) {
+      const availability = resource.kind === 'connector' ? connectorResourceAvailability(resource) : undefined
+      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded',
+        availability?.reason || 'Resource is disabled or revoked'))
+    } else if (egressPolicy === 'deny') {
+      const reason = dataClass === 'S3'
+        ? 'S3 resources never enter Provider context'
+        : 'Resource is configured as no-egress'
+      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded', reason))
+    } else if (!sourceIds.has(resource.id) && resource.kind !== 'connector' && resource.kind !== 'url') {
+      items.push(resourceContextItem(resource, dataClass, egressPolicy, 'excluded',
+        'No readable bounded context was discovered'))
+    }
+  }
+  return items
+}
+
+function appendKnowledgeSourceContext(
+  workspace: ProjectWorkspace,
+  source: ProjectKnowledgeSource,
+  items: OutboundContextItemView[],
+  lines: string[]
+): void {
+  const resource = workspace.resources.find((candidate) => candidate.id === source.resourceId)
+  if (!resource) return
+  items.push({
+    id: `resource:${source.resourceId}:sha256:${source.digest}`,
+    kind: 'project_resource',
+    label: resource.label?.trim() || resource.kind,
+    dataClass: projectResourceDataClass(resource),
+    egressPolicy: projectResourceEgressPolicy(resource),
+    decision: 'included',
+    resourceId: source.resourceId,
+    bytes: source.bytes,
+    digest: `sha256:${source.digest}`,
+    ...(source.truncated ? { reason: 'Content is bounded and truncated before dispatch' } : {})
+  })
+  lines.push(
+    '',
+    `## ${basename(source.path)}`,
+    `source: ${source.path}`,
+    `resourceId: ${source.resourceId}`,
+    `resourceKind: ${source.resourceKind}`,
+    `version: sha256:${source.digest}`,
+    `modifiedAt: ${new Date(source.modifiedAt).toISOString()}`,
+    `bytes: ${source.bytes}${source.truncated ? ' (content truncated)' : ''}`,
+    '',
+    source.content
+  )
+}
+
+async function appendExternalResourceContext(
+  rootDir: string,
+  workspace: ProjectWorkspace,
+  resource: ProjectResource,
+  items: OutboundContextItemView[],
+  lines: string[]
+): Promise<void> {
+  const dataClass = projectResourceDataClass(resource)
+  const egressPolicy = projectResourceEgressPolicy(resource)
+  if (egressPolicy === 'deny') return
+  const lifecycle = resource.connector?.lifecycle
+  const cacheState = lifecycle?.cache
+  const canInjectConnectorCache = resource.kind === 'connector' &&
+    resource.connector?.authorization.status === 'active' &&
+    lifecycle?.enabled !== false &&
+    cacheState?.status === 'ready' &&
+    resource.connector.usage.some((usage) => usage === 'resource' || usage === 'knowledge_source')
+  if (canInjectConnectorCache) {
+    try {
+      const cached = await readProjectConnectorCache(rootDir, workspace.id, resource.id)
+      const citation = lifecycle?.refresh.latestCitation
+      if (!cached || !citation ||
+          cached.authorizationDigest !== connectorAuthorizationDigest(resource) ||
+          cached.authorizationDigest !== cacheState.authorizationDigest ||
+          cached.citation.contentDigest !== cacheState.contentDigest ||
+          cached.bytes !== cacheState.bytes || cached.cachedAt !== cacheState.cachedAt ||
+          cached.citation.source !== citation.source || cached.citation.version !== citation.version ||
+          cached.citation.retrievedAt !== citation.retrievedAt ||
+          cached.citation.contentDigest !== citation.contentDigest) {
+        throw new Error('Connector cache metadata does not match its lifecycle state')
+      }
+      const boundedContent = cached.data.slice(0, MAX_SOURCE_CHARS)
+      items.push({
+        id: `resource:${resource.id}:${cached.citation.contentDigest}`,
+        kind: 'project_resource',
+        label: resource.label?.trim() || resource.kind,
+        dataClass,
+        egressPolicy,
+        decision: 'included',
+        resourceId: resource.id,
+        bytes: cached.bytes,
+        digest: cached.citation.contentDigest,
+        ...(boundedContent.length < cached.data.length
+          ? { reason: 'Connector cache content is bounded and truncated before dispatch' }
+          : {})
+      })
+      lines.push(
+        '',
+        `## ${resource.label?.trim() || resource.kind}`,
+        `resourceId: ${resource.id}`,
+        'resourceKind: connector',
+        `source: ${cached.citation.source}`,
+        `version: ${cached.citation.version}`,
+        `retrievedAt: ${new Date(cached.citation.retrievedAt).toISOString()}`,
+        `contentDigest: ${cached.citation.contentDigest}`,
+        `bytes: ${cached.bytes}${boundedContent.length < cached.data.length ? ' (content truncated)' : ''}`,
+        '',
+        boundedContent
+      )
+      return
+    } catch {
+      items.push(resourceContextItem(
+        resource,
+        dataClass,
+        egressPolicy,
+        'excluded',
+        'Connector cache is unavailable or failed integrity validation'
+      ))
+      return
+    }
+  }
+  items.push(resourceContextItem(
+    resource,
+    dataClass,
+    egressPolicy,
+    'included',
+    'Registered metadata only; connector content is not injected here'
+  ))
+  const connectorLines = resource.kind === 'connector' && resource.connector
+    ? [
+        `connectorVersion: ${resource.connector.version}`,
+        `usage: ${resource.connector.usage.join(', ')}`,
+        `capabilities: ${resource.connector.capabilities.join(', ')}`,
+        `dataDirection: ${resource.connector.dataDirection}`,
+        `authorizationSubject: ${resource.connector.authorization.subject}`,
+        `authorizationPrincipal: ${resource.connector.authorization.principalId}`,
+        `authorizationScopes: ${resource.connector.authorization.scopes.join(', ')}`,
+        `writePolicy: effect_required/${resource.connector.writePolicy.reconciliation}`
+      ]
+    : []
+  lines.push(
+    '',
+    `## ${resource.label?.trim() || resource.kind}`,
+    `resourceId: ${resource.id}`,
+    `resourceKind: ${resource.kind}`,
+    `source: ${sanitizedExternalLocation(resource)}`,
+    ...connectorLines,
+    'availability: registered metadata only; use the authorized connector runtime to retrieve content and preserve source/version/retrievedAt evidence.'
+  )
 }
 
 export function discoverProjectKnowledgeSources(

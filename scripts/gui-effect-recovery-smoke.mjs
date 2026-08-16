@@ -186,7 +186,8 @@ await check('effect builder ledger validator reconciler and inventory wire the t
   assert(reconciler.includes('reconcileGuiPostconditionEffectTarget(effect.target)'), 'GUI Reconciler integration missing')
   assert(validator.includes("value.kind === 'gui_postcondition'"), 'persisted target validator integration missing')
   assert(ledger.includes("scope: 'gui-window'"), 'GUI window resource fencing key missing')
-  assert(inventory.includes('EFFECT_ENTRY_INVENTORY_VERSION = 10'), 'Effect entry inventory version was not advanced')
+  const inventoryVersion = inventory.match(/EFFECT_ENTRY_INVENTORY_VERSION\s*=\s*(\d+)/)?.[1]
+  assert(Number(inventoryVersion) >= 10, 'Effect entry inventory version was not advanced')
 })
 
 const failures = checks.filter((item) => item.status === 'fail')

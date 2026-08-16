@@ -1,16 +1,157 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { EffectRecord, MigrationAsset, MigrationImportOperationResult } from '../shared/types'
-import { importAssets, scanMigration } from './migration'
+import type {
+  EffectRecord,
+  MigrationApplyInput,
+  MigrationApplyResult,
+  MigrationAsset,
+  MigrationAssetKind,
+  MigrationImportOperationResult,
+  MigrationRollbackResult
+} from '../shared/types'
+import { applyMigration, importAssets, rollbackMigration, scanMigration } from './migration'
+import type { MigrationApplyOptions } from './migration'
 import {
   executeInteractiveOperationEffect,
   type InteractiveOperationEffectOutcome
 } from './task/operation-effect-gateway'
 import { stableValueDigest } from './task/tool-idempotency'
+import { readStoredMigrationScan } from './migration-scan-store'
+import {
+  prepareCanonicalSystemOperation,
+  resolveCanonicalWorkspaceIdForPath
+} from './task/system-operation-context'
+import {
+  configureMigrationOperationBackupRoot,
+  MIGRATION_OPERATION_BACKUP_REF
+} from './migration-operation-effect'
 
 type OperationGateway = typeof executeInteractiveOperationEffect
 type MigrationImporter = typeof importAssets
+type MigrationApplier = typeof applyMigration
+type MigrationRollback = typeof rollbackMigration
+
+export interface MigrationOperationEffectOptions {
+  rootDir: string
+  backupRoot: string
+}
+
+export async function executeMigrationApplyEffect(
+  input: MigrationApplyInput,
+  options: MigrationOperationEffectOptions,
+  runOperation: OperationGateway = executeInteractiveOperationEffect,
+  runApply: MigrationApplier = applyMigration
+): Promise<MigrationApplyResult> {
+  const stored = readStoredMigrationScan(input?.scanId)
+  const selection = stored ? selectedMigrationDecisionSummary(stored.result.assets, input?.decisions) : undefined
+  if (!stored || !selection || selection.assetCount === 0) {
+    return runApply(input, { backupRoot: options.backupRoot })
+  }
+  const operationId = randomUUID()
+  const backupId = `migration-${operationId}`
+  configureMigrationOperationBackupRoot(options.backupRoot)
+  const workspaceId = stored.result.cwd
+    ? await resolveCanonicalWorkspaceIdForPath(options.rootDir, stored.result.cwd)
+    : undefined
+  const context = await prepareCanonicalSystemOperation({
+    rootDir: options.rootDir,
+    requestId: `migration-apply-${operationId}`,
+    objective: `导入 ${selection.assetCount} 项外部 Agent 资产并生成可核验迁移报告`,
+    workspaceId,
+    cwd: stored.result.cwd
+  })
+  const toolInput = {
+    backupRef: MIGRATION_OPERATION_BACKUP_REF,
+    backupId,
+    assetCount: selection.assetCount,
+    kindCounts: selection.kindCounts,
+    selectionDigest: selection.selectionDigest
+  }
+  const outcome = await runOperation({
+    rootDir: options.rootDir,
+    operationId,
+    kind: 'migration_apply',
+    title: '应用外部 Agent 迁移',
+    sourceSessionId: `migration:${operationId}`,
+    projectId: context.projectId,
+    workspaceId: context.workspaceId,
+    goalId: context.goalId,
+    workItemId: context.workItemId,
+    cwd: context.cwd,
+    toolName: 'migration_apply',
+    toolInput,
+    execute: (effect) => executeMigrationApply(effect, input, options.backupRoot, backupId, runApply),
+    isSuccess: (result) => result.ok,
+    resultSummary: (result) => JSON.stringify({
+      ok: result.ok,
+      status: result.status,
+      backupId: result.backupId,
+      appliedCount: result.applied.length,
+      skippedCount: result.skipped.length
+    })
+  })
+  if (outcome.value) return outcome.value
+  return failedMigrationApply(outcome.status === 'waiting_reconciliation'
+    ? 'migration_reconciliation_required'
+    : 'migration_operation_failed')
+}
+
+export async function executeMigrationRollbackEffect(
+  backupId: string,
+  options: MigrationOperationEffectOptions,
+  runOperation: OperationGateway = executeInteractiveOperationEffect,
+  runRollback: MigrationRollback = rollbackMigration
+): Promise<MigrationRollbackResult> {
+  const operationId = randomUUID()
+  configureMigrationOperationBackupRoot(options.backupRoot)
+  const context = await prepareCanonicalSystemOperation({
+    rootDir: options.rootDir,
+    requestId: `migration-rollback-${operationId}`,
+    objective: '回滚外部 Agent 迁移并生成可核验迁移报告'
+  })
+  const kindCounts = emptyMigrationKindCounts()
+  const toolInput = {
+    backupRef: MIGRATION_OPERATION_BACKUP_REF,
+    backupId,
+    assetCount: 0,
+    kindCounts,
+    selectionDigest: stableValueDigest({ operation: 'rollback', backupId })
+  }
+  const outcome = await runOperation({
+    rootDir: options.rootDir,
+    operationId,
+    kind: 'migration_rollback',
+    title: '回滚外部 Agent 迁移',
+    sourceSessionId: `migration:${operationId}`,
+    projectId: context.projectId,
+    workspaceId: context.workspaceId,
+    goalId: context.goalId,
+    workItemId: context.workItemId,
+    cwd: context.cwd,
+    toolName: 'migration_rollback',
+    toolInput,
+    execute: (effect) => executeMigrationRollback(effect, backupId, options.backupRoot, runRollback),
+    isSuccess: (result) => result.ok,
+    resultSummary: (result) => JSON.stringify({
+      ok: result.ok,
+      status: result.status,
+      backupId: result.backupId,
+      restoredTargetCount: result.restoredTargets.length
+    })
+  })
+  if (outcome.value) return outcome.value
+  return {
+    ok: false,
+    status: 'failed',
+    backupId,
+    restoredTargets: [],
+    errorCode: outcome.status === 'waiting_reconciliation'
+      ? 'migration_reconciliation_required'
+      : 'migration_operation_failed',
+    message: '回滚结果未能确认，请从恢复中心完成对账。'
+  }
+}
 
 export async function executeMigrationImportEffect(
   cwd: unknown,
@@ -70,7 +211,10 @@ function migrationKindCounts(assets: MigrationAsset[]): Record<MigrationAsset['k
     skill: 0,
     prompt: 0,
     usage: 0,
-    hook: 0
+    hook: 0,
+    memory: 0,
+    routine: 0,
+    channel: 0
   }
   for (const asset of assets) counts[asset.kind] += 1
   return counts
@@ -126,4 +270,89 @@ function migrationEffectOutcome(
 
 function migrationSourceId(root: string): string {
   return `migration:${createHash('sha256').update(root).digest('hex').slice(0, 40)}`
+}
+
+function selectedMigrationDecisionSummary(
+  assets: MigrationAsset[],
+  decisions: MigrationApplyInput['decisions']
+): { assetCount: number; kindCounts: Record<MigrationAssetKind, number>; selectionDigest: string } | undefined {
+  if (!Array.isArray(decisions)) return undefined
+  const byId = new Map(assets.map((asset) => [asset.id, asset]))
+  const selected: Array<{ id: string; kind: MigrationAssetKind; action: 'import' | 'replace'; sourceDigest: string }> = []
+  const seen = new Set<string>()
+  for (const decision of decisions) {
+    if (!decision || typeof decision.assetId !== 'string' || seen.has(decision.assetId) ||
+        (decision.action !== 'import' && decision.action !== 'replace' && decision.action !== 'skip')) return undefined
+    seen.add(decision.assetId)
+    if (decision.action === 'skip') continue
+    const asset = byId.get(decision.assetId)
+    if (!asset) return undefined
+    selected.push({ id: asset.id, kind: asset.kind, action: decision.action, sourceDigest: asset.sourceDigest })
+  }
+  const kindCounts = emptyMigrationKindCounts()
+  for (const item of selected) kindCounts[item.kind] += 1
+  return {
+    assetCount: selected.length,
+    kindCounts,
+    selectionDigest: stableValueDigest(selected.sort((left, right) => left.id.localeCompare(right.id)))
+  }
+}
+
+function emptyMigrationKindCounts(): Record<MigrationAssetKind, number> {
+  return {
+    rules: 0,
+    mcp: 0,
+    config: 0,
+    skill: 0,
+    prompt: 0,
+    usage: 0,
+    hook: 0,
+    memory: 0,
+    routine: 0,
+    channel: 0
+  }
+}
+
+function executeMigrationApply(
+  effect: EffectRecord,
+  input: MigrationApplyInput,
+  backupRoot: string,
+  backupId: string,
+  runApply: MigrationApplier
+): MigrationApplyResult {
+  assertMigrationOperationEffect(effect, 'apply', backupId)
+  const options: MigrationApplyOptions = { backupRoot, backupId }
+  return runApply(input, options)
+}
+
+function executeMigrationRollback(
+  effect: EffectRecord,
+  backupId: string,
+  backupRoot: string,
+  runRollback: MigrationRollback
+): MigrationRollbackResult {
+  assertMigrationOperationEffect(effect, 'rollback', backupId)
+  return runRollback(backupId, backupRoot)
+}
+
+function assertMigrationOperationEffect(
+  effect: EffectRecord,
+  operation: 'apply' | 'rollback',
+  backupId: string
+): void {
+  if (effect.target.kind !== 'migration_operation' || effect.target.operation !== operation ||
+      effect.target.backupId !== backupId) {
+    throw new Error(`migration ${operation} EffectTarget identity mismatch`)
+  }
+}
+
+function failedMigrationApply(errorCode: string): MigrationApplyResult {
+  return {
+    ok: false,
+    status: 'failed',
+    applied: [],
+    skipped: [],
+    errorCode,
+    message: '迁移结果未能确认，请从恢复中心完成对账。'
+  }
 }

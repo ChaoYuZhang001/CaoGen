@@ -12,7 +12,14 @@ import type {
 } from '../../shared/workflow-types'
 import type { WorkflowLedgerDatabase } from './workflow-ledger-db'
 import { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
-import { findWorkflowArtifact, findWorkflowAcceptance, readAcceptances } from './workflow-ledger-query'
+import { currentArtifactLineageLeafIds } from './artifact-lineage'
+import {
+  findWorkflowArtifact,
+  findWorkflowAcceptance,
+  readAcceptances,
+  readArtifacts,
+  readEvidenceLinks
+} from './workflow-ledger-query'
 import { listWorkflowEvidence } from './workflow-evidence-store'
 import { resolveAcceptanceEvidenceRefs, type EvidenceResolution } from './workflow-acceptance-evidence-resolution'
 import {
@@ -24,6 +31,10 @@ import {
   resolveDigitalWorkerAcceptanceContext,
   type DigitalWorkerAcceptanceContext
 } from './workflow-acceptance-digital-worker-policy'
+import {
+  isManualWorkflowArtifactAcceptanceId,
+  workflowArtifactAcceptanceIdentities
+} from './workflow-artifact-acceptance'
 
 /**
  * The shared Workflow types intentionally stay backwards compatible.  The
@@ -534,6 +545,7 @@ export function assertWorkflowAcceptanceGate(
       )
     }
     assertDigitalWorkerAcceptancePolicy(target, acceptance, resolutions, caller, options)
+    assertTerminalArtifactAcceptances(db, target)
     return {
       allowed: true,
       decision: 'passed',
@@ -578,6 +590,7 @@ export function assertWorkflowAcceptanceGate(
         }
       )
     }
+    assertTerminalArtifactAcceptances(db, target)
     return {
       allowed: true,
       decision: 'waived',
@@ -598,6 +611,65 @@ export function assertWorkflowAcceptanceGate(
       reason: `acceptance_${acceptance.status}`
     }
   )
+}
+
+/**
+ * A target Acceptance authorizes the terminal transition; Artifact-scoped
+ * Acceptances are additional delivery integrity gates and can never substitute
+ * for that target Acceptance. Only current lineage leaves participate, so a
+ * retained failed version stops blocking once an accepted successor exists.
+ */
+function assertTerminalArtifactAcceptances(
+  db: WorkflowLedgerDatabase,
+  target: WorkflowAcceptanceTarget
+): void {
+  const projectId = target.record.projectId
+  const runIds = target.kind === 'work_item' ? new Set(target.record.runIds) : undefined
+  const artifacts = readArtifacts(db).filter((artifact) =>
+    artifact.projectId === projectId && (target.kind === 'work_item'
+      ? artifact.workItemId === target.record.id || Boolean(artifact.runId && runIds?.has(artifact.runId))
+      : artifact.goalId === target.record.id))
+  if (artifacts.length === 0) return
+
+  const leafIds = currentArtifactLineageLeafIds(artifacts)
+  const acceptances = new Map(readAcceptances(db).map((acceptance) => [acceptance.id, acceptance]))
+  const links = readEvidenceLinks(db)
+  for (const artifact of artifacts.filter((candidate) => leafIds.has(candidate.id))) {
+    const acceptanceIds = new Set(links.flatMap((link) =>
+      link.artifactId === artifact.id && link.acceptanceId ? [link.acceptanceId] : []))
+    if (acceptanceIds.size === 0) {
+      throw new WorkflowAcceptanceGateError(
+        'WORKFLOW_ACCEPTANCE_REQUIRED',
+        `current Artifact ${artifact.id} cannot be delivered without Artifact Acceptance`,
+        {
+          targetType: target.kind,
+          targetId: target.record.id,
+          projectId,
+          artifactId: artifact.id,
+          reason: 'artifact_acceptance_missing'
+        }
+      )
+    }
+    for (const acceptanceId of acceptanceIds) {
+      const artifactAcceptance = acceptances.get(acceptanceId)
+      if (!artifactAcceptance || artifactAcceptance.projectId !== projectId ||
+          (artifactAcceptance.status !== 'passed' && artifactAcceptance.status !== 'waived')) {
+        throw new WorkflowAcceptanceGateError(
+          'WORKFLOW_ACCEPTANCE_REQUIRED',
+          `current Artifact ${artifact.id} has unresolved Acceptance ${acceptanceId}`,
+          {
+            targetType: target.kind,
+            targetId: target.record.id,
+            projectId,
+            artifactId: artifact.id,
+            acceptanceId,
+            reason: artifactAcceptance ? `artifact_acceptance_${artifactAcceptance.status}` : 'artifact_acceptance_missing'
+          }
+        )
+      }
+      assertAcceptanceEvidenceRefs(db, artifactAcceptance)
+    }
+  }
 }
 
 function assertDigitalWorkerAcceptancePolicy(
@@ -915,10 +987,14 @@ function assertReviewEvidenceScope(
   acceptance: WorkflowAcceptanceRecord,
   evidence: WorkflowEvidenceRecord
 ): void {
+  const artifactMismatch = isManualWorkflowArtifactAcceptanceId(acceptance.id) && (
+    !evidence.artifactId ||
+    workflowArtifactAcceptanceIdentities(evidence.artifactId).acceptanceId !== acceptance.id
+  )
   const ownershipMismatch = evidence.projectId !== acceptance.projectId ||
     (acceptance.goalId !== undefined && evidence.goalId !== undefined && evidence.goalId !== acceptance.goalId) ||
     (acceptance.workItemId !== undefined && evidence.workItemId !== undefined &&
-      evidence.workItemId !== acceptance.workItemId)
+      evidence.workItemId !== acceptance.workItemId) || artifactMismatch
   if (!ownershipMismatch) return
   throw reviewError(
     'WORKFLOW_PROJECT_BOUNDARY',

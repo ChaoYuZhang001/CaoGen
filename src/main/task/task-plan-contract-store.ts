@@ -40,6 +40,10 @@ interface TaskPlanStoreState {
   sessions: Record<string, TaskPlanSessionRecord>
 }
 
+export function validateTaskPlanSessionRecord(sessionId: string, value: unknown): void {
+  validateSessionRecord(requiredId(sessionId, 'sessionId'), value)
+}
+
 const STORE_DIRECTORY = 'task-plans'
 const STORE_FILE = 'task-plan-contracts.json'
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/
@@ -57,8 +61,28 @@ export class TaskPlanContractStore {
     return stateView(id, record)
   }
 
+  listAll(): TaskPlanStateView[] {
+    const state = this.load()
+    return Object.keys(state.sessions).sort().map((sessionId) => stateView(sessionId, state.sessions[sessionId]))
+  }
+
   hasPlan(sessionId: string): boolean {
     return this.get(sessionId).currentVersion !== undefined
+  }
+
+  /** Removes the private Session-scoped plan record after its owner is deleted. */
+  deleteSession(sessionId: string): boolean {
+    const id = requiredId(sessionId, 'sessionId')
+    const state = this.load()
+    if (!state.sessions[id]) return false
+    const { [id]: _removed, ...sessions } = state.sessions
+    const removedEntries = state.sessions[id].versions.length + state.sessions[id].approvalEvents.length
+    this.persist({
+      ...state,
+      revision: state.revision - removedEntries,
+      sessions
+    })
+    return true
   }
 
   createVersion(
@@ -120,7 +144,8 @@ export class TaskPlanContractStore {
   approve(
     sessionId: string,
     input: TaskPlanApprovalInput,
-    projection?: TaskPlanProjectionReceipt
+    projection?: TaskPlanProjectionReceipt,
+    actorId = 'local-user'
   ): TaskPlanStateView {
     const id = requiredId(sessionId, 'sessionId')
     const expected = normalizeApprovalInput(input)
@@ -149,6 +174,7 @@ export class TaskPlanContractStore {
         version: current.version,
         digest: current.digest,
         actor: 'local-user',
+        actorId: normalizeActorId(actorId),
         reason: optionalText(expected.reason, 1_000),
         projection: normalizedProjection,
         occurredAt: Date.now()
@@ -158,7 +184,7 @@ export class TaskPlanContractStore {
     return stateView(id, nextRecord)
   }
 
-  revoke(sessionId: string, input: TaskPlanApprovalInput): TaskPlanStateView {
+  revoke(sessionId: string, input: TaskPlanApprovalInput, actorId = 'local-user'): TaskPlanStateView {
     const id = requiredId(sessionId, 'sessionId')
     const expected = normalizeApprovalInput(input)
     const state = this.load()
@@ -173,7 +199,7 @@ export class TaskPlanContractStore {
       ...record,
       approvalEvents: [
         ...record.approvalEvents,
-        approvalEvent(id, 'revoked', active, optionalText(expected.reason, 1_000) || '用户撤销审批', Date.now())
+        approvalEvent(id, 'revoked', active, optionalText(expected.reason, 1_000) || '用户撤销审批', Date.now(), actorId)
       ]
     }
     this.persist(withSession(state, nextRecord))
@@ -300,7 +326,8 @@ function approvalEvent(
   kind: 'revoked' | 'superseded',
   active: TaskPlanApprovalEvent,
   reason: string,
-  occurredAt: number
+  occurredAt: number,
+  actorId = kind === 'revoked' ? 'local-user' : 'system'
 ): TaskPlanApprovalEvent {
   return {
     schemaVersion: TASK_PLAN_SCHEMA_VERSION,
@@ -310,6 +337,7 @@ function approvalEvent(
     version: active.version,
     digest: active.digest,
     actor: kind === 'revoked' ? 'local-user' : 'system',
+    actorId: normalizeActorId(actorId),
     reason,
     occurredAt
   }
@@ -587,7 +615,16 @@ function validApprovalReference(
 function validApprovalShape(event: TaskPlanApprovalEvent): boolean {
   return event.schemaVersion === TASK_PLAN_SCHEMA_VERSION && validApprovalKind(event.kind) &&
     typeof event.id === 'string' && Boolean(event.id) &&
-    Number.isFinite(event.occurredAt) && event.occurredAt > 0
+    Number.isFinite(event.occurredAt) && event.occurredAt > 0 &&
+    (event.actorId === undefined || Boolean(normalizeActorId(event.actorId)))
+}
+
+function normalizeActorId(value: unknown): string {
+  const actorId = typeof value === 'string' ? value.trim() : ''
+  if (!actorId || actorId.length > 200 || /[\u0000-\u001f\u007f]/.test(actorId)) {
+    throw new Error('计划审批主体身份无效')
+  }
+  return actorId
 }
 
 function validApprovalActor(actor: unknown): actor is TaskPlanApprovalEvent['actor'] {

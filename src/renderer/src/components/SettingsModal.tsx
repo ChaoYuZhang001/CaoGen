@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Bell,
   Blocks,
+  Clock3,
   Database,
   FolderCog,
   LayoutDashboard,
@@ -28,7 +29,6 @@ import type {
   McpProbeResult,
   ModelRoutingRule,
   ModelRoutingTaskKind,
-  OfficeQualityMode,
   PermissionRuleConfig,
   PermissionRuleRiskOperator,
   PermissionModeId,
@@ -54,14 +54,15 @@ import { requireMcpProbeResults } from '../store/task-recovery-actions'
 import NotificationConnectorManager from './settings/NotificationConnectorManager'
 import ProviderUsageDashboard from './settings/ProviderUsageDashboard'
 import ProviderGatewayPanel from './settings/ProviderGatewayPanel'
+import OfficeAppearanceSettings, { DEFAULT_OFFICE_SETTINGS } from './settings/OfficeAppearanceSettings'
+import DataRetentionSettings from './settings/DataRetentionSettings'
 type ProviderSettingsSurface = 'configuration' | 'gateway' | 'usage'
-const DEFAULT_OFFICE_SETTINGS = { qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false }
-const OFFICE_QUALITY_OPTIONS: Array<{ value: OfficeQualityMode; labelKey: string }> = [
-  { value: 'auto', labelKey: 'officeQualityAuto' },
-  { value: 'high', labelKey: 'officeQualityHigh' },
-  { value: 'balanced', labelKey: 'officeQualityBalanced' },
-  { value: 'low', labelKey: 'officeQualityLow' }
-]
+type ProviderProbeState = {
+  providerId: string
+  ok: boolean
+  message: string
+  error?: ProviderModelFetchError
+} | null
 const ROUTING_RULE_TASK_OPTIONS: Array<{ value: ModelRoutingTaskKind; labelKey: string }> = [
   { value: 'research', labelKey: 'routingTaskResearch' },
   { value: 'planning', labelKey: 'routingTaskPlanning' },
@@ -130,6 +131,34 @@ function uniqueModelOptions(
   return options
 }
 
+function ProviderSettingsSection({ surface, providers, health, providerProbe, checkingProviderId, onSurfaceChange, onAdd, onProbe, onEdit, onRemove }: {
+  surface: ProviderSettingsSurface
+  providers: ProviderView[]
+  health: ProviderHealthView[]
+  providerProbe: ProviderProbeState
+  checkingProviderId: string
+  onSurfaceChange: (surface: ProviderSettingsSurface) => void
+  onAdd: () => void
+  onProbe: (provider: ProviderView) => void
+  onEdit: (provider: ProviderView | 'new') => void
+  onRemove: (provider: ProviderView) => void
+}): React.JSX.Element {
+  const t = useT()
+  const surfaces: Array<[ProviderSettingsSurface, string]> = [
+    ['configuration', t('providerSettingsConfiguration')],
+    ['gateway', t('providerSettingsGateway')],
+    ['usage', t('providerSettingsUsage')]
+  ]
+  return <>
+    <nav className="provider-settings-surfaces" aria-label={t('providerSettingsViews')}>
+      {surfaces.map(([value, label]) => <button type="button" key={value} className={surface === value ? 'active' : ''} aria-current={surface === value ? 'page' : undefined} data-provider-surface={value} onClick={() => onSurfaceChange(value)}>{label}</button>)}
+    </nav>
+    {surface === 'configuration' && <ProviderList providers={providers} health={health} providerProbe={providerProbe} checkingProviderId={checkingProviderId} onAdd={onAdd} onProbe={onProbe} onEdit={onEdit} onRemove={onRemove} />}
+    {surface === 'usage' && <ProviderUsageDashboard providers={providers} />}
+    {surface === 'gateway' && <ProviderGatewayPanel />}
+  </>
+}
+
 export default function SettingsPage(): React.JSX.Element {
   const t = useT()
   const settings = useStore((s) => s.settings)
@@ -154,12 +183,7 @@ export default function SettingsPage(): React.JSX.Element {
   const [guiGrants, setGuiGrants] = useState<GuiAutomationGrantView[]>([])
   const [toolGrants, setToolGrants] = useState<ToolCapabilityGrantView[]>([])
   const [checkingProviderId, setCheckingProviderId] = useState('')
-  const [providerProbe, setProviderProbe] = useState<{
-    providerId: string
-    ok: boolean
-    message: string
-    error?: ProviderModelFetchError
-  } | null>(null)
+  const [providerProbe, setProviderProbe] = useState<ProviderProbeState>(null)
   const [engines, setEngines] = useState<EngineInfo[]>([])
   const [pluginRegistry, setPluginRegistry] = useState<PluginRegistryView | undefined>(undefined)
   const [mcpProbeResults, setMcpProbeResults] = useState<Record<string, McpProbeResult>>({})
@@ -429,13 +453,14 @@ export default function SettingsPage(): React.JSX.Element {
     { id: 'providers', label: t('tabProviders'), icon: Plug },
     { id: 'notifications', label: t('tabNotifications'), icon: Bell },
     { id: 'plugins', label: t('tabPlugins'), icon: Blocks },
+    { id: 'data', label: t('tabDataRetention'), icon: Clock3 },
     { id: 'migrate', label: t('tabMigrate'), icon: Database }
   ]
   const TAB_GROUPS: Array<{ label: string; ids: SettingsTab[] }> = [
     { label: t('settingsGroupWorkspace'), ids: ['control', 'general', 'permissions', 'project'] },
     { label: t('settingsGroupPersonalization'), ids: ['persona', 'office'] },
     { label: t('settingsGroupIntegrations'), ids: ['providers', 'notifications', 'plugins'] },
-    { label: t('settingsGroupData'), ids: ['migrate'] }
+    { label: t('settingsGroupData'), ids: ['data', 'migrate'] }
   ]
   const searchTerm = settingsSearch.trim().toLocaleLowerCase()
   const searchTerms: Partial<Record<SettingsTab, string>> = {
@@ -448,6 +473,7 @@ export default function SettingsPage(): React.JSX.Element {
     providers: 'provider model api key oauth pricing billing usage balance',
     notifications: 'notification message webhook',
     plugins: 'plugin skill mcp',
+    data: 'retention legal hold purge delete privacy data lifecycle',
     migrate: 'migration import export data'
   }
   const tabMatches = (item: { id: SettingsTab; label: string }): boolean =>
@@ -1597,174 +1623,11 @@ export default function SettingsPage(): React.JSX.Element {
             )}
 
             {tab === 'office' && (
-              <>
-                <div className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-h3">{t('layoutSection')}</h3>
-                  </div>
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={draft.layout.sidebarCollapsed}
-                      onChange={(e) => setLayout({ sidebarCollapsed: e.target.checked })}
-                    />
-                    {t('layoutSidebarCollapsed')}
-                  </label>
-                  <div className="settings-grid-2">
-                    <label className="field-label">
-                      {t('layoutSidebarWidth')} · {draft.layout.sidebarWidth}px
-                      <input
-                        type="range"
-                        className="input-block"
-                        min={220}
-                        max={420}
-                        step={4}
-                        value={draft.layout.sidebarWidth}
-                        onChange={(e) => setLayout({ sidebarWidth: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label className="field-label">
-                      {t('layoutToolPanelWidth')} · {draft.layout.workbenchSideWidth}px
-                      <input
-                        type="range"
-                        className="input-block"
-                        min={320}
-                        max={720}
-                        step={8}
-                        value={draft.layout.workbenchSideWidth}
-                        onChange={(e) => setLayout({ workbenchSideWidth: Number(e.target.value) })}
-                      />
-                    </label>
-                  </div>
-                  <div className="settings-grid-2">
-                    <label className="field-label">
-                      {t('layoutTerminalDockHeight')} · {draft.layout.workbenchDockHeight}px
-                      <input
-                        type="range"
-                        className="input-block"
-                        min={220}
-                        max={520}
-                        step={8}
-                        value={draft.layout.workbenchDockHeight}
-                        onChange={(e) => setLayout({ workbenchDockHeight: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label className="field-label">
-                      {t('layoutChatScale')} · {Math.round(draft.layout.chatScale * 100)}%
-                      <input
-                        type="range"
-                        className="input-block"
-                        min={0.85}
-                        max={1.25}
-                        step={0.05}
-                        value={draft.layout.chatScale}
-                        onChange={(e) => setLayout({ chatScale: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label className="field-label">
-                      {t('layoutChatDensity')}
-                      <select
-                        className="select select-block"
-                        value={draft.layout.chatDensity}
-                        onChange={(e) =>
-                          setLayout({ chatDensity: e.target.value as typeof draft.layout.chatDensity })
-                        }
-                      >
-                        <option value="comfortable">{t('chatDensityComfortable')}</option>
-                        <option value="compact">{t('chatDensityCompact')}</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settings-section">
-                  <div className="settings-section-head">
-                    <h3 className="settings-h3">{t('officeTitle')}</h3>
-                  </div>
-                  <div className="office-quality-control">
-                    <div className="field-label">{t('officeQualityMode')}</div>
-                    <div className="office-quality-options" role="group" aria-label={t('officeQualityMode')}>
-                      {OFFICE_QUALITY_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`office-quality-option ${draftOffice.qualityMode === option.value ? 'active' : ''}`}
-                          aria-pressed={draftOffice.qualityMode === option.value}
-                          data-office-quality-option={option.value}
-                          onClick={() => setOffice({ qualityMode: option.value })}
-                        >
-                          {t(option.labelKey)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={draftOffice.showBadges}
-                      onChange={(e) => setOffice({ showBadges: e.target.checked })}
-                    />
-                    {t('officeShowBadges')}
-                  </label>
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={draftOffice.catEars}
-                      onChange={(e) => setOffice({ catEars: e.target.checked })}
-                    />
-                    {t('officeCatEars')}
-                  </label>
-                  <label className="field-label">
-                    {t('officeLiveliness')} · {draftOffice.liveliness.toFixed(1)}×
-                  </label>
-                  <input
-                    type="range"
-                    className="input-block"
-                    min={0.2}
-                    max={1.2}
-                    step={0.1}
-                    value={draftOffice.liveliness}
-                    onChange={(e) => setOffice({ liveliness: Number(e.target.value) })}
-                  />
-                </div>
-              </>
+              <OfficeAppearanceSettings layout={draft.layout} office={draftOffice} onLayoutChange={setLayout} onOfficeChange={setOffice} />
             )}
 
             {tab === 'providers' && (
-              <>
-                <nav className="provider-settings-surfaces" aria-label={t('providerSettingsViews')}>
-                  {([
-                    ['configuration', t('providerSettingsConfiguration')],
-                    ['gateway', t('providerSettingsGateway')],
-                    ['usage', t('providerSettingsUsage')]
-                  ] as Array<[ProviderSettingsSurface, string]>).map(([surface, label]) => (
-                    <button
-                      type="button"
-                      key={surface}
-                      className={providerSurface === surface ? 'active' : ''}
-                      aria-current={providerSurface === surface ? 'page' : undefined}
-                      data-provider-surface={surface}
-                      onClick={() => setProviderSurface(surface)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </nav>
-                {providerSurface === 'configuration' && (
-                  <ProviderList
-                    providers={providers}
-                    health={health}
-                    providerProbe={providerProbe}
-                    checkingProviderId={checkingProviderId}
-                    onAdd={() => openProviderEditor('new')}
-                    onProbe={(provider) => void probeProvider(provider)}
-                    onEdit={openProviderEditor}
-                    onRemove={(provider) => void remove(provider)}
-                  />
-                )}
-                {providerSurface === 'usage' && <ProviderUsageDashboard providers={providers} />}
-                {providerSurface === 'gateway' && <ProviderGatewayPanel />}
-              </>
+              <ProviderSettingsSection surface={providerSurface} providers={providers} health={health} providerProbe={providerProbe} checkingProviderId={checkingProviderId} onSurfaceChange={setProviderSurface} onAdd={() => openProviderEditor('new')} onProbe={(provider) => void probeProvider(provider)} onEdit={openProviderEditor} onRemove={(provider) => void remove(provider)} />
             )}
 
             {tab === 'notifications' && <NotificationConnectorManager />}
@@ -1780,6 +1643,8 @@ export default function SettingsPage(): React.JSX.Element {
                 </div>
               </>
             )}
+
+            {tab === 'data' && <DataRetentionSettings />}
 
             {tab === 'migrate' && (
               <MigrationManager defaultDirectory={activeSession?.meta.cwd ?? projects[0]?.path} />

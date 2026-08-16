@@ -11,7 +11,6 @@ import type {
   ProviderInput,
   ProviderGenerationProbeInput,
   ProviderGenerationProbeResult,
-  ProviderDiagnosticCredentialSource,
   ProviderModelFetchInput,
   ProviderModelFetchResult,
   ProviderView
@@ -55,9 +54,11 @@ import {
   migrateProviderCredentials,
   sanitizeProviderCredentialsForRuntime
 } from './provider/credentialMigration'
-import { bindProviderModelDiscoveryInput } from './provider/modelDiscoveryBinding'
-import { discoverProviderModels, parseProviderHeaderLines } from './provider/modelDiscovery'
-import { executeProviderGenerationProbe } from './provider/generationProbe'
+import {
+  fetchProviderModels,
+  probeProviderGenerationTarget,
+  type ProviderDiagnosticsDependencies
+} from './provider/providerDiagnostics'
 import {
   mergeProviderPatch,
   providerCredentialBindingChanged,
@@ -81,7 +82,7 @@ import {
   ProviderStoreMutationBlockedError,
   ProviderStoreRepository
 } from './provider/providerStoreRepository'
-import { writeProviderProfileBackup } from './provider/providerProfileBackupWriter'
+import { writeAutomaticProviderProfileBackup } from './provider/providerProfileAutoBackup'
 
 export { normalizeBaseUrl } from './provider/providerBaseUrl'
 export {
@@ -752,7 +753,7 @@ export function createProvider(input: ProviderInput): ProviderView {
         advancedConfig,
         createdAt: Date.now()
       }
-      createAutomaticProviderProfileBackup('provider-create', list)
+      writeAutomaticProviderProfileBackup(app.getPath('userData'), 'provider-create', list, persistedProviders(list))
       providerStore.replace([...list, provider])
       persistUnlocked()
       return toView(provider)
@@ -797,7 +798,7 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
       const view = toView(next)
       const nextList = [...list.slice(0, idx), next, ...list.slice(idx + 1)]
       if (persistedProviderStoreDigest(list) === persistedProviderStoreDigest(nextList)) return view
-      createAutomaticProviderProfileBackup('provider-update', list)
+      writeAutomaticProviderProfileBackup(app.getPath('userData'), 'provider-update', list, persistedProviders(list))
       providerStore.replace(nextList)
       persistUnlocked()
       return view
@@ -845,7 +846,7 @@ export function deleteProvider(id: string): void {
   if (!list.some((provider) => provider.id === id)) return
   withProviderStoreMutation('删除 Provider', {}, () => {
     const next = list.filter((p) => p.id !== id)
-    createAutomaticProviderProfileBackup('provider-delete', list)
+    writeAutomaticProviderProfileBackup(app.getPath('userData'), 'provider-delete', list, persistedProviders(list))
     providerStore.replace(next)
     try {
       persistUnlocked()
@@ -867,73 +868,22 @@ export function deleteProvider(id: string): void {
  * 不存在的路径返回鉴权错误；只有汇总所有候选后才给出分类诊断。
  */
 export async function fetchModels(opts: ProviderModelFetchInput): Promise<ProviderModelFetchResult> {
-  const requestedProviderId = opts.providerId?.trim()
-  const provider = requestedProviderId ? getProvider(requestedProviderId) : undefined
-  const bound = bindProviderModelDiscoveryInput(opts, provider)
-  const input = {
-    ...bound.input,
-    authMode: normalizeProviderAuthMode(bound.input.authMode, bound.input.baseUrl, 'openai')
-  }
-  const credentialProvider = bound.usesStoredCredential ? provider : undefined
-  return discoverProviderModels(input, () => resolveModelDiscoveryCredentials(input, credentialProvider), {
-    success: (providerId, latencyMs) => recordProbeSuccess(providerId, latencyMs),
-    failure: (providerId, message) => recordProbeFailure(providerId, message)
-  })
+  return fetchProviderModels(opts, providerDiagnosticsDependencies)
 }
 
 export async function probeProviderGeneration(
   opts: ProviderGenerationProbeInput
 ): Promise<ProviderGenerationProbeResult> {
-  const requestedProviderId = opts.providerId?.trim()
-  const provider = requestedProviderId ? getProvider(requestedProviderId) : undefined
-  const bound = bindProviderModelDiscoveryInput(opts, provider)
-  const input: ProviderGenerationProbeInput = {
-    ...bound.input,
-    model: opts.model,
-    authMode: normalizeProviderAuthMode(bound.input.authMode, bound.input.baseUrl, bound.input.engine ?? 'openai')
-  }
-  const credentialProvider = bound.usesStoredCredential ? provider : undefined
-  const credentials = resolveModelDiscoveryCredentials(input, credentialProvider)
-  if (credentials.customHeaderRejections.length > 0) {
-    throw new Error('Provider generation probe headers are invalid')
-  }
-  return executeProviderGenerationProbe(input, {
-    headers: credentials.headers,
-    headerNames: credentials.credentialHeaderNames ?? [],
-    source: credentials.source,
-    label: credentials.label,
-    available: credentials.authMode === 'none' || Boolean(credentials.token)
-  })
+  return probeProviderGenerationTarget(opts, providerDiagnosticsDependencies)
 }
 
-function createAutomaticProviderProfileBackup(
-  reason: 'provider-create' | 'provider-update' | 'provider-delete',
-  providers: Provider[]
-): void {
-  const persisted = persistedProviders(providers)
-  let excludedCredentialCount = 0
-  const sanitized = persisted.map((provider) => {
-    const keyCount = normalizedProviderKeys(provider).length || Number(Boolean(provider.encryptedToken))
-    excludedCredentialCount += keyCount
-    return {
-      ...provider,
-      encryptedToken: '',
-      apiKeys: [],
-      activeKeyId: undefined,
-      credentialMigrationRequired: provider.authMode === 'none'
-        ? false
-        : keyCount > 0 || provider.credentialMigrationRequired === true
-    }
-  })
-  writeProviderProfileBackup(app.getPath('userData'), reason, {
-    providers: sanitized,
-    nonPersistentCredentialCount: providers.reduce(
-      (count, provider) => count + normalizedProviderKeys(provider)
-        .filter((key) => key.sessionOnly === true).length,
-      0
-    ),
-    excludedCredentialCount
-  })
+const providerDiagnosticsDependencies: ProviderDiagnosticsDependencies = {
+  getProvider,
+  providerAuthMode,
+  decryptProviderToken,
+  selectedKey: (provider) => providerKeyDecision(provider).key,
+  recordProbeSuccess,
+  recordProbeFailure
 }
 
 function persistedProviderStoreDigest(providers: Provider[]): string {
@@ -960,43 +910,6 @@ function withDefaultProviderCredentialHeaders(provider: Provider): Provider {
   return {
     ...provider,
     credentialHeaderNames: resolvedProviderCredentialHeaderNames(provider)
-  }
-}
-
-function resolveModelDiscoveryCredentials(opts: ProviderModelFetchInput, provider: Provider | undefined) {
-  const authMode = normalizeProviderAuthMode(
-    providerAuthMode(provider) === 'none' || opts.authMode === 'none' ? 'none' : 'api-key',
-    opts.baseUrl,
-    'openai'
-  )
-  let token = authMode === 'none' ? '' : opts.token?.trim() || ''
-  if (!token && provider && authMode !== 'none') token = decryptProviderToken(provider)
-  const credentialHeaderNames = normalizedCredentialHeaderNames(
-    opts.credentialHeaderNames ?? provider?.credentialHeaderNames
-  )
-  const inspectedCustomHeaders = inspectProviderCustomHeaders(
-    opts.customHeaders ?? provider?.customHeaders ?? ''
-  )
-  const customHeaders = parseProviderHeaderLines(inspectedCustomHeaders.safeValue)
-  const selectedKey = provider && authMode !== 'none'
-    ? providerKeyDecision(provider).key
-    : undefined
-  const source: ProviderDiagnosticCredentialSource = authMode === 'none'
-    ? 'none'
-    : provider
-      ? 'stored-active'
-      : 'explicit'
-  return {
-    authMode,
-    token,
-    source,
-    label: selectedKey?.label,
-    credentialHeaderNames,
-    customHeaderRejections: inspectedCustomHeaders.rejectedNames,
-    headers: {
-      ...customHeaders,
-      ...providerCredentialHeaders({ credentialHeaderNames, authMode }, token)
-    }
   }
 }
 

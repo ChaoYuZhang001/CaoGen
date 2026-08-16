@@ -33,6 +33,15 @@ import {
 } from '../plugin/plugin-directory-effect'
 import { normalizeToolName } from './tool-idempotency'
 import { buildGuiPostconditionEffectTarget } from '../gui/gui-effect'
+import {
+  buildMigrationOperationEffectTarget,
+  isMigrationOperationEffectToolName
+} from '../migration-operation-effect'
+import { buildProjectPortableExportEffectTarget } from '../project-export-effect-target'
+import { buildProjectPortableImportEffectTarget } from '../project-import-effect-target'
+import { buildProjectPermanentDeletionEffectTarget } from '../project-deletion-effect-target'
+import { buildProviderProfileOperationTarget } from '../provider/provider-profile-operation-target'
+import { buildMediaJobOperationTarget } from '../media/media-job-effect-target'
 
 export interface EffectTargetObservationOptions {
   beforeRead?: (filePath: string) => Promise<void> | void
@@ -145,7 +154,7 @@ async function buildRepositoryEffectTarget(
   if (toolName === 'git_create_pr') return buildPullRequestTarget(input)
   if (toolName === 'git_create_issue') return buildIssueTarget(input)
   if (toolName === 'mcp_call_tool') {
-    return buildMcpEffectTarget(input.toolInput) ?? { kind: 'unsupported', toolName }
+    return buildMcpEffectTarget(input.toolInput, input.cwd) ?? { kind: 'unsupported', toolName }
   }
   if (toolName === 'send_notification') return buildWebhookMessageEffectTarget(input.toolInput)
   if (toolName === 'code_forge_delivery') {
@@ -163,6 +172,24 @@ async function buildRepositoryEffectTarget(
   }
   if (isManagedPluginEffectToolName(toolName)) {
     return buildManagedPluginEffectTarget(input.cwd, toolName, input.toolInput)
+  }
+  if (isMigrationOperationEffectToolName(toolName)) {
+    return buildMigrationOperationEffectTarget(toolName, input.toolInput)
+  }
+  if (toolName === 'project_portable_export') {
+    return buildProjectPortableExportEffectTarget(input.toolInput)
+  }
+  if (toolName === 'project_portable_import') {
+    return buildProjectPortableImportEffectTarget(input.toolInput)
+  }
+  if (toolName === 'project_permanent_deletion') {
+    return buildProjectPermanentDeletionEffectTarget(input.toolInput)
+  }
+  if (toolName === 'provider_profile_operation') {
+    return buildProviderProfileOperationTarget(input.toolInput)
+  }
+  if (toolName === 'media_job_operation') {
+    return buildMediaJobOperationTarget(input.toolInput)
   }
   return { kind: 'unsupported', toolName }
 }

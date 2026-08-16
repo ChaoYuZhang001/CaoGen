@@ -9,8 +9,10 @@ import {
   type ProviderCredentialResolution,
   type ProviderCredentialSessionSnapshot
 } from './providerCredentialBroker'
+import { configureKnownCredentialRedactor } from './security/secret-redaction'
 
 const broker = new ProviderCredentialBroker(safeStorage)
+configureKnownCredentialRedactor((value) => broker.redactKnownCredentials(value))
 
 export function storeProviderCredential(ref: ProviderCredentialRef, token: string): ProviderCredentialRecord {
   return broker.store(ref, token)

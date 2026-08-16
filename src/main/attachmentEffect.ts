@@ -12,8 +12,12 @@ type AttachmentEffectSource = 'user_file' | 'renderer_bytes'
 export interface ImageAttachmentEffectContext {
   sourceSessionId: string
   projectId?: string
+  workspaceId?: string
+  goalId?: string
+  workItemId?: string
   cwd: string
   attachmentsRoot: string
+  rootDir?: string
 }
 
 export async function executePreparedImageAttachmentEffect(
@@ -25,9 +29,13 @@ export async function executePreparedImageAttachmentEffect(
   const toolName = source === 'user_file' ? 'attachment_copy_image' : 'attachment_save_image_bytes'
   const outcome = await runOperation({
     kind: 'attachment_write',
+    rootDir: context.rootDir,
     title: source === 'user_file' ? '复制图片到会话附件区' : '保存图片到会话附件区',
     sourceSessionId: context.sourceSessionId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
+    goalId: context.goalId,
+    workItemId: context.workItemId,
     cwd: context.cwd,
     toolName,
     toolInput: {
@@ -56,9 +64,13 @@ export async function executePreparedDocumentAttachmentEffect(
   const toolName = 'attachment_copy_document'
   const outcome = await runOperation({
     kind: 'attachment_write',
+    rootDir: context.rootDir,
     title: '复制文档到会话附件区',
     sourceSessionId: context.sourceSessionId,
     projectId: context.projectId,
+    workspaceId: context.workspaceId,
+    goalId: context.goalId,
+    workItemId: context.workItemId,
     cwd: context.cwd,
     toolName,
     toolInput: {

@@ -95,6 +95,7 @@ const PERMISSION_RULE_FIELDS = new Set([
 ])
 const READ_TOOLS = new Set(['read_file', 'view', 'list_dir', 'search_symbol', 'search_code', 'find_file', 'get_dependencies', 'task_decompose'])
 const EDIT_TOOLS = new Set([
+  'artifact_register',
   'write_file',
   'search_replace',
   'edit_file',

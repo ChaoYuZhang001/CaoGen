@@ -236,7 +236,8 @@ function messageContextItems(
       dataClass: 'S2',
       egressPolicy: 'allow',
       decision: 'included',
-      bytes: Buffer.byteLength(payload.text, 'utf8')
+      bytes: Buffer.byteLength(payload.text, 'utf8'),
+      digest: `sha256:${createHash('sha256').update(payload.text).digest('hex')}`
     })
   }
   for (const [index, image] of (payload.images ?? []).entries()) {

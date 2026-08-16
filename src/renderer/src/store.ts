@@ -78,7 +78,8 @@ import type {
   WorktreeSummary
 } from '../../shared/types'
 import { createProviderProfileStoreActions, type ProviderProfileStoreActions } from './store/provider-profile-actions'
-import { createTaskRecoveryActions, requireMcpProbeResults, type TaskRecoveryActions } from './store/task-recovery-actions'
+import { createTaskRecoveryActions, refreshTaskRecoveryAfterEvent, type TaskRecoveryActions } from './store/task-recovery-actions'
+import { createPluginRegistryActions, type PluginRegistryActions } from './store/plugin-registry-actions'
 import { createExperienceModeSlice, type ExperienceModeSlice } from './store/experience-mode'
 import { createTaskPlanSlice, type TaskPlanSlice } from './store/task-plan-slice'
 import {
@@ -113,67 +114,6 @@ let fileDiagnosticsRequestSeq = 0
 let previewRequestSeq = 0
 let previewVisualRequestSeq = 0
 const genId = (): string => `it-${Date.now().toString(36)}-${seq++}`
-function pluginRegistryItemPrompt(item: PluginRegistryItem): string {
-  const kindLabel =
-    item.kind === 'plugin'
-      ? '插件包'
-      : item.kind === 'skill'
-        ? 'Skill'
-        : item.kind === 'agent'
-          ? 'Agent 定义'
-          : 'MCP 服务'
-  const usageHint =
-    item.kind === 'plugin'
-      ? '这是一个插件包容器。先查看该目录下的 .codex-plugin/plugin.json、skills/、agents/、mcp/ 等子资源,再选择最适合当前目标的能力使用。'
-      : item.kind === 'skill'
-      ? '如果需要细节,先读取该目录下的 SKILL.md,再按其中的触发条件和步骤执行。'
-      : item.kind === 'agent'
-        ? '如果需要细节,先读取这个 Agent 定义文件,再判断是否应该按它的角色拆分或执行任务。'
-        : '先判断当前会话是否已经暴露对应 MCP 工具;如果没有可调用工具,不要假装调用成功,请说明需要启用或配置该 MCP。'
-  return [
-    `请在当前任务中合理使用这个 ${kindLabel},但只在它确实适合当前目标时使用。`,
-    '',
-    `名称: ${item.name}`,
-    `类型: ${item.kind}`,
-    `状态: ${item.enabled ? '已启用' : '未启用或不可用'}`,
-    `内容摘要: ${item.contentDigest || 'unavailable'}`,
-    `来源根目录: ${item.sourceRoot}`,
-    `路径: ${item.path}`,
-    `摘要: ${item.summary || '(无摘要)'}`,
-    '',
-    usageHint,
-    '使用前请先核对实际文件/工具状态;不要仅凭名称推断能力。'
-  ].join('\n')
-}
-
-function pluginRegistryAgentTaskId(item: PluginRegistryItem): string {
-  const slug = item.name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 36)
-  return slug || 'plugin-agent'
-}
-
-function pluginRegistryAgentDispatchPrompt(item: PluginRegistryItem): string {
-  return [
-    `你将作为子 Agent「${item.name}」参与当前父会话任务。`,
-    '',
-    '请先核对你的 Agent 定义文件,再执行工作:',
-    `定义路径: ${item.path}`,
-    `来源根目录: ${item.sourceRoot}`,
-    `摘要: ${item.summary || '(无摘要)'}`,
-    `当前扫描状态: ${item.enabled ? '已启用' : '未启用或不可用'}`,
-    '',
-    '工作要求:',
-    '1. 读取并遵守该 Agent 定义文件中的角色、边界和输出格式。',
-    '2. 围绕父会话当前目标推进一个可验证的子任务;如果上下文不足,先从仓库中的 REQUIREMENTS.md、ROADMAP.md、DESIGN-V2.md 或相关源码提取事实。',
-    '3. 不要假装具备定义文件没有提供的工具或权限;遇到缺口要明确说明。',
-    '4. 产出应包含你检查过的证据、做出的修改或建议、以及可运行的验证命令。'
-  ].join('\n')
-}
-
 function closeNativeBrowserView(sessionId: string | null | undefined): void {
   if (!sessionId) return
   void window.agentDesk.closeBrowser(sessionId).catch(() => undefined)
@@ -786,7 +726,7 @@ export interface RewindPanelState {
   reason?: 'button' | 'shortcut' | 'command'
 }
 
-export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice, ProviderProfileStoreActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
+export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, TaskRecoveryActions, WelcomeDraftSlice, ResourceCatalogSlice, ProviderProfileStoreActions, PluginRegistryActions, TaskPlanSlice, ProjectWorkspaceStoreSlice {
   ready: boolean
   hydrated: boolean
   sessions: Record<string, SessionState>
@@ -814,6 +754,7 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   handleTerminalEvent(event: TerminalEvent): void
   handleBrowserEvent(event: BrowserEvent): void
   createSession(opts: CreateSessionOptions): Promise<string>
+  syncSession(sessionId: string): Promise<boolean>
   /** 建会话并立即发送首条消息(首屏"打开即输入"用) */
   startSessionWithPrompt(opts: CreateSessionOptions, prompt: string): Promise<string>
   recoverTaskSnapshot(snapshotId: string): Promise<void>
@@ -923,24 +864,6 @@ export interface AppStore extends ExperienceModeSlice, SettingsNavigationSlice, 
   pickBrowserElementAnnotation(note: string): Promise<void>
   /** 只读观测当前页面并发给 Agent 复验 */
   observeBrowserForAgent(): Promise<void>
-  /** @deprecated 使用 openPanel('pluginRegistry') 代替 */
-  openPluginRegistryPanel(): Promise<void>
-  /** @deprecated 使用 closePanel() 代替 */
-  closePluginRegistryPanel(): void
-  refreshPluginRegistryPanel(): Promise<void>
-  /** 探测 MCP server 运行态(真实连接测试) */
-  probeMcpRuntime(items: PluginRegistryItem[]): Promise<void>
-  /** 本地安装插件(弹目录选择器);成功后重扫 */
-  installPluginFromLocal(): Promise<void>
-  /** 卸载托管插件(回收站式);成功后重扫 */
-  uninstallManagedPlugin(item: PluginRegistryItem): Promise<void>
-  loadPluginRegistryForSlash(): Promise<void>
-  selectPluginRegistryItem(id: string): void
-  revealPluginRegistryItem(item: PluginRegistryItem): Promise<void>
-  togglePluginRegistryItem(item: PluginRegistryItem, enabled: boolean): Promise<void>
-  approvePluginRegistryItem(item: PluginRegistryItem): Promise<void>
-  sendPluginRegistryItemToAgent(item: PluginRegistryItem): Promise<void>
-  dispatchPluginAgent(item: PluginRegistryItem): Promise<void>
   /** @deprecated 使用 openPanel('subagent') 代替 */
   openSubagentPanel(): void
   /** @deprecated 使用 closePanel() 代替 */
@@ -1234,6 +1157,7 @@ export const useStore = create<AppStore>((set, get) => {
     driveMode: 'core',
     defaultTaskStrategy: 'execute',
     experienceMode: 'assistant',
+    experienceRecommendationDismissedId: '',
     defaultModel: '',
     /** DriveMode 风险偏好描述,不再作为会话 permissionMode 默认值;会话 permissionMode 由 taskStrategy 派生。 */
     defaultPermissionMode: 'default',
@@ -1290,7 +1214,10 @@ export const useStore = create<AppStore>((set, get) => {
     notificationsEnabled: true,
     preventDisplaySleep: true,
     autoSkillLearningEnabled: false,
-    office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
+    office: {
+      qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false,
+      spaceTheme: 'control-room', outfitPalette: 'role-default', hairStyle: 'role-default', teamLayout: 'grid'
+    },
     layout: {
       sidebarDesignVersion: 2,
       sidebarCollapsed: false,
@@ -1312,6 +1239,7 @@ export const useStore = create<AppStore>((set, get) => {
     }
   ),
   ...createProviderProfileStoreActions(set, get),
+  ...createPluginRegistryActions(set, get),
   ...createTaskPlanSlice((update) => set(update), () => get()),
   ...createProjectWorkspaceStoreSlice(set, get),
   ...createSettingsNavigationSlice((update) => set(update)),
@@ -1401,9 +1329,7 @@ export const useStore = create<AppStore>((set, get) => {
         sessions,
         order,
         settings,
-        experienceMode: activeId
-          ? sessions[activeId]?.meta.experienceModeOverride ?? settings.experienceMode
-          : settings.experienceMode,
+        experienceMode: settings.experienceMode,
         activeId
       }
     })
@@ -1506,6 +1432,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (event.kind === 'turn-result' || event.kind === 'init') {
       void window.agentDesk.listHistory().then((history) => set({ history }))
     }
+    refreshTaskRecoveryAfterEvent(event, get().hydrateTaskRecoveryCandidates)
     if (
       event.kind === 'assistant-message' ||
       event.kind === 'turn-result' ||
@@ -1514,7 +1441,6 @@ export const useStore = create<AppStore>((set, get) => {
       clearStreamBuffer(sessionId)
     }
   },
-
   handleMemorySuggestion(event) {
     set((s) => {
       const current = s.workbench.memorySuggestion
@@ -1582,7 +1508,6 @@ export const useStore = create<AppStore>((set, get) => {
       },
       order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
       activeId: meta.id,
-      experienceMode: meta.experienceModeOverride ?? s.experienceMode,
       showNewSession: false,
       newSessionProjectId: null
     }))
@@ -1601,6 +1526,22 @@ export const useStore = create<AppStore>((set, get) => {
     }
     void get().refreshProjects() // 新会话的 cwd 已被主进程收藏,刷新项目列表
     return meta.id
+  },
+
+  async syncSession(sessionId) {
+    const meta = (await window.agentDesk.listSessions()).find((candidate) => candidate.id === sessionId)
+    if (!meta) return false
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [meta.id]: drainPendingEvents(
+          meta.id,
+          state.sessions[meta.id] ? { ...state.sessions[meta.id], meta } : newSessionState(meta)
+        )
+      },
+      order: state.order.includes(meta.id) ? state.order : [...state.order, meta.id]
+    }))
+    return true
   },
 
   async startSessionWithPrompt(opts, prompt) {
@@ -1793,7 +1734,7 @@ export const useStore = create<AppStore>((set, get) => {
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
     set((s) => ({
       activeId: id, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode),
-      experienceMode: s.sessions[id]?.meta.experienceModeOverride ?? s.settings.experienceMode,
+      experienceMode: s.experienceMode === 'video' ? 'assistant' : s.experienceMode,
       showNewSession: false,
       newSessionProjectId: null,
       workbench:
@@ -3173,397 +3114,6 @@ export const useStore = create<AppStore>((set, get) => {
     }
   },
 
-  async openPluginRegistryPanel() {
-    get().openPanel('pluginRegistry')
-  },
-
-  closePluginRegistryPanel() {
-    get().closePanel()
-  },
-
-  async refreshPluginRegistryPanel() {
-    const id = get().activeId ?? undefined
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        pluginRegistryLoading: true,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined
-      }
-    }))
-    try {
-      const pluginRegistry = await window.agentDesk.scanPluginRegistry(id)
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistry,
-          pluginRegistryLoading: false,
-          pluginRegistryError: undefined,
-          selectedPluginRegistryItemId:
-            s.workbench.selectedPluginRegistryItemId &&
-            pluginRegistry.items.some((item) => item.id === s.workbench.selectedPluginRegistryItemId)
-              ? s.workbench.selectedPluginRegistryItemId
-              : pluginRegistry.items[0]?.id
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryLoading: false,
-          pluginRegistryError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async probeMcpRuntime(items) {
-    const id = get().activeId ?? undefined
-    const mcpItems = items.filter((item) => item.kind === 'mcp' && item.enabled && item.trust.status === 'approved')
-    if (mcpItems.length === 0) {
-      set((s) => ({ workbench: {
-        ...s.workbench,
-        pluginRegistryError: '没有已批准且已启用的 MCP 可供探测',
-        pluginRegistryMessage: undefined
-      } }))
-      return
-    }
-    set((s) => ({ workbench: { ...s.workbench, mcpProbing: true, pluginRegistryError: undefined } }))
-    try {
-      const results = await requireMcpProbeResults(await window.agentDesk.probeMcpServers(mcpItems, id), get().refreshTaskSnapshots)
-      set((s) => {
-        const merged = { ...s.workbench.mcpProbeResults }
-        for (const result of results) merged[result.id] = result
-        const okCount = results.filter((r) => r.ok).length
-        return {
-          workbench: {
-            ...s.workbench,
-            mcpProbing: false,
-            mcpProbeResults: merged,
-            pluginRegistryMessage: `MCP 探测完成:${okCount}/${results.length} 连通`
-          }
-        }
-      })
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          mcpProbing: false,
-          pluginRegistryError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async installPluginFromLocal() {
-    set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
-    try {
-      const result = await window.agentDesk.installLocalPlugin()
-      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
-      if (!result.ok) {
-        // 用户取消不算错误
-        if (result.error !== 'canceled') {
-          set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
-        }
-        return
-      }
-      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已安装 ${result.name}(${result.installedPath})` } }))
-      await get().refreshPluginRegistryPanel()
-    } catch (err) {
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) }
-      }))
-    }
-  },
-
-  async uninstallManagedPlugin(item) {
-    set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: undefined, pluginRegistryMessage: undefined } }))
-    try {
-      const result = await window.agentDesk.uninstallPlugin(item.path)
-      if (result.effectStatus === 'waiting_reconciliation') await get().refreshTaskSnapshots()
-      if (!result.ok) {
-        set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error } }))
-        return
-      }
-      set((s) => ({ workbench: { ...s.workbench, pluginRegistryMessage: `已卸载 ${item.name},可从回收站恢复(${result.trashedTo})` } }))
-      await get().refreshPluginRegistryPanel()
-    } catch (err) {
-      set((s) => ({
-        workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) }
-      }))
-    }
-  },
-
-  async loadPluginRegistryForSlash() {
-    const id = get().activeId ?? undefined
-    if (get().workbench.pluginRegistryLoading) return
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        pluginRegistryLoading: true,
-        pluginRegistryError: undefined
-      }
-    }))
-    try {
-      const pluginRegistry = await window.agentDesk.scanPluginRegistry(id)
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistry,
-          pluginRegistryLoading: false,
-          pluginRegistryError: undefined,
-          selectedPluginRegistryItemId:
-            s.workbench.selectedPluginRegistryItemId &&
-            pluginRegistry.items.some((item) => item.id === s.workbench.selectedPluginRegistryItemId)
-              ? s.workbench.selectedPluginRegistryItemId
-              : pluginRegistry.items[0]?.id
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryLoading: false,
-          pluginRegistryError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  selectPluginRegistryItem(id) {
-    set((s) => ({ workbench: { ...s.workbench, selectedPluginRegistryItemId: id } }))
-  },
-
-  async revealPluginRegistryItem(item) {
-    const id = get().activeId ?? undefined
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined,
-        selectedPluginRegistryItemId: item.id
-      }
-    }))
-    const result = await window.agentDesk.revealPluginRegistryItem(item.path, id)
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        pluginRegistryMessage: result.ok ? `已定位 ${item.name}` : undefined,
-        pluginRegistryError: result.ok ? undefined : result.error
-      }
-    }))
-  },
-
-  async togglePluginRegistryItem(item, enabled) {
-    const id = get().activeId ?? undefined
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        selectedPluginRegistryItemId: item.id,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined
-      }
-    }))
-    try {
-      const result = await window.agentDesk.setPluginRegistryItemEnabled(item, enabled, id)
-      if (!result.ok || !result.item) {
-        set((s) => ({
-          workbench: {
-            ...s.workbench,
-            pluginRegistryError: result.error || '插件状态更新失败',
-            pluginRegistryMessage: undefined
-          }
-        }))
-        return
-      }
-      const updatedItem = result.item
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistry: s.workbench.pluginRegistry
-            ? {
-                ...s.workbench.pluginRegistry,
-                items: s.workbench.pluginRegistry.items.map((candidate) =>
-                  candidate.id === updatedItem.id &&
-                  candidate.kind === updatedItem.kind &&
-                  candidate.sourceRoot === updatedItem.sourceRoot &&
-                  candidate.path === updatedItem.path &&
-                  candidate.name === updatedItem.name
-                    ? updatedItem
-                    : candidate
-                )
-              }
-            : s.workbench.pluginRegistry,
-          selectedPluginRegistryItemId: updatedItem.id,
-          pluginRegistryMessage: `${updatedItem.name} 已${updatedItem.enabled ? '启用' : '停用'}`,
-          pluginRegistryError: undefined
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: err instanceof Error ? err.message : String(err),
-          pluginRegistryMessage: undefined
-        }
-      }))
-    }
-  },
-
-  async approvePluginRegistryItem(item) {
-    const id = get().activeId ?? undefined
-    set((s) => ({ workbench: {
-      ...s.workbench,
-      selectedPluginRegistryItemId: item.id,
-      pluginRegistryError: undefined,
-      pluginRegistryMessage: undefined
-    } }))
-    try {
-      const result = await window.agentDesk.approvePluginRegistryItem(item, id)
-      if (!result.ok || !result.item) {
-        set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: result.error || '批准失败' } }))
-        return
-      }
-      const updatedItem = result.item
-      set((s) => ({ workbench: {
-        ...s.workbench,
-        pluginRegistry: s.workbench.pluginRegistry ? {
-          ...s.workbench.pluginRegistry,
-          items: s.workbench.pluginRegistry.items.map((candidate) => candidate.id === updatedItem.id ? updatedItem : candidate)
-        } : s.workbench.pluginRegistry,
-        pluginRegistryMessage: `${updatedItem.name} 已绑定当前内容摘要和能力清单`,
-        pluginRegistryError: undefined
-      } }))
-    } catch (err) {
-      set((s) => ({ workbench: { ...s.workbench, pluginRegistryError: err instanceof Error ? err.message : String(err) } }))
-    }
-  },
-
-  async sendPluginRegistryItemToAgent(item) {
-    const id = get().activeId
-    if (!id) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: '请先选择一个会话',
-          pluginRegistryMessage: undefined
-        }
-      }))
-      return
-    }
-    if (!item.enabled || item.trust.status !== 'approved') {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          selectedPluginRegistryItemId: item.id,
-          pluginRegistryError: '该插件条目未批准或已停用，请先批准当前内容',
-          pluginRegistryMessage: undefined
-        }
-      }))
-      return
-    }
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        selectedPluginRegistryItemId: item.id,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined
-      }
-    }))
-    try {
-      const authorization = await window.agentDesk.authorizePluginRegistryItem(item, id)
-      if (!authorization.ok || !authorization.item) throw new Error(authorization.error || '插件信任校验失败')
-      await get().sendMessage(pluginRegistryItemPrompt(authorization.item))
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryMessage: `已把 ${item.name} 发给当前 Agent`,
-          pluginRegistryError: undefined
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
-  async dispatchPluginAgent(item) {
-    if (item.kind !== 'agent') {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: '只有 Agent 定义可以派发为子 Agent',
-          pluginRegistryMessage: undefined
-        }
-      }))
-      return
-    }
-    if (!item.enabled || item.trust.status !== 'approved') {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          selectedPluginRegistryItemId: item.id,
-          pluginRegistryError: '该 Agent 定义未批准或已停用，请先批准当前内容',
-          pluginRegistryMessage: undefined
-        }
-      }))
-      return
-    }
-    const parentId = get().activeId
-    if (!parentId) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: '请先选择一个父会话',
-          pluginRegistryMessage: undefined
-        }
-      }))
-      return
-    }
-    set((s) => ({
-      workbench: {
-        ...s.workbench,
-        selectedPluginRegistryItemId: item.id,
-        pluginRegistryError: undefined,
-        pluginRegistryMessage: undefined
-      }
-    }))
-    try {
-      const authorization = await window.agentDesk.authorizePluginRegistryItem(item, parentId)
-      if (!authorization.ok || !authorization.item) throw new Error(authorization.error || '插件信任校验失败')
-      const trustedItem = authorization.item
-      const result = await get().dispatchSubagents({
-        tasks: [
-          {
-            id: pluginRegistryAgentTaskId(trustedItem),
-            role: trustedItem.name,
-            title: `${trustedItem.name} 子 Agent`,
-            prompt: pluginRegistryAgentDispatchPrompt(trustedItem)
-          }
-        ]
-      })
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          lastSubagentDispatch: result ?? s.workbench.lastSubagentDispatch,
-          pluginRegistryMessage: result ? `已派发 ${item.name} 子 Agent` : undefined,
-          pluginRegistryError: result ? undefined : '子 Agent 派发失败'
-        }
-      }))
-    } catch (err) {
-      set((s) => ({
-        workbench: {
-          ...s.workbench,
-          pluginRegistryError: err instanceof Error ? err.message : String(err)
-        }
-      }))
-    }
-  },
-
   openSubagentPanel() {
     get().openPanel('subagent')
   },
@@ -3949,6 +3499,7 @@ export const useStore = create<AppStore>((set, get) => {
     }
     set((s) => ({
       showNewSession: v, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode, v),
+      experienceMode: v && s.experienceMode === 'video' ? 'assistant' : s.experienceMode,
       newSessionProjectId: v ? projectId ?? null : null,
       showSettings: v ? false : s.showSettings,
       settingsContext: v ? null : s.settingsContext,

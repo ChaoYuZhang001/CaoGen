@@ -55,7 +55,8 @@ try {
       { text: USER_REQUEST, images: [] },
       sessionMeta('anthropic-memory-smoke', 'anthropic')
     )
-    assertEffectivePrompt(prepared.text, 'native Anthropic prepared user message')
+    assert(prepared.hasMemoryContext, 'native Anthropic payload did not report effective Memory context')
+    assertEffectivePrompt(prepared.payload.text, 'native Anthropic prepared user message')
   })
 
   for (const protocol of ['chat', 'responses']) {
@@ -95,12 +96,11 @@ async function createMemoryDraft(lifecycle, token, logicalId, extra = {}) {
 }
 
 async function captureOpenAISendPayload(OpenAIEngine, protocol) {
-  const engine = Object.create(OpenAIEngine.prototype)
-  engine.meta = sessionMeta(`openai-${protocol}-memory-smoke`, 'openai')
-  engine.chatHistory = []
+  const engine = new OpenAIEngine(
+    sessionMeta(`openai-${protocol}-memory-smoke`, 'openai'),
+    () => undefined
+  )
   engine.turnStartedAt = Date.now()
-  engine.triedProviders = new Set()
-  engine.triedProviderKeys = new Set()
   engine.authConfig = () => ({
     available: true,
     authMode: 'api_key',

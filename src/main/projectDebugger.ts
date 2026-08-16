@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { existsSync, lstatSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, type Dirent } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Readable } from 'node:stream'
@@ -17,6 +17,7 @@ import type {
   ProjectDebugTargetSource,
   ProjectDebugVariable
 } from '../shared/types'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 const MAX_OUTPUT_BYTES = 256 * 1024
@@ -30,6 +31,12 @@ const ENTRY_BASENAMES = new Set(['app', 'cli', 'index', 'main', 'server'])
 
 interface RunnableDebugTarget extends ProjectDebugTarget {
   absolutePath: string
+}
+
+interface DebugTargetCandidate {
+  path: string
+  source: ProjectDebugTargetSource
+  label: string
 }
 
 interface InspectorCallFrame {
@@ -150,6 +157,7 @@ class NodeInspectorRuntime {
   private state: ProjectDebugState
   private entryPauseResolve: (() => void) | null = null
   private entryPaused = false
+  private resumeAfterEntryPause = true
   private waitingForEntry = true
   private stopping = false
   private detachingForExit = false
@@ -206,15 +214,17 @@ class NodeInspectorRuntime {
       await this.send('Debugger.enable')
       for (const breakpoint of this.breakpoints) {
         await this.send('Debugger.setBreakpointByUrl', {
-          url: pathToFileURL(resolve(this.cwd, breakpoint.path)).href,
+          url: pathToFileURL(realpathSync(resolve(this.cwd, breakpoint.path))).href,
           lineNumber: breakpoint.line - 1
         })
       }
       await this.send('Runtime.runIfWaitingForDebugger')
       await this.waitForEntryPause()
       this.waitingForEntry = false
-      await this.send('Debugger.resume')
-      if (!this.settled && this.state.status !== 'paused') this.state.status = 'running'
+      if (this.resumeAfterEntryPause) {
+        await this.send('Debugger.resume')
+        if (!this.settled && this.state.status !== 'paused') this.state.status = 'running'
+      }
     } catch (error) {
       this.fail(errorMessage(error))
       this.terminateProcess()
@@ -339,9 +349,10 @@ class NodeInspectorRuntime {
   private async handlePaused(params: Record<string, unknown>): Promise<void> {
     if (this.waitingForEntry) {
       this.entryPaused = true
+      this.resumeAfterEntryPause = !hasUserBreakpoint(params)
       this.entryPauseResolve?.()
       this.entryPauseResolve = null
-      return
+      if (this.resumeAfterEntryPause) return
     }
     const frames = Array.isArray(params.callFrames) ? params.callFrames as InspectorCallFrame[] : []
     this.callFrames.clear()
@@ -372,7 +383,7 @@ class NodeInspectorRuntime {
   private publicScriptPath(url: string): string {
     try {
       const absolute = url.startsWith('file:') ? fileURLToPath(url) : resolve(url)
-      const rel = relative(resolve(this.cwd), resolve(absolute))
+      const rel = relative(realpathSync(this.cwd), resolve(absolute))
       return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) ? rel.replace(/\\/g, '/') : `<runtime>/${basename(absolute)}`
     } catch {
       return '<runtime>'
@@ -458,7 +469,11 @@ class NodeInspectorRuntime {
     const child = this.child
     if (!child?.pid || child.killed) return
     if (process.platform === 'win32') {
-      spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
+      spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+        env: buildMinimalSubprocessEnv(),
+        windowsHide: true,
+        stdio: 'ignore'
+      })
     } else {
       child.kill('SIGTERM')
     }
@@ -498,60 +513,88 @@ class NodeInspectorRuntime {
   }
 }
 
+function hasUserBreakpoint(params: Record<string, unknown>): boolean {
+  return Array.isArray(params.hitBreakpoints) && params.hitBreakpoints.length > 0
+}
+
 function discoverRunnableTargets(cwd: string): RunnableDebugTarget[] {
   const root = resolve(cwd)
-  const manifestPath = join(root, 'package.json')
-  let manifestText = ''
-  let manifest: Record<string, unknown> = {}
-  if (existsSync(manifestPath)) {
-    manifestText = readBoundedFile(manifestPath, 'package.json')
-    try {
-      const parsed = JSON.parse(manifestText) as unknown
-      if (isRecord(parsed)) manifest = parsed
-    } catch {
-      throw new Error('package.json is invalid JSON')
-    }
-  }
-  const candidates: Array<{ path: string; source: ProjectDebugTargetSource; label: string }> = []
-  if (typeof manifest.main === 'string') candidates.push({ path: manifest.main, source: 'package-main', label: 'Package main' })
-  if (typeof manifest.bin === 'string') candidates.push({ path: manifest.bin, source: 'package-bin', label: 'Package CLI' })
-  if (isRecord(manifest.bin)) {
-    for (const [name, value] of Object.entries(manifest.bin)) {
-      if (typeof value === 'string') candidates.push({ path: value, source: 'package-bin', label: `CLI: ${name}` })
-    }
-  }
-  if (isRecord(manifest.scripts)) {
-    for (const [name, value] of Object.entries(manifest.scripts)) {
-      const parsed = typeof value === 'string' ? directScriptEntry(value) : null
-      if (parsed) candidates.push({ path: parsed, source: 'package-script', label: `Script: ${name}` })
-    }
-  }
+  const { manifest, manifestText } = readDebugManifest(root)
+  const candidates = manifestDebugTargetCandidates(manifest)
   for (const entry of scanWorkspaceEntries(root)) {
     candidates.push({ path: entry, source: 'workspace-entry', label: entry.replace(/\\/g, '/') })
   }
   const seen = new Set<string>()
   const runnable: RunnableDebugTarget[] = []
   for (const candidate of candidates) {
-    const absolutePath = resolve(root, candidate.path)
-    const rel = relative(root, absolutePath)
-    if (!rel || rel.startsWith('..') || isAbsolute(rel) || seen.has(rel.toLowerCase())) continue
-    if (!isSupportedFile(absolutePath)) continue
-    seen.add(rel.toLowerCase())
-    const runtime = isTypeScript(absolutePath) ? 'tsx' : 'node'
-    const identity = `${manifestText}\0${fileIdentity(absolutePath)}\0${runtime}`
-    const id = createHash('sha256').update(identity).digest('hex').slice(0, 24)
-    runnable.push({
-      id,
-      label: candidate.label,
-      source: candidate.source,
-      relativePath: rel.replace(/\\/g, '/'),
-      runtime,
-      default: runnable.length === 0,
-      absolutePath
-    })
+    const target = runnableDebugTarget(root, manifestText, candidate, seen, runnable.length === 0)
+    if (target) runnable.push(target)
     if (runnable.length >= MAX_TARGETS) break
   }
   return runnable
+}
+
+function readDebugManifest(root: string): { manifest: Record<string, unknown>; manifestText: string } {
+  const manifestPath = join(root, 'package.json')
+  if (!existsSync(manifestPath)) return { manifest: {}, manifestText: '' }
+  const manifestText = readBoundedFile(manifestPath, 'package.json')
+  try {
+    const parsed = JSON.parse(manifestText) as unknown
+    return { manifest: isRecord(parsed) ? parsed : {}, manifestText }
+  } catch {
+    throw new Error('package.json is invalid JSON')
+  }
+}
+
+function manifestDebugTargetCandidates(manifest: Record<string, unknown>): DebugTargetCandidate[] {
+  const candidates: DebugTargetCandidate[] = []
+  if (typeof manifest.main === 'string') candidates.push({ path: manifest.main, source: 'package-main', label: 'Package main' })
+  if (typeof manifest.bin === 'string') candidates.push({ path: manifest.bin, source: 'package-bin', label: 'Package CLI' })
+  if (isRecord(manifest.bin)) addNamedDebugTargets(candidates, manifest.bin, 'package-bin', 'CLI')
+  if (isRecord(manifest.scripts)) {
+    for (const [name, value] of Object.entries(manifest.scripts)) {
+      const path = typeof value === 'string' ? directScriptEntry(value) : null
+      if (path) candidates.push({ path, source: 'package-script', label: `Script: ${name}` })
+    }
+  }
+  return candidates
+}
+
+function addNamedDebugTargets(
+  candidates: DebugTargetCandidate[],
+  entries: Record<string, unknown>,
+  source: ProjectDebugTargetSource,
+  label: string
+): void {
+  for (const [name, value] of Object.entries(entries)) {
+    if (typeof value === 'string') candidates.push({ path: value, source, label: `${label}: ${name}` })
+  }
+}
+
+function runnableDebugTarget(
+  root: string,
+  manifestText: string,
+  candidate: DebugTargetCandidate,
+  seen: Set<string>,
+  isDefault: boolean
+): RunnableDebugTarget | undefined {
+  const absolutePath = resolve(root, candidate.path)
+  const relativePath = relative(root, absolutePath)
+  const key = relativePath.toLowerCase()
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath) || seen.has(key)) return undefined
+  if (!isSupportedFile(absolutePath)) return undefined
+  seen.add(key)
+  const runtime = isTypeScript(absolutePath) ? 'tsx' : 'node'
+  const identity = `${manifestText}\0${fileIdentity(absolutePath)}\0${runtime}`
+  return {
+    id: createHash('sha256').update(identity).digest('hex').slice(0, 24),
+    label: candidate.label,
+    source: candidate.source,
+    relativePath: relativePath.replace(/\\/g, '/'),
+    runtime,
+    default: isDefault,
+    absolutePath
+  }
 }
 
 function scanWorkspaceEntries(root: string): string[] {
@@ -625,7 +668,7 @@ function debugExecutable(): string {
 }
 
 function debugEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }
+  const env = buildMinimalSubprocessEnv({ NO_COLOR: '1', FORCE_COLOR: '0' })
   if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1'
   return env
 }

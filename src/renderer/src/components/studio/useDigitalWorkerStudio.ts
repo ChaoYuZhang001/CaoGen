@@ -16,6 +16,7 @@ import type {
   RoleTemplateInput
 } from '../../../../shared/types'
 import { errorMessage, roleTemplateInputForRecommendation } from './digital-worker-studio-model'
+import type { TeamTemplatePack } from './team-template-market'
 
 interface WorkerCreateRequest {
   input: DigitalWorkerInput
@@ -45,6 +46,7 @@ export interface DigitalWorkerStudioState {
   refresh: () => Promise<void>
   clearError: () => void
   createRole: (input: RoleTemplateInput) => Promise<boolean>
+  installTeamTemplatePack: (pack: TeamTemplatePack) => Promise<void>
   recommendTeam: (projectId: string) => Promise<void>
   clearRecommendation: () => void
   adoptRecommendedRole: (recommendation: DigitalWorkerRoleRecommendation) => Promise<RoleTemplate | null>
@@ -62,6 +64,7 @@ export interface DigitalWorkerStudioState {
   retireWorker: (worker: DigitalWorker) => Promise<void>
   refreshWorkerPerformance: (worker: DigitalWorker) => Promise<void>
   assignWorker: (request: AssignmentRequest) => Promise<boolean>
+  releaseAssignment: (assignment: DigitalWorkerAssignment) => Promise<void>
 }
 
 interface StudioCollections {
@@ -142,6 +145,7 @@ interface StudioMutationState {
   workerMemory: DigitalWorkerMemorySnapshot | null
   workerHistory: DigitalWorkerHistorySnapshot | null
   createRole: DigitalWorkerStudioState['createRole']
+  installTeamTemplatePack: DigitalWorkerStudioState['installTeamTemplatePack']
   recommendTeam: DigitalWorkerStudioState['recommendTeam']
   clearRecommendation: DigitalWorkerStudioState['clearRecommendation']
   adoptRecommendedRole: DigitalWorkerStudioState['adoptRecommendedRole']
@@ -159,16 +163,36 @@ interface StudioMutationState {
   retireWorker: DigitalWorkerStudioState['retireWorker']
   refreshWorkerPerformance: DigitalWorkerStudioState['refreshWorkerPerformance']
   assignWorker: DigitalWorkerStudioState['assignWorker']
+  releaseAssignment: DigitalWorkerStudioState['releaseAssignment']
 }
 
 function useStudioMutations(collections: StudioCollections): StudioMutationState {
-  const { assignments, refresh, setAssignments, setError, setRoles, setWorkers } = collections
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
-  const [recommendation, setRecommendation] = useState<DigitalWorkerTeamRecommendation | null>(null)
+  const feedback = { setBusyKey, setNotice }
+  const records = useWorkerRecordMutations(collections, feedback)
+  const roles = useRoleMutations(collections, feedback)
+  const workers = useWorkerMutations(collections, feedback)
+  const assignment = useAssignmentMutation(collections, feedback)
+  return { busyKey, notice, ...records, ...roles, ...workers, ...assignment }
+}
+
+interface MutationFeedback {
+  setBusyKey: Dispatch<SetStateAction<string | null>>
+  setNotice: Dispatch<SetStateAction<string>>
+}
+
+function useWorkerRecordMutations(
+  collections: StudioCollections,
+  feedback: MutationFeedback
+): Pick<StudioMutationState,
+  | 'workerMemory' | 'workerHistory' | 'openWorkerMemory' | 'closeWorkerMemory'
+  | 'openWorkerHistory' | 'closeWorkerHistory' | 'exportWorkerHistory'
+  | 'proposeWorkerMemory' | 'decideWorkerMemory'> {
+  const { setError } = collections
+  const { setBusyKey, setNotice } = feedback
   const [workerMemory, setWorkerMemory] = useState<DigitalWorkerMemorySnapshot | null>(null)
   const [workerHistory, setWorkerHistory] = useState<DigitalWorkerHistorySnapshot | null>(null)
-
   const openWorkerHistory = useCallback(async (workerId: string): Promise<void> => {
     setBusyKey(`history:${workerId}:list`)
     setError('')
@@ -250,7 +274,26 @@ function useStudioMutations(collections: StudioCollections): StudioMutationState
       setBusyKey(null)
     }
   }, [setError])
+  return {
+    workerMemory,
+    workerHistory,
+    openWorkerMemory,
+    closeWorkerMemory: () => setWorkerMemory(null),
+    openWorkerHistory,
+    closeWorkerHistory: () => setWorkerHistory(null),
+    exportWorkerHistory,
+    proposeWorkerMemory,
+    decideWorkerMemory
+  }
+}
 
+function useRoleMutations(
+  collections: StudioCollections,
+  feedback: MutationFeedback
+): Pick<StudioMutationState, 'recommendation' | 'recommendTeam' | 'clearRecommendation' | 'adoptRecommendedRole' | 'createRole' | 'installTeamTemplatePack'> {
+  const { roles: currentRoles, setError, setRoles } = collections
+  const { setBusyKey, setNotice } = feedback
+  const [recommendation, setRecommendation] = useState<DigitalWorkerTeamRecommendation | null>(null)
   const recommendTeam = useCallback(async (projectId: string): Promise<void> => {
     setBusyKey('team:recommend')
     setError('')
@@ -299,8 +342,50 @@ function useStudioMutations(collections: StudioCollections): StudioMutationState
     } finally {
       setBusyKey(null)
     }
-  }, [])
+  }, [setBusyKey, setError, setNotice, setRoles])
+  const installTeamTemplatePack = useCallback(async (pack: TeamTemplatePack): Promise<void> => {
+    setBusyKey(`team-template:${pack.id}`)
+    setError('')
+    try {
+      const knownIds = new Set(currentRoles.map((role) => role.id))
+      const created: RoleTemplate[] = []
+      for (const input of pack.roles) {
+        if (input.id && knownIds.has(input.id)) continue
+        const role = await window.agentDesk.createDigitalWorkerRoleTemplate(input)
+        created.push(role)
+        knownIds.add(role.id)
+      }
+      if (created.length > 0) {
+        setRoles((current) => [...current, ...created].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')))
+      }
+      setNotice(created.length > 0
+        ? `团队模板“${pack.name}”已安装 ${created.length} 个版本化岗位。`
+        : `团队模板“${pack.name}”已经是最新版本。`)
+    } catch (cause) {
+      setError(errorMessage(cause))
+      await collections.refresh()
+    } finally {
+      setBusyKey(null)
+    }
+  }, [collections, currentRoles, setBusyKey, setError, setNotice, setRoles])
+  return {
+    recommendation,
+    recommendTeam,
+    clearRecommendation: () => setRecommendation(null),
+    adoptRecommendedRole,
+    createRole,
+    installTeamTemplatePack
+  }
+}
 
+function useWorkerMutations(
+  collections: StudioCollections,
+  feedback: MutationFeedback
+): Pick<StudioMutationState,
+  | 'createWorker' | 'activateWorker' | 'pauseWorker' | 'resumeWorker'
+  | 'retireWorker' | 'refreshWorkerPerformance'> {
+  const { refresh, setError, setWorkers } = collections
+  const { setBusyKey, setNotice } = feedback
   const createWorker = useCallback(async (request: WorkerCreateRequest): Promise<boolean> => {
     setBusyKey('worker:create')
     setError('')
@@ -344,8 +429,36 @@ function useStudioMutations(collections: StudioCollections): StudioMutationState
     } finally {
       setBusyKey(null)
     }
-  }, [])
+  }, [setBusyKey, setError, setNotice, setWorkers])
+  const refreshWorkerPerformance = useCallback(async (worker: DigitalWorker): Promise<void> => {
+    setBusyKey(`worker:${worker.id}:performance`)
+    setError('')
+    try {
+      const updated = await window.agentDesk.refreshDigitalWorkerPerformance(worker.id)
+      setWorkers((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setNotice(`${updated.displayName} 的绩效已按当前交付记录更新。`)
+    } catch (cause) {
+      setError(errorMessage(cause))
+    } finally {
+      setBusyKey(null)
+    }
+  }, [setBusyKey, setError, setNotice, setWorkers])
+  return {
+    createWorker,
+    activateWorker: (worker) => runLifecycle(worker, 'activate'),
+    pauseWorker: (worker) => runLifecycle(worker, 'pause'),
+    resumeWorker: (worker) => runLifecycle(worker, 'resume'),
+    retireWorker: (worker) => runLifecycle(worker, 'retire'),
+    refreshWorkerPerformance
+  }
+}
 
+function useAssignmentMutation(
+  collections: StudioCollections,
+  feedback: MutationFeedback
+): Pick<StudioMutationState, 'assignWorker' | 'releaseAssignment'> {
+  const { assignments, refresh, setAssignments, setError } = collections
+  const { setBusyKey, setNotice } = feedback
   const assignWorker = useCallback(async (request: AssignmentRequest): Promise<boolean> => {
     setBusyKey(`assignment:${request.workItemId}`)
     setError('')
@@ -383,47 +496,26 @@ function useStudioMutations(collections: StudioCollections): StudioMutationState
     } finally {
       setBusyKey(null)
     }
-  }, [assignments, setAssignments, setError])
-
-  const refreshWorkerPerformance = useCallback(async (worker: DigitalWorker): Promise<void> => {
-    setBusyKey(`worker:${worker.id}:performance`)
+  }, [assignments, setAssignments, setBusyKey, setError, setNotice])
+  const releaseAssignment = useCallback(async (assignment: DigitalWorkerAssignment): Promise<void> => {
+    setBusyKey(`assignment:${assignment.id}:release`)
     setError('')
     try {
-      const updated = await window.agentDesk.refreshDigitalWorkerPerformance(worker.id)
-      setWorkers((current) => current.map((item) => item.id === updated.id ? updated : item))
-      setNotice(`${updated.displayName} 的绩效已按当前交付记录更新。`)
+      await window.agentDesk.releaseDigitalWorkerAssignment(
+        assignment.id,
+        { expectedRevision: assignment.revision },
+        { reason: '用户在数字团队中解除 WorkItem 分配' }
+      )
+      setAssignments((items) => items.filter((item) => item.id !== assignment.id))
+      setNotice('WorkItem 分配已解除，历史记录已保留。')
     } catch (cause) {
       setError(errorMessage(cause))
+      await refresh()
     } finally {
       setBusyKey(null)
     }
-  }, [setError, setWorkers])
-
-  return {
-    busyKey,
-    notice,
-    recommendation,
-    workerMemory,
-    workerHistory,
-    createRole,
-    recommendTeam,
-    clearRecommendation: () => setRecommendation(null),
-    adoptRecommendedRole,
-    openWorkerMemory,
-    closeWorkerMemory: () => setWorkerMemory(null),
-    openWorkerHistory,
-    closeWorkerHistory: () => setWorkerHistory(null),
-    exportWorkerHistory,
-    proposeWorkerMemory,
-    decideWorkerMemory,
-    createWorker,
-    activateWorker: (worker) => runLifecycle(worker, 'activate'),
-    pauseWorker: (worker) => runLifecycle(worker, 'pause'),
-    resumeWorker: (worker) => runLifecycle(worker, 'resume'),
-    retireWorker: (worker) => runLifecycle(worker, 'retire'),
-    refreshWorkerPerformance,
-    assignWorker
-  }
+  }, [refresh, setAssignments, setBusyKey, setError, setNotice])
+  return { assignWorker, releaseAssignment }
 }
 
 function downloadWorkerHistory(exported: DigitalWorkerHistoryExport): void {

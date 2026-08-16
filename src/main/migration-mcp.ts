@@ -10,20 +10,24 @@ type FieldWriter = (config: JsonObject, ignored: string[], value: unknown) => bo
 const FIELD_WRITERS: Record<string, FieldWriter> = {
   command: (config, _ignored, value) => assignSafeString(config, 'command', value),
   cwd: (config, _ignored, value) => assignSafeString(config, 'cwd', value),
-  type: (config, _ignored, value) => assignTyped(config, 'type', value, 'string'),
+  type: writeTransport,
+  transport: writeTransport,
   disabled: (config, _ignored, value) => assignTyped(config, 'disabled', value, 'boolean'),
+  enabled: (config, _ignored, value) => assignInverseBoolean(config, 'disabled', value),
   timeout: (config, _ignored, value) => assignFiniteNumber(config, 'timeout', value),
   args: writeArgs,
-  url: writeUrl
+  url: writeUrl,
+  httpUrl: writeHttpUrl
 }
 
 export function sanitizeMcpConfig(value: unknown): { config: JsonObject; ignoredFields: string[] } {
   if (!isObject(value)) return { config: {}, ignoredFields: ['server_config'] }
   const config: JsonObject = {}
   const ignoredFields: string[] = []
-  for (const [key, entry] of Object.entries(value)) {
+  for (const [key, entry] of Object.entries(value).filter(([key]) => key !== 'httpUrl')) {
     mapMcpField(config, ignoredFields, key, entry)
   }
+  if (Object.hasOwn(value, 'httpUrl')) mapMcpField(config, ignoredFields, 'httpUrl', value.httpUrl)
   return { config, ignoredFields: [...new Set(ignoredFields)] }
 }
 
@@ -49,6 +53,18 @@ function writeUrl(config: JsonObject, ignored: string[], value: unknown): boolea
   return true
 }
 
+function writeHttpUrl(config: JsonObject, ignored: string[], value: unknown): boolean {
+  if (!writeUrl(config, ignored, value)) return false
+  config.transport = 'http'
+  return true
+}
+
+function writeTransport(config: JsonObject, _ignored: string[], value: unknown): boolean {
+  if (value !== 'stdio' && value !== 'sse' && value !== 'http') return false
+  config.transport = value
+  return true
+}
+
 function assignSafeString(config: JsonObject, key: string, value: unknown): boolean {
   if (!safeString(value)) return false
   config[key] = value
@@ -64,6 +80,12 @@ function assignTyped(config: JsonObject, key: string, value: unknown, expected: 
 function assignFiniteNumber(config: JsonObject, key: string, value: unknown): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
   config[key] = value
+  return true
+}
+
+function assignInverseBoolean(config: JsonObject, key: string, value: unknown): boolean {
+  if (typeof value !== 'boolean') return false
+  config[key] = !value
   return true
 }
 

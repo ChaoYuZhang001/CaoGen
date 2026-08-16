@@ -67,6 +67,7 @@ async function runLifecycleGate() {
   const lifecycleApi = await importCompiled('main/task/artifact-lifecycle-api.js')
   const lifecycleTypes = await importCompiled('main/task/artifact-lifecycle-types.js')
   const lifecycleContent = await importCompiled('main/task/artifact-lifecycle-content.js')
+  const workflowApi = await importCompiled('main/task/workflow-ledger-api.js')
   const snapshotApi = await importCompiled('main/task/task-snapshot.js')
   const effectRuntime = await importCompiled('main/task/effect-runtime.js')
   const runtimeRegistry = await importCompiled('main/task/task-runtime-registry.js')
@@ -84,6 +85,7 @@ async function runLifecycleGate() {
   const reportV2 = await verifyRegistrationContracts({
     ...registered,
     fixture,
+    snapshotApi,
     lifecycleApi,
     lifecycleTypes,
     lifecycleContent
@@ -118,6 +120,11 @@ async function runLifecycleGate() {
   assertEqual(final.available, requiredKindCount - 2, 'final available Artifact count including production output')
   check('later Run revisions preserve historical creating-Run lifecycle validity')
 
+  await runLegacyDagFileProducer({ snapshotApi, effectRuntime, runtimeRegistry, lifecycleApi, workflowApi })
+  await runConfirmedProjectionFailureProbe({
+    workspaceApi, workspaceCommands, snapshotApi, effectRuntime, runtimeRegistry, workflowApi
+  })
+
   report.summary = {
     requiredKinds: lifecycleTypes.REQUIRED_ARTIFACT_KINDS.length,
     artifacts: final.artifacts,
@@ -128,6 +135,194 @@ async function runLifecycleGate() {
     supersessionEdges: 1,
     productionArtifacts: 1
   }
+}
+
+async function runLegacyDagFileProducer({ snapshotApi, effectRuntime, runtimeRegistry, lifecycleApi, workflowApi }) {
+  const legacyRoot = path.join(tempRoot, 'legacy-dag-user-data')
+  const repo = path.join(tempRoot, 'legacy-dag-repo')
+  const projectId = 'legacy-dag-project'
+  const sessionId = 'legacy-dag-session'
+  const runId = 'legacy-dag-run'
+  const outputPath = path.join(repo, 'legacy.txt')
+  mkdirSync(repo, { recursive: true })
+  const run = {
+    schemaVersion: 1,
+    id: runId,
+    sessionId,
+    taskId: 'legacy-write',
+    status: 'queued',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 2_000,
+    updatedAt: 2_000,
+    steps: [],
+    toolExecutions: [],
+    effects: []
+  }
+  const snapshot = snapshotApi.buildTaskSnapshot({
+    meta: {
+      id: sessionId,
+      title: 'Legacy DAG Artifact fixture',
+      cwd: repo,
+      projectId,
+      orchestrationId: 'legacy-dag-orchestration',
+      childTaskId: 'legacy-write',
+      childRole: 'backend',
+      model: 'fixture-model',
+      providerId: 'fixture-provider',
+      permissionMode: 'default',
+      status: 'running',
+      sdkSessionId: 'sdk-legacy-dag',
+      engine: 'openai',
+      costUsd: 0,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      contextTokens: 0,
+      createdAt: run.createdAt
+    },
+    transcript: [],
+    lastSeq: 0,
+    eventCount: 0,
+    reason: 'created',
+    run,
+    now: run.updatedAt
+  })
+  const persisted = await snapshotApi.saveTaskSnapshot(snapshot, legacyRoot)
+  runtimeRegistry.taskRuntimeRegistry.set(sessionId, persisted.run ?? run)
+  const effectInput = {
+    rootDir: legacyRoot,
+    sessionId,
+    cwd: repo,
+    toolUseId: 'legacy-write-call',
+    toolName: 'write_file',
+    toolInput: { path: 'legacy.txt', content: 'legacy DAG output\n' }
+  }
+  const handle = await effectRuntime.prepareEffectExecution(effectInput)
+  await effectRuntime.markEffectExecutionStarted(handle, effectInput)
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(outputPath, 'legacy DAG output\n', 'utf8')
+  const effect = await effectRuntime.completeEffectExecution(handle, {
+    ok: true,
+    output: '已写入 legacy.txt'
+  })
+  assertEqual(effect?.status, 'confirmed', 'legacy DAG file Effect remains confirmed')
+  const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId, limit: 100 }, legacyRoot)
+  const artifact = ledger.artifacts.items.find((item) => item.runId === runId)
+  assert(artifact, 'legacy DAG file must retain an Artifact record')
+  assertEqual(artifact.provenance, 'legacy-derived', 'legacy DAG Artifact provenance')
+  assertEqual(
+    ledger.events.items.filter((event) => event.kind.startsWith('workflow.artifact.stage.')).length,
+    0,
+    'legacy DAG Artifact must not attach a canonical stage event'
+  )
+  await lifecycleApi.verifyPersistedArtifactLifecycle(legacyRoot)
+  check('legacy DAG file output keeps confirmed Effect and compatibility Artifact without canonical stage attachment')
+}
+
+async function runConfirmedProjectionFailureProbe({
+  workspaceApi,
+  workspaceCommands,
+  snapshotApi,
+  effectRuntime,
+  runtimeRegistry,
+  workflowApi
+}) {
+  const root = path.join(tempRoot, 'missing-canonical-workspace')
+  const repo = path.join(tempRoot, 'missing-canonical-repo')
+  const projectId = 'missing-canonical-project'
+  const workItemId = 'missing-canonical-work-item'
+  const sessionId = 'missing-canonical-session'
+  const runId = 'missing-canonical-run'
+  mkdirSync(repo, { recursive: true })
+  const run = {
+    schemaVersion: 1,
+    id: runId,
+    sessionId,
+    taskId: 'missing-canonical-task',
+    status: 'queued',
+    revision: 1,
+    attempt: 1,
+    recoveryCount: 0,
+    createdAt: 3_000,
+    updatedAt: 3_000,
+    steps: [],
+    toolExecutions: [],
+    effects: []
+  }
+  const workspaceStore = new workspaceApi.ProjectWorkspaceStore(root)
+  await workspaceStore.open()
+  await workspaceStore.createWorkspace({ id: projectId, name: 'Missing canonical Workspace fixture', kind: 'software' })
+  const commands = workspaceCommands.createProjectWorkspaceCommandService(workspaceStore, { rootDir: root })
+  await commands.reconcileShadowProjection()
+  const workItem = await commands.createWorkItem({
+    id: workItemId,
+    projectId,
+    title: 'Missing canonical Workspace WorkItem',
+    type: 'writing'
+  })
+  const persisted = await snapshotApi.saveTaskSnapshot(snapshotApi.buildTaskSnapshot({
+    meta: {
+      id: sessionId,
+      title: 'Missing canonical Workspace fixture',
+      cwd: repo,
+      projectId,
+      workspaceId: projectId,
+      workItemId,
+      childTaskId: 'missing-canonical-task',
+      model: 'fixture-model',
+      providerId: 'fixture-provider',
+      permissionMode: 'default',
+      status: 'running',
+      sdkSessionId: 'sdk-missing-canonical',
+      engine: 'openai',
+      costUsd: 0,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      contextTokens: 0,
+      createdAt: run.createdAt
+    },
+    transcript: [],
+    lastSeq: 0,
+    eventCount: 0,
+    reason: 'created',
+    run,
+    now: run.updatedAt
+  }), root)
+  const currentWorkItem = await workspaceStore.getWorkItem(workItem.id)
+  if (!currentWorkItem) throw new Error(`missing canonical fixture WorkItem disappeared:${workItem.id}`)
+  await commands.updateWorkItem(workItem.id, {
+    runRefs: [...currentWorkItem.runRefs, runId]
+  }, { expectedRevision: currentWorkItem.revision })
+  rmSync(path.join(root, 'project-workspace.json'), { force: true })
+  runtimeRegistry.taskRuntimeRegistry.set(sessionId, persisted.run ?? run)
+  const effectInput = {
+    rootDir: root,
+    sessionId,
+    cwd: repo,
+    toolUseId: 'missing-canonical-write-call',
+    toolName: 'write_file',
+    toolInput: { path: 'confirmed.txt', content: 'confirmed before projection\n' }
+  }
+  const handle = await effectRuntime.prepareEffectExecution(effectInput)
+  await effectRuntime.markEffectExecutionStarted(handle, effectInput)
+  writeFileSync(path.join(repo, 'confirmed.txt'), 'confirmed before projection\n', 'utf8')
+  let projectionError
+  try {
+    await effectRuntime.completeEffectExecution(handle, { ok: true, output: '已写入 confirmed.txt' })
+  } catch (error) {
+    projectionError = error
+  }
+  const confirmedEffect = effectRuntime.confirmedEffectFromArtifactProjectionError(projectionError)
+  assert(confirmedEffect, 'missing canonical Workspace must expose a post-confirmation projection error')
+  assertEqual(confirmedEffect.status, 'confirmed', 'post-confirmation projection error Effect status')
+  const durable = await snapshotApi.getTaskSnapshot(sessionId, root)
+  assertEqual(
+    durable?.run?.effects?.find((effect) => effect.id === confirmedEffect.id)?.status,
+    'confirmed',
+    'durable Effect must remain confirmed after Artifact projection failure'
+  )
+  const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId, limit: 100 }, root)
+  assertEqual(ledger.artifacts.total, 0, 'failed canonical projection must not leave a partial Artifact')
+  check('post-confirmation Artifact failure remains distinct from unknown external Effect outcome')
 }
 
 async function registerRequiredArtifactKinds({ fixture, lifecycleApi, lifecycleTypes, lifecycleContent }) {
@@ -176,6 +371,7 @@ async function verifyRegistrationContracts(input) {
   const idempotent = await input.lifecycleApi.registerPersistedArtifactLifecycle(reportV2Input, userData)
   assertEqual(idempotent.lifecycle.digest, reportV2.lifecycle.digest, 'idempotent registration digest')
   check('identical Artifact registration is idempotent')
+  await verifyRunRevisionReplay(input, reportV2Input, reportV2)
   await verifyRegistrationRejections(input, reportV2Input)
   const initial = await input.lifecycleApi.verifyPersistedArtifactLifecycle(
     userData,
@@ -186,6 +382,30 @@ async function verifyRegistrationContracts(input) {
   assertEqual(initial.kinds.length, requiredKindCount, 'verified required kind count')
   check('restart-safe verification covers all kinds, graph rows, events, and physical bytes')
   return reportV2
+}
+
+async function verifyRunRevisionReplay(input, reportV2Input, firstRegistration) {
+  const snapshot = await input.snapshotApi.getTaskSnapshot(input.fixture.run.sessionId, userData)
+  assert(snapshot?.run, 'Artifact replay fixture Run must persist')
+  const revisedRun = {
+    ...snapshot.run,
+    revision: 2,
+    updatedAt: snapshot.run.updatedAt + 1
+  }
+  await input.snapshotApi.saveTaskSnapshot({
+    ...snapshot,
+    run: revisedRun,
+    updatedAt: revisedRun.updatedAt
+  }, userData)
+  const replayed = await input.lifecycleApi.registerPersistedArtifactLifecycle(reportV2Input, userData)
+  assertEqual(replayed.lifecycle.runRevision, 1, 'idempotent replay creating Run revision')
+  assertEqual(
+    replayed.lifecycle.projectRevision,
+    firstRegistration.lifecycle.projectRevision,
+    'idempotent replay creating Project revision'
+  )
+  assertEqual(replayed.lifecycle.createdAt, firstRegistration.lifecycle.createdAt, 'idempotent replay creation time')
+  check('Run revision 2 replay preserves the Artifact creation identity from Run revision 1')
 }
 
 async function verifyRegistrationRejections(input, reportV2Input) {

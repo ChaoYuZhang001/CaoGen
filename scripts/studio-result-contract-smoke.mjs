@@ -27,6 +27,8 @@ try {
   assert.deepEqual(snapshot.workItems.map((item) => item.id), ['work-1'])
   assert.deepEqual(snapshot.runs.map((run) => run.id), ['run-1'])
   assert.deepEqual(snapshot.artifacts.map((artifact) => artifact.id), ['artifact-1'])
+  assert.deepEqual(snapshot.artifacts[0].currentArtifactIds, ['artifact-1'])
+  assert.equal(snapshot.artifacts[0].deliveryScope, 'current')
   assert.deepEqual(snapshot.evidence.map((evidence) => evidence.id), ['evidence-1', 'approval-1'])
   assert.deepEqual(snapshot.acceptances.map((acceptance) => acceptance.id), ['acceptance-1'])
   assert.equal(snapshot.tests.length, 2)
@@ -35,12 +37,33 @@ try {
   assert.equal(snapshot.cost.coverage, 'complete')
   assert.equal(snapshot.summary.changes, 0)
   assert.equal(snapshot.summary.availableArtifacts, 1)
+  assert.equal(snapshot.summary.currentArtifacts, 1)
+  assert.equal(snapshot.summary.historicalArtifacts, 0)
   assert.equal(snapshot.approvals.length, 1)
   assert.equal(snapshot.openItems.length, 1)
   assert.equal(snapshot.risks.length, 1)
   assert(snapshot.timeline.every((item) => item.entityId !== 'work-2'))
   assert.match(snapshot.verification.resultDigest, /^sha256:[a-f0-9]{64}$/)
   assert.match(snapshot.verification.aggregateDigest, /^[a-f0-9]{64}$/)
+
+  const repairedOutsideScope = fixtureAggregate()
+  repairedOutsideScope.workflow.artifacts.push({
+    ...repairedOutsideScope.workflow.artifacts[0],
+    id: 'artifact-repair-2',
+    workItemId: 'work-2',
+    runId: 'run-2',
+    title: 'artifact-repair-2 report',
+    version: 2,
+    digest: `sha256:${'r'.repeat(64)}`,
+    supersedesId: 'artifact-1',
+    updatedAt: 9
+  })
+  const historical = service.buildStudioResultSnapshot(session, repairedOutsideScope, [], 10_000)
+  assert.deepEqual(historical.artifacts.map((artifact) => artifact.id), ['artifact-1'])
+  assert.equal(historical.artifacts[0].deliveryScope, 'historical')
+  assert.deepEqual(historical.artifacts[0].currentArtifactIds, ['artifact-repair-2'])
+  assert.equal(historical.summary.currentArtifacts, 0)
+  assert.equal(historical.summary.historicalArtifacts, 1)
 
   const exported = service.buildStudioResultExport(snapshot)
   const bundle = JSON.parse(exported.json)

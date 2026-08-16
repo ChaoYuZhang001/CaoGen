@@ -6,7 +6,7 @@ import {
   type ProviderView,
   type TaskStrategy
 } from '../../../../shared/types'
-import type { ExperienceMode } from '../../store/experience-mode'
+import type { SessionExperienceMode } from '../../store/experience-mode'
 import type {
   WelcomeComputeSelectionSource,
   WelcomeRoutingMode
@@ -21,7 +21,6 @@ export interface WelcomeSessionDraft {
   driveMode: CaoGenDriveMode
   model: string
   taskStrategy: TaskStrategy
-  experienceModeOverride: ExperienceMode
   projectId?: string
   providerId: string
   routingMode: WelcomeRoutingMode
@@ -110,7 +109,7 @@ export function hasAvailableCompute(
 }
 
 export function welcomeValidationKey(
-  projection: ExperienceMode,
+  projection: SessionExperienceMode,
   draft: WelcomeSessionDraft,
   computeAvailable: boolean
 ): string | null {
@@ -125,7 +124,7 @@ export function welcomeValidationKey(
 }
 
 export function welcomeSessionOptions(
-  projection: ExperienceMode,
+  projection: SessionExperienceMode,
   draft: WelcomeSessionDraft,
   prompt: string
 ): CreateSessionOptions {
@@ -133,7 +132,7 @@ export function welcomeSessionOptions(
     cwd: draft.cwd.trim(),
     projectId: draft.projectId,
     unassigned: draft.unassigned,
-    experienceModeOverride: draft.experienceModeOverride,
+    experienceModeOverride: projection,
     initialPrompt: prompt,
     forkFromSdkSessionId: draft.forkFromSdkSessionId,
     forkCheckpointId: draft.forkCheckpointId
@@ -158,7 +157,7 @@ export function welcomeSessionOptions(
   }
 }
 
-export function assistantSafeStartError(projection: ExperienceMode, error: unknown): string | null {
+export function assistantSafeStartError(projection: SessionExperienceMode, error: unknown): string | null {
   if (projection !== 'assistant') return null
   return error instanceof Error && /路径|目录|project|workspace/i.test(error.message)
     ? 'assistantWorkspaceUnavailable'

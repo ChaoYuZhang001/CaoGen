@@ -9,6 +9,8 @@ import {
 } from './task-snapshot'
 import {
   archiveConversationLedgerEntries,
+  countConversationLedgerSessionResiduals,
+  purgeConversationLedgerSession,
   selectCurrentConversationLedgerEntries,
   type ConversationLedgerArchiveIdentity,
   type ConversationLedgerArchiveReason,
@@ -91,6 +93,22 @@ export async function restoreConversationLedgerJsonlFromArchive(
   if (archived.length === 0) return false
   restoreTranscriptIfMissing(sdkSessionId, archived)
   return true
+}
+
+export async function purgeConversationLedgerArchiveForSession(
+  sdkSessionId: string,
+  rootDir?: string
+): Promise<{ streams: number; generations: number; events: number }> {
+  return mutateTaskSnapshotDatabase(rootDir, (db) =>
+    purgeConversationLedgerSession(db, sdkSessionId))
+}
+
+export async function countConversationLedgerArchiveResidualsForSession(
+  sdkSessionId: string,
+  rootDir?: string
+): Promise<{ streams: number; generations: number; events: number }> {
+  return readTaskSnapshotDatabase(rootDir, (db) =>
+    countConversationLedgerSessionResiduals(db, sdkSessionId))
 }
 
 function safeError(error: unknown): string {

@@ -214,7 +214,8 @@ function isTaskDagTask(value: unknown): boolean {
     description: isString,
     dependencies: arrayOf(isString),
     role: isString,
-    prompt: isString
+    prompt: isString,
+    workItemId: optional(isString)
   })
 }
 

@@ -2,7 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import type {
   AcceptanceResult,
   AcceptanceSpec,
+  ConnectorLatestCitation,
   ConnectorResourceContract,
+  ConnectorResourceLifecycle,
+  ConnectorRefreshStatus,
   Goal,
   GoalBudget,
   GoalContract,
@@ -147,52 +150,206 @@ function normalizeConnectorContract(value: unknown, index: number): ConnectorRes
   if (input.dataDirection !== 'read' && input.dataDirection !== 'write' && input.dataDirection !== 'bidirectional') {
     throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector dataDirection is invalid`)
   }
-  const authorization = input.authorization
-  if (!authorization || typeof authorization !== 'object') {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization is required`)
-  }
-  if (authorization.subject !== 'personal' && authorization.subject !== 'shared') {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization subject is invalid`)
-  }
-  if (authorization.status !== 'active' && authorization.status !== 'revoked') {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization status is invalid`)
-  }
-  const scopes = normalizedStringSet(authorization.scopes, `resource ${index} connector authorization scopes`)
-  const grantedAt = optionalTimestamp(authorization.grantedAt, `resource ${index} connector grantedAt`)
-  const revokedAt = optionalTimestamp(authorization.revokedAt, `resource ${index} connector revokedAt`)
-  if (authorization.status === 'revoked' && revokedAt === undefined) {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} revoked connector requires revokedAt`)
-  }
-  if (!input.revocation || input.revocation.behavior !== 'deny_new_operations' || typeof input.revocation.purgeCachedData !== 'boolean') {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector revocation policy is invalid`)
-  }
-  if (!input.writePolicy || input.writePolicy.effect !== 'required' ||
-      (input.writePolicy.reconciliation !== 'queryable' && input.writePolicy.reconciliation !== 'manual_only')) {
-    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector write policy is invalid`)
-  }
+  const authorization = normalizeConnectorAuthorization(input.authorization, index)
+  const revocation = normalizeConnectorRevocation(input.revocation, index)
+  const writePolicy = normalizeConnectorWritePolicy(input.writePolicy, index)
   return {
     schemaVersion: 1,
+    ...(input.connectorId === undefined ? {} : { connectorId: requiredText(input.connectorId, `resource ${index} connector connectorId`) }),
     usage: usage as ConnectorResourceContract['usage'],
     capabilities,
     dataDirection: input.dataDirection,
-    authorization: {
-      subject: input.authorization.subject,
-      principalId: requiredText(input.authorization.principalId, `resource ${index} connector principalId`),
-      scopes,
-      status: input.authorization.status,
-      ...(grantedAt === undefined ? {} : { grantedAt }),
-      ...(revokedAt === undefined ? {} : { revokedAt })
-    },
+    authorization,
     version: requiredText(input.version, `resource ${index} connector version`),
-    revocation: {
-      behavior: 'deny_new_operations',
-      purgeCachedData: input.revocation.purgeCachedData
-    },
-    writePolicy: {
-      effect: 'required',
-      reconciliation: input.writePolicy.reconciliation
-    }
+    revocation,
+    writePolicy,
+    lifecycle: normalizeConnectorLifecycle(input.lifecycle, index)
   }
+}
+
+function normalizeConnectorLifecycle(
+  value: ConnectorResourceLifecycle | undefined,
+  index: number
+): ConnectorResourceLifecycle {
+  if (value === undefined) return { enabled: true, refresh: { status: 'idle' } }
+  if (!value || typeof value !== 'object' || typeof value.enabled !== 'boolean' ||
+      !value.refresh || typeof value.refresh !== 'object') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector lifecycle is invalid`)
+  }
+  const status = value.refresh.status
+  const validStatuses: ConnectorRefreshStatus[] = ['idle', 'requested', 'running', 'succeeded', 'failed']
+  if (!validStatuses.includes(status)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector refresh status is invalid`)
+  }
+  const refresh = value.refresh
+  const result: ConnectorResourceLifecycle = {
+    enabled: value.enabled,
+    refresh: {
+      status,
+      ...(refresh.requestedAt === undefined ? {} : { requestedAt: optionalTimestamp(refresh.requestedAt, `resource ${index} connector requestedAt`) }),
+      ...(refresh.startedAt === undefined ? {} : { startedAt: optionalTimestamp(refresh.startedAt, `resource ${index} connector startedAt`) }),
+      ...(refresh.completedAt === undefined ? {} : { completedAt: optionalTimestamp(refresh.completedAt, `resource ${index} connector completedAt`) }),
+      ...(refresh.errorDigest === undefined ? {} : { errorDigest: requiredDigest(refresh.errorDigest, `resource ${index} connector errorDigest`) }),
+      ...(refresh.latestCitation === undefined ? {} : { latestCitation: normalizeConnectorCitation(refresh.latestCitation, index) })
+    },
+    ...(value.autoRefresh === undefined ? {} : { autoRefresh: normalizeConnectorAutoRefresh(value.autoRefresh, index) }),
+    ...(value.cache === undefined ? {} : { cache: normalizeConnectorCache(value.cache, index) }),
+    ...(value.revocation === undefined ? {} : { revocation: normalizeConnectorRevocationState(value.revocation, index) })
+  }
+  if (status === 'failed' && !result.refresh.errorDigest) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} failed connector refresh requires errorDigest`)
+  }
+  return result
+}
+
+function normalizeConnectorAutoRefresh(
+  value: NonNullable<ConnectorResourceLifecycle['autoRefresh']>,
+  index: number
+): NonNullable<ConnectorResourceLifecycle['autoRefresh']> {
+  const intervals = [0, 900_000, 3_600_000, 21_600_000, 86_400_000]
+  if (!value || typeof value !== 'object' || !intervals.includes(value.intervalMs)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector autoRefresh is invalid`)
+  }
+  return {
+    intervalMs: value.intervalMs,
+    ...(value.nextAt === undefined ? {} : { nextAt: optionalTimestamp(value.nextAt, `resource ${index} connector autoRefresh nextAt`) })
+  }
+}
+
+function normalizeConnectorCache(
+  value: NonNullable<ConnectorResourceLifecycle['cache']>,
+  index: number
+): NonNullable<ConnectorResourceLifecycle['cache']> {
+  if (!value || typeof value !== 'object' ||
+      !['empty', 'ready', 'purging', 'purged', 'purge_failed'].includes(value.status)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector cache is invalid`)
+  }
+  if (value.bytes !== undefined && (!Number.isSafeInteger(value.bytes) || value.bytes < 0)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector cache bytes is invalid`)
+  }
+  const result: NonNullable<ConnectorResourceLifecycle['cache']> = {
+    status: value.status,
+    ...(value.authorizationDigest === undefined ? {} : { authorizationDigest: requiredDigest(value.authorizationDigest, `resource ${index} connector cache authorizationDigest`) }),
+    ...(value.contentDigest === undefined ? {} : { contentDigest: requiredDigest(value.contentDigest, `resource ${index} connector cache contentDigest`) }),
+    ...(value.bytes === undefined ? {} : { bytes: value.bytes }),
+    ...(value.cachedAt === undefined ? {} : { cachedAt: optionalTimestamp(value.cachedAt, `resource ${index} connector cache cachedAt`) }),
+    ...(value.purgeRequestedAt === undefined ? {} : { purgeRequestedAt: optionalTimestamp(value.purgeRequestedAt, `resource ${index} connector cache purgeRequestedAt`) }),
+    ...(value.purgedAt === undefined ? {} : { purgedAt: optionalTimestamp(value.purgedAt, `resource ${index} connector cache purgedAt`) }),
+    ...(value.errorDigest === undefined ? {} : { errorDigest: requiredDigest(value.errorDigest, `resource ${index} connector cache errorDigest`) })
+  }
+  // authorizationDigest was added after lifecycle v1 shipped. Old lifecycle
+  // metadata remains readable, while runtime cache reads reject it until a
+  // refresh writes the authorization-bound cache format.
+  if (result.status === 'ready' && (!result.contentDigest || result.bytes === undefined || result.cachedAt === undefined)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} ready connector cache is incomplete`)
+  }
+  if (result.status === 'purge_failed' && !result.errorDigest) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} failed connector cache purge requires errorDigest`)
+  }
+  return result
+}
+
+function normalizeConnectorRevocationState(
+  value: NonNullable<ConnectorResourceLifecycle['revocation']>,
+  index: number
+): NonNullable<ConnectorResourceLifecycle['revocation']> {
+  if (!value || typeof value !== 'object' ||
+      !['blocking', 'completed', 'failed'].includes(value.status) ||
+      !Array.isArray(value.pausedSessionIds) || !Array.isArray(value.pausedRunIds)) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector revocation state is invalid`)
+  }
+  const result: NonNullable<ConnectorResourceLifecycle['revocation']> = {
+    status: value.status,
+    requestedAt: timestamp(value.requestedAt, `resource ${index} connector revocation requestedAt`),
+    pausedSessionIds: normalizedIdList(value.pausedSessionIds, `resource ${index} connector revocation pausedSessionIds`),
+    pausedRunIds: normalizedIdList(value.pausedRunIds, `resource ${index} connector revocation pausedRunIds`),
+    ...(value.completedAt === undefined ? {} : { completedAt: optionalTimestamp(value.completedAt, `resource ${index} connector revocation completedAt`) }),
+    ...(value.errorDigest === undefined ? {} : { errorDigest: requiredDigest(value.errorDigest, `resource ${index} connector revocation errorDigest`) })
+  }
+  if (result.status === 'failed' && !result.errorDigest) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} failed connector revocation requires errorDigest`)
+  }
+  return result
+}
+
+function normalizedIdList(value: unknown[], label: string): string[] {
+  return [...new Set(value.map((entry) => requiredText(entry, label)))].sort()
+}
+
+function normalizeConnectorCitation(value: ConnectorLatestCitation, index: number): ConnectorLatestCitation {
+  if (!value || typeof value !== 'object') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector citation is invalid`)
+  }
+  const contentDigest = value.contentDigest === undefined
+    ? undefined
+    : requiredDigest(value.contentDigest, `resource ${index} connector citation contentDigest`)
+  return {
+    ...(value.projectId === undefined ? {} : { projectId: requiredText(value.projectId, `resource ${index} connector citation projectId`) }),
+    ...(value.resourceId === undefined ? {} : { resourceId: requiredText(value.resourceId, `resource ${index} connector citation resourceId`) }),
+    source: sanitizeConnectorUri(requiredText(value.source, `resource ${index} connector citation source`)),
+    version: requiredText(value.version, `resource ${index} connector citation version`),
+    retrievedAt: timestamp(value.retrievedAt, `resource ${index} connector citation retrievedAt`),
+    ...(contentDigest === undefined ? {} : { contentDigest })
+  }
+}
+
+function requiredDigest(value: unknown, label: string): string {
+  const candidate = requiredText(value, label)
+  if (!/^sha256:[a-f0-9]{64}$/.test(candidate)) {
+    throw new ProjectWorkspaceError('invalid_input', `${label} is invalid`)
+  }
+  return candidate
+}
+
+function normalizeConnectorAuthorization(
+  value: ConnectorResourceContract['authorization'] | undefined,
+  index: number
+): ConnectorResourceContract['authorization'] {
+  if (!value || typeof value !== 'object') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization is required`)
+  }
+  if (value.subject !== 'personal' && value.subject !== 'shared') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization subject is invalid`)
+  }
+  if (value.status !== 'active' && value.status !== 'revoked') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector authorization status is invalid`)
+  }
+  const scopes = normalizedStringSet(value.scopes, `resource ${index} connector authorization scopes`)
+  const grantedAt = optionalTimestamp(value.grantedAt, `resource ${index} connector grantedAt`)
+  const revokedAt = optionalTimestamp(value.revokedAt, `resource ${index} connector revokedAt`)
+  if (value.status === 'revoked' && revokedAt === undefined) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} revoked connector requires revokedAt`)
+  }
+  return {
+    subject: value.subject,
+    principalId: requiredText(value.principalId, `resource ${index} connector principalId`),
+    ...(value.credentialRef === undefined ? {} : { credentialRef: requiredText(value.credentialRef, `resource ${index} connector credentialRef`) }),
+    scopes,
+    status: value.status,
+    ...(grantedAt === undefined ? {} : { grantedAt }),
+    ...(revokedAt === undefined ? {} : { revokedAt })
+  }
+}
+
+function normalizeConnectorRevocation(
+  value: ConnectorResourceContract['revocation'] | undefined,
+  index: number
+): ConnectorResourceContract['revocation'] {
+  if (!value || value.behavior !== 'deny_new_operations' || typeof value.purgeCachedData !== 'boolean') {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector revocation policy is invalid`)
+  }
+  return { behavior: 'deny_new_operations', purgeCachedData: value.purgeCachedData }
+}
+
+function normalizeConnectorWritePolicy(
+  value: ConnectorResourceContract['writePolicy'] | undefined,
+  index: number
+): ConnectorResourceContract['writePolicy'] {
+  if (!value || value.effect !== 'required' ||
+      (value.reconciliation !== 'queryable' && value.reconciliation !== 'manual_only')) {
+    throw new ProjectWorkspaceError('invalid_input', `resource ${index} connector write policy is invalid`)
+  }
+  return { effect: 'required', reconciliation: value.reconciliation }
 }
 
 function normalizedStringSet(value: unknown, label: string): string[] {
@@ -211,6 +368,7 @@ function optionalTimestamp(value: unknown, label: string): number | undefined {
 function legacyRevokedConnectorContract(): ConnectorResourceContract {
   return {
     schemaVersion: 1,
+    connectorId: 'legacy',
     usage: ['resource'],
     capabilities: ['legacy:untrusted'],
     dataDirection: 'read',

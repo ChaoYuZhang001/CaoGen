@@ -91,6 +91,40 @@ function dispatchQuickLocalOutcome(
   else onUnavailable(outcome.reason)
 }
 
+function ProviderQuickAccountOptions({ oauthFlow, oauthBusy, busy, localBusy, onConnectOAuth, onConnectLocal }: {
+  oauthFlow: ProviderQuickDeviceAuthorizationView | null
+  oauthBusy: boolean
+  busy: boolean
+  localBusy: boolean
+  onConnectOAuth: (service: ProviderAuthorizationService) => Promise<void>
+  onConnectLocal: () => Promise<void>
+}): React.JSX.Element {
+  const t = useT()
+  const services = [
+    ['codex-oauth', 'providerQuickChatGPTName', 'providerQuickChatGPTHint', 'providerQuickChatGPTConnect'],
+    ['github-copilot', 'providerQuickGitHubName', 'providerQuickGitHubHint', 'providerQuickGitHubConnect'],
+    ['xai-oauth', 'providerQuickXaiName', 'providerQuickXaiHint', 'providerQuickXaiConnect']
+  ] as const
+  return <>
+    <div className="provider-quick-heading"><span className="provider-quick-badge">{t('providerQuickRecommended')}</span><strong>{t('providerQuickAccountTitle')}</strong></div>
+    {!oauthFlow && <div className="provider-quick-oauth-options">
+      {services.map(([service, nameKey, hintKey, actionKey]) => <div className="provider-quick-oauth-option" key={service}>
+        <div><strong>{t(nameKey)}</strong><span>{t(hintKey)}</span></div>
+        <button type="button" className={`btn ${service === 'codex-oauth' ? 'btn-primary' : 'btn-ghost'} btn-sm`} disabled={oauthBusy || busy || localBusy} onClick={() => void onConnectOAuth(service)}>{oauthBusy ? t('providerQuickOAuthStarting') : t(actionKey)}</button>
+      </div>)}
+    </div>}
+    {oauthFlow && <div className="provider-authorization-device provider-quick-device" data-provider-quick-authorization-flow>
+      <code>{oauthFlow.userCode}</code>
+      <a href={oauthFlow.verificationUri} target="_blank" rel="noreferrer">{t('providerAuthorizationOpenPage')}</a>
+      <span>{t('providerAuthorizationWaiting')}</span>
+    </div>}
+    <div className="provider-quick-divider"><span>{t('providerQuickOtherWays')}</span></div>
+    <button type="button" className="btn btn-ghost provider-quick-local" disabled={localBusy || busy || oauthBusy || Boolean(oauthFlow)} onClick={() => void onConnectLocal()}>
+      {localBusy ? t('assistantComputeCheckingLocal') : t('providerQuickUseLocal')}
+    </button>
+  </>
+}
+
 export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: ProviderQuickSetupProps): React.JSX.Element {
   const t = useT()
   const setupRef = useRef<HTMLElement>(null)
@@ -332,52 +366,7 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
         <h2 className="provider-editor-title">{t('providerQuickTitle')}</h2>
       </header>
       <div className="provider-quick-setup">
-        <div className="provider-quick-heading">
-          <span className="provider-quick-badge">{t('providerQuickRecommended')}</span>
-          <strong>{t('providerQuickAccountTitle')}</strong>
-        </div>
-        {!oauthFlow && (
-          <div className="provider-quick-oauth-options">
-            {([
-              ['codex-oauth', 'providerQuickChatGPTName', 'providerQuickChatGPTHint', 'providerQuickChatGPTConnect'],
-              ['github-copilot', 'providerQuickGitHubName', 'providerQuickGitHubHint', 'providerQuickGitHubConnect'],
-              ['xai-oauth', 'providerQuickXaiName', 'providerQuickXaiHint', 'providerQuickXaiConnect']
-            ] as const).map(([service, nameKey, hintKey, actionKey]) => (
-              <div className="provider-quick-oauth-option" key={service}>
-                <div>
-                  <strong>{t(nameKey)}</strong>
-                  <span>{t(hintKey)}</span>
-                </div>
-                <button
-                  type="button"
-                  className={`btn ${service === 'codex-oauth' ? 'btn-primary' : 'btn-ghost'} btn-sm`}
-                  disabled={oauthBusy || busy || localBusy}
-                  onClick={() => void connectOAuth(service)}
-                >
-                  {oauthBusy ? t('providerQuickOAuthStarting') : t(actionKey)}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {oauthFlow && (
-          <div className="provider-authorization-device provider-quick-device" data-provider-quick-authorization-flow>
-            <code>{oauthFlow.userCode}</code>
-            <a href={oauthFlow.verificationUri} target="_blank" rel="noreferrer">
-              {t('providerAuthorizationOpenPage')}
-            </a>
-            <span>{t('providerAuthorizationWaiting')}</span>
-          </div>
-        )}
-        <div className="provider-quick-divider"><span>{t('providerQuickOtherWays')}</span></div>
-        <button
-          type="button"
-          className="btn btn-ghost provider-quick-local"
-          disabled={localBusy || busy || oauthBusy || Boolean(oauthFlow)}
-          onClick={() => void connectLocal()}
-        >
-          {localBusy ? t('assistantComputeCheckingLocal') : t('providerQuickUseLocal')}
-        </button>
+        <ProviderQuickAccountOptions oauthFlow={oauthFlow} oauthBusy={oauthBusy} busy={busy} localBusy={localBusy} onConnectOAuth={connectOAuth} onConnectLocal={connectLocal} />
         <div className="provider-quick-divider"><span>{t('providerQuickOrKey')}</span></div>
         <label className="field-label">{t('providerQuickTemplateLabel')}</label>
         <ProviderPresetCatalog compact presets={QUICK_API_PRESETS} onSelect={(next) => selectPreset(next.key)} />

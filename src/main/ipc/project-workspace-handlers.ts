@@ -27,6 +27,11 @@ import {
   type ProjectSquadInput,
   type ProjectSquadMemberInput,
   type ProjectSquadPatch,
+  type ProjectMemberInput,
+  type ProjectMemberPatch,
+  type ProjectInvitationInput,
+  type ProjectCollaborationInboxListOptions,
+  type ProjectCollaborationInboxMarkInput,
   type ProjectWorkItemCommentCreateInput,
   type ProjectWorkspaceDeleteOptions,
   type ProjectWorkspaceInput,
@@ -34,9 +39,13 @@ import {
   type ProjectWorkspaceListOptions,
   type ProjectWorkspacePatch,
   type ProjectWorkspaceTemplateApplyInput,
+  type ProjectConnectorMutation,
+  type ProjectKnowledgeSearchInput,
   type WorkItemInput,
   type WorkItemCommentInput,
   type WorkItemCommentPatch,
+  type WorkItemSharedApprovalInput,
+  type WorkItemSharedApprovalDecisionInput,
   type WorkItemOwner,
   type WorkItemOwnerType,
   type WorkItemPatch,
@@ -51,20 +60,27 @@ import {
   withAssignmentOwnerReadiness
 } from '../assignment-owner-coordinator'
 import { DigitalWorkerStore } from '../digital-worker/domain-store'
-import { normalizeOwner } from '../project-workspace/codec'
+import { normalizeOwner, normalizeResources } from '../project-workspace/codec'
 import {
   projectIdFromMutationResult,
   verifyProductionProjectMutation
 } from '../project-aggregate/project-mutation-ingress'
-import { createProductionProjectAggregateService } from '../project-aggregate/project-aggregate-factory'
-import { purgeProjectPermanently } from '../data-lifecycle/project-deletion-coordinator'
+import { executeProjectPermanentDeletionEffect } from '../project-deletion-effect'
 import {
-  importProjectAggregate,
   recoverPendingProjectImports
 } from '../data-lifecycle/project-import-coordinator'
 import { sessionManager } from '../sessionManager'
 import { invalidateHistoryCache } from '../history'
 import { applyProjectWorkspaceTemplate } from '../project-workspace/template-service'
+import { executeProjectPortableExportEffect } from '../project-export-effect'
+import { executeProjectPortableImportEffect } from '../project-import-effect'
+import { mutateProjectConnector } from '../project-workspace/project-connector-lifecycle'
+import { purgeProjectConnectorCache } from '../project-workspace/project-connector-cache'
+import { previewProjectKnowledge } from '../project-workspace/project-knowledge-preview'
+import { searchProjectKnowledge } from '../project-workspace/project-knowledge-search'
+import { getProjectPortfolioStore } from '../project-portfolio/store'
+import { inspectProjectAuthorization } from '../project-workspace/project-authorization'
+import type { ProjectDependencyInput, ProjectMilestoneInput, ProjectMilestonePatch } from '../../shared/project-portfolio-types'
 
 const WORKSPACE_KEYS = new Set([
   'id', 'name', 'kind', 'ownerId', 'resources', 'rulesRef',
@@ -96,15 +112,27 @@ const WORK_ITEM_PATCH_KEYS = new Set([
 ])
 const GOAL_TASK_KEYS = new Set(['requestId', 'projectId', 'objective'])
 const PROJECT_TEMPLATE_APPLY_KEYS = new Set(['requestId', 'projectId', 'templateId'])
+const PROJECT_KNOWLEDGE_SEARCH_KEYS = new Set(['projectId', 'query', 'limit'])
+const PROJECT_DEPENDENCY_KEYS = new Set(['id', 'fromProjectId', 'toProjectId', 'fromWorkItemId', 'toWorkItemId', 'label'])
+const PROJECT_MILESTONE_KEYS = new Set(['id', 'projectId', 'goalId', 'workItemId', 'title', 'dueAt'])
+const PROJECT_MILESTONE_PATCH_KEYS = new Set(['title', 'dueAt', 'status'])
 const WORK_ITEM_TRANSFER_KEYS = new Set(['requestId', 'workItemId', 'target', 'reason', 'expectedRevision'])
 const WORK_ITEM_TRANSFER_TARGET_KEYS = new Set(['type', 'id', 'displayName'])
 const SQUAD_KEYS = new Set([
   'id', 'projectId', 'name', 'description', 'members', 'createdAt', 'updatedAt'
 ])
 const SQUAD_PATCH_KEYS = new Set(['name', 'description'])
-const SQUAD_MEMBER_KEYS = new Set(['type', 'id', 'displayName', 'role', 'joinedAt'])
+const SQUAD_MEMBER_KEYS = new Set(['type', 'id', 'memberId', 'displayName', 'role', 'joinedAt'])
+const MEMBER_KEYS = new Set(['id', 'projectId', 'principal', 'role', 'joinedAt', 'updatedAt'])
+const MEMBER_PATCH_KEYS = new Set(['displayName', 'role'])
+const MEMBER_PRINCIPAL_KEYS = new Set(['type', 'id', 'displayName'])
+const INVITATION_KEYS = new Set(['id', 'projectId', 'principal', 'role', 'expiresAt', 'createdAt'])
+const SHARED_APPROVAL_KEYS = new Set(['id', 'projectId', 'workItemId', 'goalId', 'acceptanceId', 'effectId', 'title', 'approverMemberIds', 'requiredApprovals', 'expiresAt', 'createdAt', 'updatedAt'])
+const SHARED_APPROVAL_DECISION_KEYS = new Set(['memberId', 'decision', 'comment'])
 const COMMENT_CREATE_KEYS = new Set(['id', 'projectId', 'workItemId', 'body', 'mentions', 'createdAt', 'updatedAt'])
 const COMMENT_PATCH_KEYS = new Set(['body', 'mentions'])
+const COLLABORATION_INBOX_LIST_KEYS = new Set(['memberId', 'includeHandled'])
+const COLLABORATION_INBOX_MARK_KEYS = new Set(['projectId', 'itemId', 'sourceRevision', 'status'])
 const PROJECT_WORKSPACE_MUTATIONS = new Set([
   'create', 'update', 'archive', 'restore', 'delete', 'purge', 'import:data',
   'templates:apply',
@@ -113,8 +141,12 @@ const PROJECT_WORKSPACE_MUTATIONS = new Set([
   'workItems:lease:acquire', 'workItems:lease:renew', 'workItems:lease:release',
   'squads:create', 'squads:update', 'squads:archive', 'squads:restore',
   'squads:members:add', 'squads:members:remove',
+  'members:create', 'members:update', 'members:revoke', 'members:restore',
+  'invitations:create', 'invitations:accept', 'invitations:revoke',
   'comments:create', 'comments:update', 'comments:delete',
-  'goalTask:create'
+  'sharedApprovals:create', 'sharedApprovals:decide', 'sharedApprovals:revoke',
+  'collaborationInbox:mark',
+  'goalTask:create', 'connectors:mutate', 'knowledge:search'
 ])
 
 type ProjectWorkspaceHandler = (...args: unknown[]) => unknown
@@ -124,6 +156,41 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     await store.listWorkspaces(normalizeListOptions(rawOptions))
   ).filter((workspace) => workspace.id !== MANAGED_PERSONAL_WORKSPACE_ID)),
   get: (rawId) => withStore((store) => store.getWorkspace(assertUserManagedWorkspaceId(rawId))),
+  'authorization:get': (rawId) => withStore(async (store) => {
+    const projectId = assertUserManagedWorkspaceId(rawId, 'authorization')
+    const state = await store.getState()
+    const project = state.workspaces.find((candidate) => candidate.id === projectId)
+    if (!project) throw new Error(`Project not found:${projectId}`)
+    return inspectProjectAuthorization(state, project, { type: 'local_user', id: 'caogen:local-user', displayName: 'Local user' })
+  }),
+  'knowledge:preview': (rawId) => previewProjectKnowledge(
+    app.getPath('userData'),
+    assertUserManagedWorkspaceId(rawId, 'knowledge preview')
+  ),
+  'knowledge:search': (rawInput) => searchProjectKnowledge(
+    app.getPath('userData'),
+    normalizeKnowledgeSearchInput(rawInput)
+  ),
+  'portfolio:get': () => getProjectPortfolioStore(app.getPath('userData')).getSnapshot(),
+  'portfolio:dependencies:create': (rawInput, rawOptions) => getProjectPortfolioStore(app.getPath('userData')).createDependency(
+    normalizeInput<ProjectDependencyInput>(rawInput, PROJECT_DEPENDENCY_KEYS, 'project dependency'),
+    normalizeMutationOptions(rawOptions)
+  ),
+  'portfolio:dependencies:remove': (rawId, rawOptions) => getProjectPortfolioStore(app.getPath('userData')).removeDependency(
+    requiredString(rawId, 'project dependency id'), normalizeMutationOptions(rawOptions)
+  ),
+  'portfolio:milestones:create': (rawInput, rawOptions) => getProjectPortfolioStore(app.getPath('userData')).createMilestone(
+    normalizeInput<ProjectMilestoneInput>(rawInput, PROJECT_MILESTONE_KEYS, 'project milestone'),
+    normalizeMutationOptions(rawOptions)
+  ),
+  'portfolio:milestones:update': (rawId, rawPatch, rawOptions) => getProjectPortfolioStore(app.getPath('userData')).updateMilestone(
+    requiredString(rawId, 'project milestone id'),
+    normalizeInput<ProjectMilestonePatch>(rawPatch, PROJECT_MILESTONE_PATCH_KEYS, 'project milestone patch'),
+    normalizeMutationOptions(rawOptions)
+  ),
+  'portfolio:milestones:delete': (rawId, rawOptions) => getProjectPortfolioStore(app.getPath('userData')).deleteMilestone(
+    requiredString(rawId, 'project milestone id'), normalizeMutationOptions(rawOptions)
+  ),
   create: (rawInput, rawOptions) => withStore((store) => {
     const input = normalizeInput<ProjectWorkspaceInput>(rawInput, WORKSPACE_KEYS, 'workspace')
     if (input.id === MANAGED_PERSONAL_WORKSPACE_ID) throw managedPersonalWorkspaceMutationError('create')
@@ -133,11 +200,11 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     app.getPath('userData'),
     normalizeProjectTemplateApplyInput(rawInput)
   ),
-  update: (rawId, rawPatch, rawOptions) => withStore((store) => store.updateWorkspace(
+  update: (rawId, rawPatch, rawOptions) => updateWorkspaceWithConnectorCleanup(
     assertUserManagedWorkspaceId(rawId, 'update'),
     normalizeInput<ProjectWorkspacePatch>(rawPatch, WORKSPACE_PATCH_KEYS, 'workspace patch'),
     normalizeMutationOptions(rawOptions)
-  )),
+  ),
   archive: (rawId, rawOptions) => mutateWorkspaceWithoutActiveAssignments(
     'archive', rawId, rawOptions
   ),
@@ -154,7 +221,18 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     requiredString(rawId, 'workspace id'), safeDestination(rawDestination)
   )),
   'export:data': (rawId) => exportProjectData(requiredString(rawId, 'workspace id')),
-  'import:data': (rawSource) => importProjectAggregate(rawSource, app.getPath('userData')),
+  'connectors:mutate': (rawProjectId, rawResourceId, rawMutation, rawOptions) => mutateProjectConnector(
+    app.getPath('userData'),
+    assertUserManagedWorkspaceId(rawProjectId, 'connector mutation'),
+    requiredString(rawResourceId, 'connector resource id'),
+    normalizeConnectorMutation(rawMutation),
+    normalizeMutationOptions(rawOptions),
+    {
+      blockRevokedSource: (projectId, resourceId) =>
+        sessionManager.blockRevokedConnectorSource(projectId, resourceId)
+    }
+  ),
+  'import:data': (rawSource) => executeProjectPortableImportEffect(rawSource, app.getPath('userData')),
   'goals:list': (rawProjectId, rawOptions) => withReadService((reads) => reads.listGoals(
     optionalString(rawProjectId), normalizeListOptions(rawOptions)
   )),
@@ -189,10 +267,10 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     app.getPath('userData')
   ),
   'workItems:update': (rawId, rawPatch, rawOptions) => updateWorkItem(rawId, rawPatch, rawOptions),
-  'workItems:transfer': (rawInput) => createWorkItemTransferService(app.getPath('userData')).transfer(
-    normalizeWorkItemTransferInput(rawInput),
-    LOCAL_USER_ACTOR
-  ),
+  'workItems:transfer': (rawInput) => createWorkItemTransferService(app.getPath('userData'), {
+    prepare: (input) => sessionManager.prepareWorkItemTransfer(input),
+    continue: (input) => sessionManager.continueWorkItemTransfer(input)
+  }).transfer(normalizeWorkItemTransferInput(rawInput), LOCAL_USER_ACTOR),
   'workItems:reorder': (rawId, rawTargetId, rawPlacement, rawOptions) => withCommandService((commands) =>
     commands.reorderWorkItem(
       requiredString(rawId, 'work item id'),
@@ -243,6 +321,38 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     requiredString(rawMemberId, 'squad member id'),
     normalizeMutationOptions(rawOptions)
   )),
+  'members:list': (rawProjectId, rawOptions) => withStore((store) => store.listMembers(
+    optionalString(rawProjectId), normalizeListOptions(rawOptions)
+  )),
+  'members:get': (rawId) => withStore((store) => store.getMember(requiredString(rawId, 'member id'))),
+  'members:create': (rawInput, rawOptions) => withStore((store) => store.createMember(
+    normalizeMemberInput(rawInput), normalizeMutationOptions(rawOptions)
+  )),
+  'members:update': (rawId, rawPatch, rawOptions) => withStore((store) => store.updateMember(
+    requiredString(rawId, 'member id'),
+    normalizeInput<ProjectMemberPatch>(rawPatch, MEMBER_PATCH_KEYS, 'member patch'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'members:revoke': (rawId, rawOptions) => withStore((store) => store.revokeMember(
+    requiredString(rawId, 'member id'), normalizeMutationOptions(rawOptions)
+  )),
+  'members:restore': (rawId, rawOptions) => withStore((store) => store.restoreMember(
+    requiredString(rawId, 'member id'), normalizeMutationOptions(rawOptions)
+  )),
+  'invitations:list': (rawProjectId, rawOptions) => withStore((store) => store.listInvitations(
+    optionalString(rawProjectId), normalizeListOptions(rawOptions)
+  )),
+  'invitations:create': (rawInput, rawOptions) => withStore((store) => store.createInvitation(
+    normalizeInvitationInput(rawInput), normalizeMutationOptions(rawOptions)
+  )),
+  'invitations:accept': (rawProjectId, rawToken, rawOptions) => withStore((store) => store.acceptInvitation(
+    requiredString(rawProjectId, 'invitation project id'),
+    requiredString(rawToken, 'invitation token'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'invitations:revoke': (rawId, rawOptions) => withStore((store) => store.revokeInvitation(
+    requiredString(rawId, 'invitation id'), normalizeMutationOptions(rawOptions)
+  )),
   'comments:list': (rawWorkItemId, rawOptions) => withStore((store) => store.listWorkItemComments(
     requiredString(rawWorkItemId, 'comment work item id'), normalizeListOptions(rawOptions)
   )),
@@ -259,19 +369,36 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
   )),
   'comments:delete': (rawId, rawOptions) => withStore((store) => store.deleteWorkItemComment(
     requiredString(rawId, 'comment id'), normalizeMutationOptions(rawOptions)
+  )),
+  'sharedApprovals:list': (rawProjectId, rawOptions) => withStore((store) => store.listSharedApprovals(
+    optionalString(rawProjectId), normalizeListOptions(rawOptions)
+  )),
+  'sharedApprovals:get': (rawId) => withStore((store) => store.getSharedApproval(requiredString(rawId, 'shared approval id'))),
+  'sharedApprovals:create': (rawInput, rawOptions) => withStore((store) => store.createSharedApproval(
+    normalizeInput<WorkItemSharedApprovalInput>(rawInput, SHARED_APPROVAL_KEYS, 'shared approval'),
+    LOCAL_USER_ACTOR,
+    normalizeMutationOptions(rawOptions)
+  )),
+  'sharedApprovals:decide': (rawId, rawInput, rawOptions) => withStore((store) => store.decideSharedApproval(
+    requiredString(rawId, 'shared approval id'),
+    normalizeInput<WorkItemSharedApprovalDecisionInput>(rawInput, SHARED_APPROVAL_DECISION_KEYS, 'shared approval decision'),
+    normalizeMutationOptions(rawOptions)
+  )),
+  'sharedApprovals:revoke': (rawId, rawOptions) => withStore((store) => store.revokeSharedApproval(
+    requiredString(rawId, 'shared approval id'), normalizeMutationOptions(rawOptions)
+  )),
+  'collaborationInbox:list': (rawProjectId, rawOptions) => withStore((store) => store.listCollaborationInbox(
+    requiredString(rawProjectId, 'collaboration inbox project id'),
+    normalizeCollaborationInboxListOptions(rawOptions)
+  )),
+  'collaborationInbox:mark': (rawInput, rawOptions) => withStore((store) => store.markCollaborationInbox(
+    normalizeCollaborationInboxMarkInput(rawInput),
+    normalizeMutationOptions(rawOptions)
   ))
 }
 
 async function exportProjectData(projectId: string) {
-  const service = createProductionProjectAggregateService(app.getPath('userData'))
-  const currentSeal = service.seals.readProject(projectId)
-  const seal = await service.sealProject(projectId, {
-    expectedAggregateRevision: currentSeal?.aggregateRevision ?? 0
-  })
-  return service.exportProject(projectId, {
-    expectedAggregateRevision: seal.aggregateRevision,
-    expectedAggregateDigest: seal.aggregateDigest
-  })
+  return executeProjectPortableExportEffect(projectId, app.getPath('userData'))
 }
 
 export function registerProjectWorkspaceIpc(): void {
@@ -323,7 +450,9 @@ function workspaceMutationProjectId(action: string, args: unknown[], result: unk
   if (['update', 'archive', 'restore', 'delete', 'purge'].includes(action)) {
     return optionalString(args[0])
   }
-  if (action === 'goals:create' || action === 'workItems:create' || action === 'squads:create' || action === 'comments:create') {
+  if (action === 'connectors:mutate') return optionalString(args[0])
+  if (action === 'knowledge:search') return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
+  if (action === 'goals:create' || action === 'workItems:create' || action === 'squads:create' || action === 'members:create' || action === 'invitations:create' || action === 'comments:create' || action === 'sharedApprovals:create') {
     return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
   }
   if (action === 'goalTask:create') {
@@ -335,6 +464,24 @@ function workspaceMutationProjectId(action: string, args: unknown[], result: unk
 function normalizeCommentInput(value: unknown): WorkItemCommentInput {
   const input = normalizeInput<ProjectWorkItemCommentCreateInput>(value, COMMENT_CREATE_KEYS, 'comment')
   return { ...input, author: LOCAL_USER_ACTOR }
+}
+
+function normalizeMemberInput(value: unknown): ProjectMemberInput {
+  const input = normalizeInput<ProjectMemberInput>(value, MEMBER_KEYS, 'member')
+  const principal = normalizeInput<WorkItemOwner>(input.principal, MEMBER_PRINCIPAL_KEYS, 'member principal')
+  if (principal.type !== 'human' && principal.type !== 'digital_worker') throw new Error('member principal type is invalid')
+  return { ...input, principal }
+}
+
+function normalizeInvitationInput(value: unknown): ProjectInvitationInput {
+  const input = normalizeInput<ProjectInvitationInput>(value, INVITATION_KEYS, 'invitation')
+  requiredString(input.projectId, 'invitation projectId')
+  if (input.role !== 'admin' && input.role !== 'editor' && input.role !== 'reviewer' && input.role !== 'viewer') {
+    throw new Error('invitation role is invalid')
+  }
+  const principal = normalizeInput<WorkItemOwner>(input.principal, MEMBER_PRINCIPAL_KEYS, 'invitation principal')
+  if (principal.type !== 'human' && principal.type !== 'digital_worker') throw new Error('invitation principal type is invalid')
+  return { ...input, principal }
 }
 
 function normalizeProjectTemplateApplyInput(value: unknown): ProjectWorkspaceTemplateApplyInput {
@@ -421,7 +568,11 @@ async function mutateWorkspaceWithoutActiveAssignments(
   if (activeSession) {
     throw new Error(`Project ${id} cannot purge while Session ${activeSession.id} is active`)
   }
-  const result = await purgeProjectPermanently(id, app.getPath('userData'), normalizeMutationOptions(rawOptions))
+  const result = await executeProjectPermanentDeletionEffect(
+    id,
+    app.getPath('userData'),
+    normalizeMutationOptions(rawOptions)
+  )
   invalidateHistoryCache()
   return result
 }
@@ -538,6 +689,39 @@ function normalizeListOptions(value: unknown): ListOptions {
   }
 }
 
+function normalizeCollaborationInboxListOptions(value: unknown): ProjectCollaborationInboxListOptions {
+  if (value === undefined || value === null) return {}
+  const record = normalizeInput<Record<string, unknown>>(
+    value,
+    COLLABORATION_INBOX_LIST_KEYS,
+    'collaboration inbox list options'
+  )
+  if (record.includeHandled !== undefined && typeof record.includeHandled !== 'boolean') {
+    throw new Error('collaboration inbox includeHandled must be boolean')
+  }
+  return {
+    memberId: optionalString(record.memberId),
+    includeHandled: record.includeHandled as boolean | undefined
+  }
+}
+
+function normalizeCollaborationInboxMarkInput(value: unknown): ProjectCollaborationInboxMarkInput {
+  const record = normalizeInput<Record<string, unknown>>(
+    value,
+    COLLABORATION_INBOX_MARK_KEYS,
+    'collaboration inbox mark'
+  )
+  if (record.status !== 'read' && record.status !== 'handled') {
+    throw new Error('collaboration inbox status is invalid')
+  }
+  return {
+    projectId: requiredString(record.projectId, 'collaboration inbox project id'),
+    itemId: requiredString(record.itemId, 'collaboration inbox item id'),
+    sourceRevision: positiveInteger(record.sourceRevision, 'collaboration inbox sourceRevision'),
+    status: record.status
+  }
+}
+
 function normalizeMutationOptions(value: unknown): MutationOptions {
   if (value === undefined || value === null) return {}
   const record = asRecord(value, 'mutation options')
@@ -545,6 +729,84 @@ function normalizeMutationOptions(value: unknown): MutationOptions {
   return {
     ...(record.expectedRevision === undefined ? {} : { expectedRevision: nonNegativeInteger(record.expectedRevision, 'expectedRevision') }),
     ...(record.expectedStoreRevision === undefined ? {} : { expectedStoreRevision: nonNegativeInteger(record.expectedStoreRevision, 'expectedStoreRevision') })
+  }
+}
+
+function normalizeConnectorMutation(value: unknown): ProjectConnectorMutation {
+  const record = asRecord(value, 'connector mutation')
+  assertAllowedKeys(record, new Set(['kind', 'enabled', 'status', 'principalId', 'credentialRef', 'subject', 'intervalMs']), 'connector mutation')
+  if (record.kind === 'set_enabled') {
+    if (typeof record.enabled !== 'boolean') throw new Error('connector enabled must be boolean')
+    return { kind: 'set_enabled', enabled: record.enabled }
+  }
+  if (record.kind === 'set_authorization') {
+    if (record.status !== 'active' && record.status !== 'revoked') throw new Error('connector authorization status is invalid')
+    return { kind: 'set_authorization', status: record.status }
+  }
+  if (record.kind === 'bind_authorization') {
+    const principalId = requiredString(record.principalId, 'connector authorization principalId')
+    const credentialRef = requiredString(record.credentialRef, 'connector authorization credentialRef')
+    if (!/^oauth:[^/\s]+\/[^/\s]+$/.test(credentialRef) && !/^provider:[^/\s]+\/[^/\s]+$/.test(credentialRef)) {
+      throw new Error('connector authorization credentialRef is invalid')
+    }
+    if (record.subject !== undefined && record.subject !== 'personal' && record.subject !== 'shared') {
+      throw new Error('connector authorization subject is invalid')
+    }
+    return {
+      kind: 'bind_authorization',
+      principalId,
+      credentialRef,
+      ...(record.subject === undefined ? {} : { subject: record.subject })
+    }
+  }
+  if (record.kind === 'set_auto_refresh') {
+    if (typeof record.intervalMs !== 'number' || ![0, 900_000, 3_600_000, 21_600_000, 86_400_000].includes(record.intervalMs)) {
+      throw new Error('connector auto-refresh interval is invalid')
+    }
+    return { kind: 'set_auto_refresh', intervalMs: record.intervalMs as 0 | 900_000 | 3_600_000 | 21_600_000 | 86_400_000 }
+  }
+  if (record.kind === 'request_refresh') return { kind: 'request_refresh' }
+  if (record.kind === 'purge_cache') return { kind: 'purge_cache' }
+  throw new Error('connector mutation kind is invalid')
+}
+
+async function updateWorkspaceWithConnectorCleanup(
+  projectId: string,
+  patch: ProjectWorkspacePatch,
+  options: MutationOptions
+) {
+  const store = await openProjectWorkspaceStore(app.getPath('userData'))
+  if (patch.resources === undefined) return store.updateWorkspace(projectId, patch, options)
+  const resources = normalizeResources(patch.resources)
+  const current = await store.getWorkspace(projectId)
+  if (!current) throw new Error(`Project not found:${projectId}`)
+  if (options.expectedRevision !== undefined && current.revision !== options.expectedRevision) {
+    throw new Error(`Project revision conflict:${projectId}`)
+  }
+  const retained = new Set(resources.map((resource) => resource.id))
+  const removedConnectorIds = current.resources
+    .filter((resource) => resource.kind === 'connector' && !retained.has(resource.id))
+    .map((resource) => resource.id)
+  const updated = await store.updateWorkspace(projectId, { ...patch, resources }, options)
+  const cleanup = await Promise.allSettled(removedConnectorIds.map((resourceId) =>
+    purgeProjectConnectorCache(app.getPath('userData'), projectId, resourceId)
+  ))
+  for (const failure of cleanup.filter((result) => result.status === 'rejected')) {
+    console.error(`[caogen] Removed Connector cache cleanup failed for Project ${projectId}:`, failure.reason)
+  }
+  return updated
+}
+
+function normalizeKnowledgeSearchInput(value: unknown): ProjectKnowledgeSearchInput {
+  const record = asRecord(value, 'knowledge search')
+  assertAllowedKeys(record, PROJECT_KNOWLEDGE_SEARCH_KEYS, 'knowledge search')
+  const projectId = requiredString(record.projectId, 'knowledge search projectId')
+  const query = requiredString(record.query, 'knowledge search query')
+  if (query.length > 512) throw new Error('knowledge search query exceeds 512 characters')
+  return {
+    projectId,
+    query,
+    ...(record.limit === undefined ? {} : { limit: positiveInteger(record.limit, 'knowledge search limit') })
   }
 }
 

@@ -7,7 +7,7 @@ import {
   type ComposerCommandContext,
   type PluginCommandHandlers
 } from '../../commands'
-import type { ExperienceMode } from '../../store/experience-mode'
+import type { SessionExperienceMode } from '../../store/experience-mode'
 
 const ASSISTANT_COMMAND_IDS = new Set([
   'rewind',
@@ -28,7 +28,7 @@ export function projectedComposerCommands({
   commandContext: ComposerCommandContext
   pluginHandlers: PluginCommandHandlers
   pluginItems: PluginRegistryItem[]
-  projection: ExperienceMode
+  projection: SessionExperienceMode
   slashQuery: string | null
 }): CommandDescriptor[] {
   const base = buildComposerSlashCommands(commandContext)
@@ -40,14 +40,14 @@ export function projectedComposerCommands({
 }
 
 export function shouldLoadProjectedPluginRegistry(
-  projection: ExperienceMode,
+  projection: SessionExperienceMode,
   slashQuery: string | null
 ): boolean {
   return projection === 'studio' && shouldLoadPluginSlashRegistry(slashQuery)
 }
 
 export function projectedPaletteItems<T extends { id: string; section: string }>(
-  projection: ExperienceMode,
+  projection: SessionExperienceMode,
   items: T[]
 ): T[] {
   if (projection === 'studio') return items

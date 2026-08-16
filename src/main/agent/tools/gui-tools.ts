@@ -223,14 +223,12 @@ export async function executeGuiTool(
     case 'gui_activate_window':
       return verifiedResult(() => controller.activateWindow(windowSelector(args)), postcondition, controller, signal)
     case 'gui_screenshot':
-      return result(
-        await controller.screenshot({
-          sourceId: stringValue(args.sourceId),
-          savePath: stringValue(args.savePath),
-          maxWidth: numberValue(args.maxWidth),
-          includeOcr: booleanValue(args.includeOcr)
-        })
-      )
+      return screenshotResult(await controller.screenshot({
+        sourceId: stringValue(args.sourceId),
+        savePath: stringValue(args.savePath),
+        maxWidth: numberValue(args.maxWidth),
+        includeOcr: booleanValue(args.includeOcr)
+      }))
     case 'gui_click':
       return verifiedResult(
         () => controller.click({
@@ -281,6 +279,31 @@ export async function executeGuiTool(
 
 function result<T extends { ok: boolean }>(value: T): ToolExecResult {
   return { ok: value.ok, output: JSON.stringify(value, null, 2) }
+}
+
+function screenshotResult(value: Awaited<ReturnType<ReturnType<typeof createGuiController>['screenshot']>>): ToolExecResult {
+  const base = result(value)
+  if (!value.ok || !value.path) return base
+  return {
+    ...base,
+    producedArtifacts: [{
+      kind: 'screenshot',
+      title: value.sourceName ? `GUI screenshot: ${value.sourceName}` : 'GUI screenshot',
+      path: value.path,
+      lineageKey: `gui-screenshot:${value.sourceId ?? value.sourceName ?? 'default'}`,
+      producer: 'gui_screenshot',
+      mediaType: 'image/png',
+      metadata: {
+        sourceId: value.sourceId,
+        sourceName: value.sourceName,
+        width: value.width,
+        height: value.height
+      },
+      evidenceKind: 'observation',
+      evidenceSummary: 'The desktop GUI controller captured a non-empty PNG output for this Run.',
+      evidenceVerifier: 'gui-runtime'
+    }]
+  }
 }
 
 async function verifiedResult(

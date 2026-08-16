@@ -102,6 +102,12 @@ function loadOfficeModel() {
   const module = { exports: {} }
   const localRequire = (specifier) => {
     if (specifier.endsWith('/workflow-repair')) return loadWorkflowRepairModel()
+    if (specifier === './providerModelFailover') {
+      return {
+        hasOfficeFailoverSignal: (signal) => Boolean(signal.failover || signal.keyFailover || signal.modelFailover),
+        latestProviderModelFailoverSignal: () => undefined
+      }
+    }
     throw new Error(`unexpected runtime require from office model: ${specifier}`)
   }
   new Function('require', 'module', 'exports', output)(localRequire, module, module.exports)
@@ -549,7 +555,7 @@ check('desk operators use a seated low-noise workstation presentation', () => {
   assert(monitors.includes('color={SCREEN_SURFACE}') && monitors.includes('emissive={SCREEN_GLOW}'), 'status color must not flood the full monitor panel')
   assert(!backplane.includes('<cylinderGeometry args={[0.08, 0.08, 0.012, 28]} />'), 'floor data nodes must not render circular pucks')
   assert(windowWall.includes('剖切展示模式不渲染孤立亮点'), 'cutaway window wall must suppress isolated city light points')
-  assert(view.includes('[0.28, 4.5, 9.55]') && view.includes('const OFFICE_CAMERA_FOV = 44'), 'overview camera must keep the front row inside frame')
+  assert(view.includes('CONTROL_ROOM_LAYOUT.overview.position') && view.includes('CONTROL_ROOM_LAYOUT.overview.fov'), 'overview camera must use the shared control-room layout contract')
   assert(css.includes('top: 50px;') && css.includes('max-height: min(260px'), 'selected agent panel must stay clear of front-row robots')
 })
 
@@ -567,28 +573,37 @@ check('clicking a workstation selects in office and double-click opens the sessi
 check('OfficeView exposes clickable facility targets', () => {
   const view = source('src/renderer/src/components/office/OfficeView.tsx')
   const facilities = source('src/renderer/src/components/office/kit/FacilityHotspots.tsx')
+  const stations = source('src/renderer/src/components/office/kit/CommandCenterStations.tsx')
+  const layout = source('src/renderer/src/components/office/kit/controlRoomLayout.ts')
+  const scene = source('src/renderer/src/components/office/kit/OfficeScene.tsx')
   const cameraRig = source('src/renderer/src/components/office/kit/CameraRig.tsx')
   assert(view.includes('data-office-clickable-facilities'), 'missing clickable facilities semantic attribute')
   assert(view.includes('data-office-facility-hit-targets'), 'missing facility hit target semantic attribute')
-  assert(view.includes('data-office-restroom-walkers'), 'missing restroom walker semantic attribute')
-  assert(view.includes('data-office-dining-walkers'), 'missing dining walker semantic attribute')
+  assert(view.includes('data-office-assistant-walkers'), 'missing assistant walker semantic attribute')
+  assert(view.includes('data-office-project-walkers'), 'missing project walker semantic attribute')
+  assert(view.includes('data-office-video-walkers'), 'missing video walker semantic attribute')
   assert(view.includes('data-office-one-robot-per-agent'), 'missing one-robot-per-agent semantic attribute')
-  assert(view.includes('data-office-restroom-stations'), 'missing restroom station semantic attribute')
-  assert(view.includes('data-office-dining-stations'), 'missing dining station semantic attribute')
+  assert(view.includes('data-office-assistant-stations'), 'missing assistant station semantic attribute')
+  assert(view.includes('data-office-project-stations'), 'missing project station semantic attribute')
+  assert(view.includes('data-office-video-stations'), 'missing video station semantic attribute')
+  assert(view.includes('data-office-command-stations'), 'missing central command station semantic attribute')
+  assert(view.includes('data-office-artifact-vaults'), 'missing Artifact vault semantic attribute')
+  assert(view.includes('data-office-render-racks'), 'missing Provider/render rack semantic attribute')
   assert(view.includes('data-office-facility-fixtures'), 'missing facility fixture semantic attribute')
   assert(view.includes('<FacilityHotspots'), 'OfficeView must render 3D facility hotspots')
-  assert(facilities.includes("'hydration'") && facilities.includes("'restroom'") && facilities.includes("'dining'"), 'facility hotspot set must cover hydration/restroom/dining')
+  assert(facilities.includes("'assistant'") && facilities.includes("'project'") && facilities.includes("'video'"), 'facility hotspot set must cover assistant/project/video')
   const walkers = source('src/renderer/src/components/office/kit/AgentWalkers.tsx')
-  assert(walkers.includes("'restroom'") && walkers.includes("'dining'"), 'AgentWalkers must support restroom/dining route reasons')
+  assert(walkers.includes("'assistant'") && walkers.includes("'project'") && walkers.includes("'video'"), 'AgentWalkers must support all business-zone route reasons')
   assert(walkers.includes('holdAtTarget'), 'AgentWalkers must support stable facility target presentation')
   assert(walkers.includes('departureDelay') && walkers.includes('waitingToDepart'), 'facility walkers must stagger departures instead of overlapping at startup')
   assert(walkers.includes('applyStandingTalking'), 'approval walkers must use a standing interaction pose away from the desk')
   assert(walkers.includes('walker-select-hitbox'), 'AgentWalkers must expose a stable pointer hit target')
   assert(cameraRig.includes('minDistance?: number') && view.includes('minDistance={cameraMinDistance}'), 'camera presets must support real close focus instead of a fixed six-unit clamp')
-  assert(facilities.includes('cameraPosition: [-6.45, 4.6, 9.15]'), 'restroom camera must use an unobstructed elevated fixture view')
-  assert(facilities.includes('cameraPosition: [-2, 4.5, 10.8]'), 'dining camera must use an unobstructed elevated fixture view')
-  const wayfinding = source('src/renderer/src/components/office/kit/ServiceWayfinding.tsx')
-  assert(wayfinding.includes('RestroomFixture') && wayfinding.includes('DiningFixture'), 'ServiceWayfinding must include restroom/dining facility fixtures')
+  assert(facilities.includes('CONTROL_ROOM_LAYOUT.assistant.cameraPosition') && facilities.includes('CONTROL_ROOM_LAYOUT.project.cameraPosition') && facilities.includes('CONTROL_ROOM_LAYOUT.video.cameraPosition'), 'business-zone cameras must use the shared layout contract')
+  assert(stations.includes('function CommandCore') && stations.includes('function ArtifactVault'), 'control room must render the central command core and Artifact vault')
+  assert(stations.includes('CONTROL_ROOM_LAYOUT.assistant.station') && stations.includes('CONTROL_ROOM_LAYOUT.project.station') && stations.includes('CONTROL_ROOM_LAYOUT.video.station'), 'all business stations must use canonical shared positions')
+  assert(layout.includes('zoneOverview') && layout.includes('infrastructure') && layout.includes('approvalApproach'), 'shared control-room layout must cover cameras, infrastructure, and approval routing')
+  assert(scene.includes('<CommandCenterStations') && !scene.includes('<ServiceWayfinding') && !scene.includes('<CoffeeStation'), 'control room scene must use business stations instead of office amenities')
 })
 
 check('walking agents use distance-locked foot contact gait', () => {
@@ -1035,8 +1050,8 @@ check('AvatarRig uses reference robot design language', () => {
   assert(workstation.includes('operator-position-slat'), 'workstations must mark operator position with slats instead of glowing ball-like discs')
   assert(!workstation.includes('<cylinderGeometry args={[0.72, 0.72, 0.012, 48]} />'), 'workstations must not render large glowing operator discs')
   assert(walkers.includes("const WALKER_ACCENT = '#59dcff'"), 'walking route accent must be neutralized')
-  assert(wayfinding.includes("const APPROVAL = '#6f8fa0'") && wayfinding.includes("const DINING = '#5f7f8c'"), 'service wayfinding must use muted blue-gray approval/dining colors')
-  assert(facilities.includes("accent: '#5f7f8c'"), 'dining facility hotspot must use muted blue-gray instead of green')
+  assert(walkers.includes("project: '#8ba88f'") && walkers.includes("video: '#c39b73'"), 'business-zone routes must keep restrained project/video accents')
+  assert(facilities.includes("accent: '#8ba88f'") && facilities.includes("accent: '#c39b73'"), 'business-zone hotspots must use restrained project/video accents')
   assert(approvalStation.includes("const ACCENT = '#6f8fa0'"), 'approval station must use muted blue-gray instead of yellow')
   assert(operationsBackplane.includes("const APPROVAL = '#6f8fa0'"), 'operations backplane approval signal must use muted blue-gray instead of yellow')
   for (const [label, text] of [

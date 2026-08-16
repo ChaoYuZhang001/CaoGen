@@ -20,6 +20,8 @@ export interface RuntimeModelAttemptInput {
   protocol: string
   adapterVersion: string
   context: unknown
+  /** Provider-neutral digest supplied by the CaoGen context boundary. */
+  contextDigest?: string
   routeReason: string
   keyIdentity?: RuntimeModelKeyIdentity
   failoverFromAttemptId?: string
@@ -280,7 +282,7 @@ async function persistRuntimeStart(
       model: input.model,
       protocol: input.protocol,
       adapterVersion: input.adapterVersion,
-      contextDigest: stableModelContextDigest(input.context),
+      contextDigest: input.contextDigest ?? stableModelContextDigest(input.context),
       routeReason: input.routeReason,
       keyLabel: stableModelKeyLabel(input.keyIdentity),
       failoverFromAttemptId: input.failoverFromAttemptId,

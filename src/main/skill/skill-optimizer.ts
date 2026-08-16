@@ -7,7 +7,7 @@ import {
   getLearningRecord,
   importSkillLearningBaseline
 } from '../learning/learning-lifecycle'
-import { resolveDefaultLearningRoot } from '../learning/learning-store'
+import { learningProjectHash, resolveDefaultLearningRoot } from '../learning/learning-store'
 import { SkillManager } from './skill-manager'
 import { testSkillMarkdown, type SkillTestDiagnostic } from './skill-tester'
 import type { SkillDefinition } from './skill-loader'
@@ -92,10 +92,13 @@ export async function proposeSkillOptimization(input: SkillFeedbackInput): Promi
 
   const skillPath = resolve(skill.sourcePath)
   assertInside(skillRoot, skillPath)
-  const feedbackPath = join(dirname(skillPath), 'skill-feedback.json')
-  assertInside(skillRoot, feedbackPath)
+  const learningRoot = await resolveDefaultLearningRoot(projectRoot)
+  const feedbackPath = feedbackStorePath(learningRoot, projectRoot, skillPath)
+  assertInside(learningRoot, feedbackPath)
+  const legacyFeedbackPath = join(dirname(skillPath), 'skill-feedback.json')
+  assertInside(skillRoot, legacyFeedbackPath)
 
-  const store = readFeedbackStore(feedbackPath, skill)
+  const store = readFeedbackStore([feedbackPath, legacyFeedbackPath], skill)
   const normalizedRecord = normalizeRecord(input)
   const existingRecord = store.records.find((item) => item.id === normalizedRecord.id)
   const record = existingRecord ?? normalizedRecord
@@ -106,7 +109,6 @@ export async function proposeSkillOptimization(input: SkillFeedbackInput): Promi
 
   // Unbound ids came from the pre-Learning sidecar schema and cannot prove a live proposal.
   store.draftedRecordIds = store.draftedRecordIds.filter((id) => Boolean(store.learningDraftIds[id]))
-  const learningRoot = await resolveDefaultLearningRoot(projectRoot)
   const context = { projectRoot, skillRoot, learningRoot, skill, skillPath, feedbackPath, store, record }
   const boundResult = await resolveBoundProposal(context)
   if (boundResult) return boundResult
@@ -262,8 +264,9 @@ function optimizationConfidence(record: SkillFeedbackRecord): number {
   return record.outcome === 'corrected' ? 0.95 : 0.8
 }
 
-function readFeedbackStore(feedbackPath: string, skill: SkillDefinition): SkillFeedbackStore {
-  if (!existsSync(feedbackPath)) {
+function readFeedbackStore(feedbackPaths: string[], skill: SkillDefinition): SkillFeedbackStore {
+  const feedbackPath = feedbackPaths.find((candidate) => existsSync(candidate))
+  if (!feedbackPath) {
     return {
       skillId: skill.id,
       skillName: skill.name,
@@ -368,11 +371,12 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 }
 
 async function writeFeedbackSidecar(feedbackPath: string, store: SkillFeedbackStore): Promise<void> {
-  if (join(dirname(feedbackPath), 'skill-feedback.json') !== feedbackPath) {
-    throw new Error(`反馈存储必须是非活动 Skill sidecar: ${feedbackPath}`)
-  }
-  // SkillManager only loads SKILL.md; this sidecar never becomes active Skill content.
   await writeTextAtomically(feedbackPath, `${JSON.stringify(store, null, 2)}\n`)
+}
+
+function feedbackStorePath(learningRoot: string, projectRoot: string, skillPath: string): string {
+  const skill = createHash('sha256').update(resolve(skillPath)).digest('hex')
+  return join(resolve(learningRoot), 'projects', learningProjectHash(projectRoot), 'skill-feedback', `${skill}.json`)
 }
 
 async function writeTextAtomically(target: string, content: string): Promise<void> {
@@ -391,7 +395,7 @@ function assertInside(root: string, target: string): void {
   const fromRoot = relative(resolve(root), resolve(target))
   if (fromRoot === '') return
   if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
-    throw new Error(`路径不在受控 Skill 目录内: ${target}`)
+    throw new Error(`路径不在受控目录内: ${target}`)
   }
 }
 

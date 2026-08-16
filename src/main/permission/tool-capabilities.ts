@@ -34,6 +34,7 @@ const NETWORK_TOOLS = new Set([
 ])
 
 const WORKSPACE_WRITE_TOOLS = new Set([
+  'artifact_register',
   'write_file',
   'edit_file',
   'memory_add',
@@ -53,6 +54,7 @@ export function classifyToolCapabilities(
   toolInput: Record<string, unknown>
 ): ToolSemanticCapability[] {
   const normalized = normalizeToolName(toolName)
+  if (normalized === 'project_knowledge_search') return ['workspaceRead', 'network']
   if (normalized === 'bash' || normalized === 'mcp_call_tool' || normalized.toLowerCase().startsWith('mcp__')) {
     return [...COMPOSITE_TOOL_CAPABILITIES]
   }

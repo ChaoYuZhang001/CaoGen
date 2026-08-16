@@ -29,6 +29,7 @@ export function buildSkillInvocationPrompt(options: SkillInvocationPromptOptions
     })
     .slice(0, normalizeMaxSkills(options.maxSkills))
   if (matches.length === 0) return ''
+  for (const match of matches) manager.authorize(match.skill)
 
   return [
     '## 自动匹配的 CaoGen Skill',

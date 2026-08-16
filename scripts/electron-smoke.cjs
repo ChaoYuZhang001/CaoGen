@@ -18,6 +18,11 @@ const { app, BrowserWindow, ipcMain } = require('electron')
 const repoOut = path.resolve(__dirname, '..', 'out', 'main')
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-smoke-'))
 const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-smoke-project-'))
+const canonicalIds = {
+  workspace: 'electron-smoke-workspace',
+  goal: 'electron-smoke-goal',
+  workItem: 'electron-smoke-work-item'
+}
 process.env.CAOGEN_USER_DATA_DIR = tmpUserData
 const finderLaunchCwd = path.parse(repoOut).root
 process.chdir(finderLaunchCwd)
@@ -71,6 +76,8 @@ async function run() {
     check('IPC sessions:list 可调用', Array.isArray(sessions), `返回 ${JSON.stringify(sessions).slice(0, 40)}`)
   } catch (e) { check('IPC sessions:list', false, String(e.message)) }
 
+  await exerciseSessionQueryIpc()
+
   try {
     const settings = await invoke('settings:get')
     check('IPC settings:get 返回设置对象', settings && typeof settings === 'object' && 'schedulerStrategy' in settings, JSON.stringify(settings).slice(0, 60))
@@ -122,7 +129,9 @@ async function run() {
       await invoke('sessions:close', meta.id)
       check('IPC sessions:close 可调用', true)
     }
-  } catch (e) { check('IPC sessions:create/close', false, String(e.message)) }
+
+    await exerciseCanonicalRendererMutation(provider)
+  } catch (e) { check('IPC sessions:create/close', false, String(e.stack ?? e.message)) }
 
   finish()
 }
@@ -140,17 +149,51 @@ async function exerciseMcpProbeIpc() {
   }
 }
 
+async function exerciseSessionQueryIpc() {
+  try {
+    const page = await invokeTrusted('appFeatures:invoke', 'session-query', 'query', { limit: 5 })
+    check(
+      'IPC session-query/query 可信窗口可调用',
+      page?.schemaVersion === 1 && Array.isArray(page.items) && Number.isSafeInteger(page.totalMatched),
+      JSON.stringify(page).slice(0, 100)
+    )
+  } catch (error) {
+    check('IPC session-query/query 可信窗口', false, String(error.message))
+  }
+  try {
+    await invoke('appFeatures:invoke', 'session-query', 'query', { limit: 5 })
+    check('IPC session-query/query 拒绝非可信 sender', false, 'unexpected success')
+  } catch (error) {
+    check('IPC session-query/query 拒绝非可信 sender', /not trusted/.test(String(error.message)), String(error.message))
+  }
+}
+
 async function exerciseNativeDomainIpc() {
   try {
     const workspace = await invokeTrusted('projectWorkspace:invoke', 'create', {
-      id: 'electron-smoke-workspace',
+      id: canonicalIds.workspace,
       name: 'Electron smoke workspace',
       kind: 'software'
     })
+    const goal = await invokeTrusted('projectWorkspace:invoke', 'goals:create', {
+      id: canonicalIds.goal,
+      projectId: workspace.id,
+      title: 'Verify canonical renderer effects',
+      objective: 'Preserve canonical ownership through renderer mutations'
+    })
+    const workItem = await invokeTrusted('projectWorkspace:invoke', 'workItems:create', {
+      id: canonicalIds.workItem,
+      projectId: workspace.id,
+      goalId: goal.id,
+      title: 'Exercise canonical renderer mutation',
+      type: 'testing',
+      status: 'ready'
+    })
     const workspaces = await invokeTrusted('projectWorkspace:invoke', 'list')
     check(
-      'IPC ProjectWorkspace 创建和读取',
-      workspace?.id === 'electron-smoke-workspace' && workspaces.some((item) => item.id === workspace.id)
+      'IPC ProjectWorkspace/Goal/WorkItem 创建和读取',
+      workspace?.id === canonicalIds.workspace && goal?.id === canonicalIds.goal &&
+        workItem?.id === canonicalIds.workItem && workspaces.some((item) => item.id === workspace.id)
     )
   } catch (error) {
     check('IPC ProjectWorkspace 创建和读取', false, String(error.message))
@@ -185,6 +228,34 @@ async function exerciseNativeDomainIpc() {
   } catch (error) {
     check('IPC DigitalWorker 创建和读取', false, String(error.message))
   }
+}
+
+async function exerciseCanonicalRendererMutation(provider) {
+  const meta = await invoke('sessions:create', {
+    cwd: tmpProject,
+    workspaceId: canonicalIds.workspace,
+    goalId: canonicalIds.goal,
+    workItemId: canonicalIds.workItem,
+    engine: 'openai',
+    providerId: provider.id,
+    model: 'smoke-model',
+    isolated: false
+  })
+  const result = await invoke('files:write', meta.id, 'canonical-renderer.txt', 'canonical renderer\n')
+  const workItem = await invokeTrusted('projectWorkspace:invoke', 'workItems:get', canonicalIds.workItem)
+  const snapshots = await invoke('taskSnapshots:list')
+  const runId = typeof result?.operationId === 'string' ? `operation:${result.operationId}` : ''
+  check(
+    '规范 Project renderer mutation 绑定 canonical Run/Artifact',
+    confirmedOperation(result) && workItem?.runRefs?.includes(runId) && workItem?.artifactRefs?.length > 0,
+    `${JSON.stringify(result).slice(0, 500)} runRefs=${JSON.stringify(workItem?.runRefs)} artifactRefs=${JSON.stringify(workItem?.artifactRefs)}`
+  )
+  check(
+    '规范 Project renderer mutation 完成后无恢复快照残留',
+    !snapshots.some((snapshot) => snapshot.id === runId),
+    `runId=${runId} snapshots=${snapshots.map((snapshot) => snapshot.id).join(',') || 'none'}`
+  )
+  await invoke('sessions:close', meta.id)
 }
 
 async function waitForHandler(channel, timeoutMs = 10000) {

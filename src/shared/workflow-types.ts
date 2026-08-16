@@ -453,6 +453,404 @@ export interface WorkflowAcceptanceInput {
   updatedAt?: number
 }
 
+export interface WorkflowArtifactAcceptanceCreateInput {
+  artifactId: string
+}
+
+export interface WorkflowArtifactAcceptanceCreateResult {
+  acceptance: WorkflowAcceptanceRecord
+  bindingEvidence: WorkflowEvidenceRecord
+  bindingLink: WorkflowEvidenceLinkRecord
+  disposition: 'created' | 'existing'
+}
+
+export interface WorkflowArtifactExportInput {
+  artifactId: string
+}
+
+export type WorkflowArtifactExportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      artifactId: string
+      fileName: string
+      sizeBytes: number
+      digest: string
+    }
+
+export interface WorkflowArtifactCompareInput {
+  baseArtifactId: string
+  targetArtifactId: string
+}
+
+export interface WorkflowArtifactCompareSide {
+  artifactId: string
+  title: string
+  version: number
+  digest: string
+  sizeBytes: number
+}
+
+export interface WorkflowArtifactTextChange {
+  kind: 'context' | 'added' | 'removed'
+  text: string
+}
+
+export interface WorkflowArtifactCompareResult {
+  base: WorkflowArtifactCompareSide
+  target: WorkflowArtifactCompareSide
+  comparison: 'identical' | 'text' | 'binary'
+  sizeDeltaBytes: number
+  addedLines: number
+  removedLines: number
+  changes: WorkflowArtifactTextChange[]
+  truncated: boolean
+}
+
+export interface WorkflowArtifactIntegrityInput {
+  artifactId: string
+}
+
+export type WorkflowArtifactIntegrityCheckKind =
+  | 'canonical_ownership'
+  | 'artifact_graph'
+  | 'current_version'
+  | 'local_location'
+  | 'content_identity'
+  | 'evidence_binding'
+  | 'acceptance_status'
+
+export interface WorkflowArtifactIntegrityCheck {
+  kind: WorkflowArtifactIntegrityCheckKind
+  status: 'passed' | 'blocked'
+  message: string
+}
+
+export interface WorkflowArtifactIntegrityBlocker {
+  code:
+    | 'HISTORICAL_VERSION'
+    | 'LOCAL_LOCATION_UNVERIFIED'
+    | 'EVIDENCE_MISSING'
+    | 'ACCEPTANCE_MISSING'
+    | 'ACCEPTANCE_PENDING'
+    | 'ACCEPTANCE_FAILED'
+  message: string
+}
+
+export interface WorkflowArtifactIntegrityEvidence {
+  evidenceId: string
+  kind: WorkflowEvidenceKind
+  source: WorkflowEvidenceSource
+  verifier: string
+  observedAt: number
+  contentDigest: string
+}
+
+export interface WorkflowArtifactIntegrityAcceptance {
+  acceptanceId: string
+  status: WorkflowAcceptanceStatus
+  revision: number
+  evidenceRefs: string[]
+  verifier?: string
+  verifiedAt?: number
+}
+
+/** Renderer-safe verification result. It intentionally excludes source paths and bytes. */
+export interface WorkflowArtifactIntegrityReport {
+  schemaVersion: 1
+  format: 'caogen.artifact-integrity-report.v1'
+  artifact: {
+    id: string
+    projectId: string
+    title: string
+    kind: WorkflowArtifactKind
+    version: number
+    digest: string
+    mediaType?: string
+    sizeBytes?: number
+  }
+  lineage: {
+    predecessorArtifactId?: string
+    successorArtifactIds: string[]
+    currentArtifactIds: string[]
+    lineageArtifactIds: string[]
+    current: boolean
+  }
+  locations: {
+    total: number
+    available: number
+    availableLocal: number
+    byteVerified: boolean
+  }
+  evidence: WorkflowArtifactIntegrityEvidence[]
+  acceptances: WorkflowArtifactIntegrityAcceptance[]
+  checks: WorkflowArtifactIntegrityCheck[]
+  blockers: WorkflowArtifactIntegrityBlocker[]
+  verdict: 'ready' | 'blocked'
+  verifiedAt: number
+}
+
+export interface WorkflowArtifactManifestExportInput {
+  artifactId: string
+}
+
+export type WorkflowArtifactManifestExportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      artifactId: string
+      fileName: string
+      sizeBytes: number
+      manifestDigest: string
+      verdict: WorkflowArtifactIntegrityReport['verdict']
+    }
+
+export interface WorkflowProjectDeliveryIntegrityInput {
+  projectId: string
+}
+
+export interface WorkflowProjectDeliveryBlockerCount {
+  code: WorkflowArtifactIntegrityBlocker['code']
+  count: number
+}
+
+export interface WorkflowProjectDeliveryIntegrityReport {
+  schemaVersion: 1
+  format: 'caogen.project-delivery-integrity-report.v1'
+  projectId: string
+  generatedAt: number
+  verdict: 'ready' | 'blocked'
+  summary: {
+    currentArtifactCount: number
+    readyArtifactCount: number
+    blockedArtifactCount: number
+    verifiedBytes: number
+    blockerCounts: WorkflowProjectDeliveryBlockerCount[]
+  }
+  artifacts: WorkflowArtifactIntegrityReport[]
+}
+
+export interface WorkflowProjectDeliveryManifestExportInput {
+  projectId: string
+}
+
+export type WorkflowProjectDeliveryManifestExportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      projectId: string
+      fileName: string
+      sizeBytes: number
+      manifestDigest: string
+      verdict: WorkflowProjectDeliveryIntegrityReport['verdict']
+      readyArtifactCount: number
+      blockedArtifactCount: number
+    }
+
+export interface WorkflowProjectDeliveryPackageExportInput {
+  projectId: string
+}
+
+export type WorkflowProjectDeliveryPackageExportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      projectId: string
+      fileName: string
+      sizeBytes: number
+      packageDigest: string
+      manifestDigest: string
+      signatureStatus: 'valid'
+      signingIdentityFingerprint: string
+      identityTrust: 'local_identity'
+      verdict: WorkflowProjectDeliveryIntegrityReport['verdict']
+      includedArtifactCount: number
+      blockedArtifactCount: number
+    }
+
+export type WorkflowProjectDeliveryPackageVerificationBlockerCode =
+  | 'FILE_UNREADABLE'
+  | 'FILE_CHANGED'
+  | 'ZIP_INVALID'
+  | 'ZIP_ENTRY_LIMIT'
+  | 'ZIP_SIZE_LIMIT'
+  | 'ZIP_PATH_INVALID'
+  | 'ZIP_DUPLICATE_PATH'
+  | 'ZIP_ENTRY_UNSAFE'
+  | 'MANIFEST_MISSING'
+  | 'MANIFEST_DUPLICATE'
+  | 'MANIFEST_TOO_LARGE'
+  | 'MANIFEST_INVALID'
+  | 'MANIFEST_DIGEST_MISMATCH'
+  | 'SIGNATURE_INVALID'
+  | 'SIGNATURE_REQUIRED'
+  | 'IDENTITY_NOT_TRUSTED'
+  | 'IDENTITY_REVOKED'
+  | 'TRUST_POLICY_UNAVAILABLE'
+  | 'ENTRY_UNDECLARED'
+  | 'ARTIFACT_ENTRY_MISSING'
+  | 'ARTIFACT_SIZE_MISMATCH'
+  | 'ARTIFACT_DIGEST_MISMATCH'
+
+export interface WorkflowProjectDeliveryPackageVerificationBlocker {
+  code: WorkflowProjectDeliveryPackageVerificationBlockerCode
+  message: string
+  entry?: string
+}
+
+/** Renderer-safe offline package verdict. Local paths and entry bytes are intentionally excluded. */
+export type WorkflowProjectDeliveryPackageVerificationResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      schemaVersion: 1
+      format: 'caogen.project-delivery-package-verification.v1'
+      verificationId: string
+      verdict: 'verified' | 'rejected'
+      byteIntegrity: 'verified' | 'rejected'
+      signatureStatus: 'valid' | 'invalid' | 'unsigned'
+      identityTrust: 'local_identity' | 'trusted_identity' | 'revoked_identity' | 'unknown_identity' | 'unsigned'
+      trustPolicyMode: WorkflowDeliveryTrustPolicyMode
+      trustPolicyVerdict: 'passed' | 'blocked'
+      signingIdentityFingerprint?: string
+      signingIdentityLabel?: string
+      fileName: string
+      verifiedAt: number
+      sizeBytes?: number
+      packageDigest?: string
+      projectId?: string
+      manifestDigest?: string
+      manifestVerdict?: WorkflowProjectDeliveryIntegrityReport['verdict']
+      entryCount?: number
+      declaredArtifactCount?: number
+      verifiedArtifactCount?: number
+      verifiedArtifactBytes?: number
+      blockers: WorkflowProjectDeliveryPackageVerificationBlocker[]
+    }
+
+export interface WorkflowProjectDeliveryPackageVerificationReceiptSaveInput {
+  verificationId: string
+}
+
+export interface WorkflowDeliveryTrustedIdentityView {
+  fingerprint: string
+  label: string
+  status: 'trusted' | 'revoked'
+  trustedAt: number
+  updatedAt: number
+  lastVerifiedAt: number
+  lastProjectId?: string
+  revokedAt?: number
+}
+
+export interface WorkflowDeliveryIdentityTrustSnapshot {
+  schemaVersion: 1
+  format: 'caogen.workflow-delivery-identity-trust-view.v1'
+  revision: number
+  identities: WorkflowDeliveryTrustedIdentityView[]
+  localIdentity?: WorkflowDeliveryLocalIdentityView
+  policy: WorkflowDeliveryTrustPolicyView
+}
+
+export type WorkflowDeliveryTrustPolicyMode =
+  | 'audit_only'
+  | 'require_valid_signature'
+  | 'require_trusted_identity'
+
+export interface WorkflowDeliveryTrustPolicyView {
+  mode: WorkflowDeliveryTrustPolicyMode
+  updatedAt: number
+}
+
+export interface WorkflowDeliveryTrustPolicyUpdateInput {
+  mode: WorkflowDeliveryTrustPolicyMode
+  expectedRevision: number
+}
+
+export interface WorkflowDeliveryRetiredLocalIdentityView {
+  fingerprint: string
+  retiredAt: number
+  reason: 'rotated' | 'restored'
+}
+
+export interface WorkflowDeliveryLocalIdentityView {
+  fingerprint: string
+  createdAt: number
+  retiredIdentities: WorkflowDeliveryRetiredLocalIdentityView[]
+}
+
+export interface WorkflowDeliveryIdentityTrustInput {
+  verificationId: string
+  label: string
+  expectedRevision: number
+}
+
+export interface WorkflowDeliveryIdentityRevokeInput {
+  fingerprint: string
+  expectedRevision: number
+}
+
+export interface WorkflowDeliveryIdentityPassphraseInput {
+  passphrase: string
+}
+
+export interface WorkflowDeliveryIdentityRotateInput {
+  expectedFingerprint?: string
+}
+
+export type WorkflowDeliveryIdentityFileExportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      fileName: string
+      sizeBytes: number
+      fileDigest: string
+      identityFingerprint: string
+      identityCount?: number
+    }
+
+export type WorkflowDeliveryIdentityTrustImportResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      signerTrust: 'local_identity' | 'trusted_identity'
+      signerFingerprint: string
+      importedCount: number
+      updatedCount: number
+      unchangedCount: number
+      snapshot: WorkflowDeliveryIdentityTrustSnapshot
+    }
+
+export type WorkflowDeliveryIdentityRestoreResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      disposition: 'restored' | 'reinstalled'
+      previousFingerprint?: string
+      snapshot: WorkflowDeliveryIdentityTrustSnapshot
+    }
+
+export interface WorkflowDeliveryIdentityRotateResult {
+  previousFingerprint?: string
+  snapshot: WorkflowDeliveryIdentityTrustSnapshot
+}
+
+export interface WorkflowDeliveryIdentityTrustMutationResult {
+  snapshot: WorkflowDeliveryIdentityTrustSnapshot
+  verification?: Exclude<WorkflowProjectDeliveryPackageVerificationResult, { canceled: true }>
+}
+
+export type WorkflowProjectDeliveryPackageVerificationReceiptSaveResult =
+  | { canceled: true }
+  | {
+      canceled: false
+      fileName: string
+      sizeBytes: number
+      receiptDigest: string
+      verdict: 'verified' | 'rejected'
+      projectId?: string
+    }
+
 export type WorkflowAcceptanceReviewDecision = 'passed' | 'failed' | 'retest' | 'waived'
 /** Renderer selection only; criterion identity and authority are assigned in main. */
 export interface WorkflowAcceptanceCriterionSelection {
@@ -487,6 +885,50 @@ export interface WorkflowAcceptanceReviewResult {
   evidenceLinks: WorkflowEvidenceLinkRecord[]
   audit: WorkflowAcceptanceReviewAudit
   repair?: { workItemId: string; acceptanceId: string; failedAcceptanceRevision: number; disposition: 'created' | 'existing' | 'completed' }
+}
+
+export interface WorkflowAcceptanceRepairStartResult {
+  workItemId: string
+  disposition: 'started' | 'existing' | 'blocked'
+  sessionId?: string
+  reason?: string
+}
+
+export interface WorkflowProjectDeliveryArtifact {
+  artifact: WorkflowArtifactRecord
+  locations: WorkflowArtifactLocationRecord[]
+  evidenceIds: string[]
+  acceptanceIds: string[]
+  isCurrent: boolean
+  predecessorArtifactId?: string
+  successorArtifactIds: string[]
+  currentArtifactIds: string[]
+  lineageArtifactIds: string[]
+  available: boolean
+}
+
+export interface WorkflowProjectDeliverySummary {
+  artifactCount: number
+  currentArtifactCount: number
+  availableArtifactCount: number
+  evidenceCount: number
+  unlinkedEvidenceCount: number
+  acceptanceCount: number
+  pendingAcceptanceCount: number
+  failedAcceptanceCount: number
+  passedAcceptanceCount: number
+  waivedAcceptanceCount: number
+}
+
+/** Project-wide delivery projection used by the Studio review/repair workbench. */
+export interface WorkflowProjectDeliveryWorkbench {
+  projectId: string
+  generatedAt: number
+  summary: WorkflowProjectDeliverySummary
+  artifacts: WorkflowProjectDeliveryArtifact[]
+  evidence: WorkflowEvidenceRecord[]
+  acceptances: WorkflowAcceptanceRecord[]
+  evidenceLinks: WorkflowEvidenceLinkRecord[]
 }
 
 export interface WorkflowEvidenceLinkInput {
@@ -795,11 +1237,33 @@ export interface WorkflowLedgerRepairPlan {
 
 export interface WorkflowLedgerApi {
   listWorkflowLedger(scope?: WorkflowLedgerScope): Promise<WorkflowLedgerRendererSelection>
+  getProjectDeliveryWorkbench(projectId: string): Promise<WorkflowProjectDeliveryWorkbench>
   verifyWorkflowLedger(): Promise<WorkflowLedgerVerification>
   exportWorkflowLedger(options?: WorkflowLedgerExportOptions): Promise<WorkflowLedgerExportResult>
   diagnoseWorkflowLedger(): Promise<WorkflowLedgerRepairPlan>
   planWorkflowLedgerRepair(): Promise<WorkflowLedgerRepairPlan>
   saveWorkflowAcceptance(input: WorkflowAcceptanceInput): Promise<WorkflowAcceptanceRecord>
+  createWorkflowArtifactAcceptance(input: WorkflowArtifactAcceptanceCreateInput): Promise<WorkflowArtifactAcceptanceCreateResult>
+  exportWorkflowArtifact(input: WorkflowArtifactExportInput): Promise<WorkflowArtifactExportResult>
+  compareWorkflowArtifacts(input: WorkflowArtifactCompareInput): Promise<WorkflowArtifactCompareResult>
+  verifyWorkflowArtifactIntegrity(input: WorkflowArtifactIntegrityInput): Promise<WorkflowArtifactIntegrityReport>
+  exportWorkflowArtifactManifest(input: WorkflowArtifactManifestExportInput): Promise<WorkflowArtifactManifestExportResult>
+  verifyWorkflowProjectDelivery(input: WorkflowProjectDeliveryIntegrityInput): Promise<WorkflowProjectDeliveryIntegrityReport>
+  exportWorkflowProjectDeliveryManifest(input: WorkflowProjectDeliveryManifestExportInput): Promise<WorkflowProjectDeliveryManifestExportResult>
+  exportWorkflowProjectDeliveryPackage(input: WorkflowProjectDeliveryPackageExportInput): Promise<WorkflowProjectDeliveryPackageExportResult>
+  verifyWorkflowProjectDeliveryPackage(): Promise<WorkflowProjectDeliveryPackageVerificationResult>
+  listWorkflowDeliveryTrustedIdentities(): Promise<WorkflowDeliveryIdentityTrustSnapshot>
+  trustWorkflowDeliveryIdentity(input: WorkflowDeliveryIdentityTrustInput): Promise<WorkflowDeliveryIdentityTrustMutationResult>
+  revokeWorkflowDeliveryIdentity(input: WorkflowDeliveryIdentityRevokeInput): Promise<WorkflowDeliveryIdentityTrustMutationResult>
+  updateWorkflowDeliveryTrustPolicy(input: WorkflowDeliveryTrustPolicyUpdateInput): Promise<WorkflowDeliveryIdentityTrustMutationResult>
+  exportWorkflowDeliveryIdentityTrustBundle(): Promise<WorkflowDeliveryIdentityFileExportResult>
+  importWorkflowDeliveryIdentityTrustBundle(expectedRevision: number): Promise<WorkflowDeliveryIdentityTrustImportResult>
+  exportWorkflowDeliveryIdentityBackup(input: WorkflowDeliveryIdentityPassphraseInput): Promise<WorkflowDeliveryIdentityFileExportResult>
+  restoreWorkflowDeliveryIdentityBackup(input: WorkflowDeliveryIdentityPassphraseInput): Promise<WorkflowDeliveryIdentityRestoreResult>
+  rotateWorkflowDeliveryIdentity(input: WorkflowDeliveryIdentityRotateInput): Promise<WorkflowDeliveryIdentityRotateResult>
+  saveWorkflowProjectDeliveryPackageVerificationReceipt(
+    input: WorkflowProjectDeliveryPackageVerificationReceiptSaveInput
+  ): Promise<WorkflowProjectDeliveryPackageVerificationReceiptSaveResult>
   createWorkflowArtifact(input: WorkflowArtifactInput): Promise<WorkflowArtifactRecord>
   createWorkflowArtifactEdge(input: WorkflowArtifactEdgeInput): Promise<WorkflowArtifactEdgeRecord>
   createWorkflowArtifactLocation(input: WorkflowArtifactLocationInput): Promise<WorkflowArtifactLocationRecord>
@@ -812,5 +1276,6 @@ export interface WorkflowLedgerApi {
   queryWorkflowEvidence(scope?: WorkflowEvidenceScope): Promise<WorkflowLedgerPage<WorkflowEvidenceRecord>>
   verifyWorkflowEvidence(): Promise<WorkflowEvidenceVerification>
   reviewWorkflowAcceptance(input: WorkflowAcceptanceReviewInput): Promise<WorkflowAcceptanceReviewResult>
+  startWorkflowAcceptanceRepair(acceptanceId: string): Promise<WorkflowAcceptanceRepairStartResult>
   createWorkflowEvidenceLink(input: WorkflowEvidenceLinkInput): Promise<WorkflowEvidenceLinkRecord>
 }

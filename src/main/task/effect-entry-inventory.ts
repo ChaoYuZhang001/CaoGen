@@ -39,15 +39,15 @@ const DIRECT_USER: EffectEntryPolicy = {
   impact: 'external', effect: 'direct_user', replay: 'never'
 }
 
-export const EFFECT_ENTRY_INVENTORY_VERSION = 14
+export const EFFECT_ENTRY_INVENTORY_VERSION = 30
 
 export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   policyGroup([
     'attachments:ocr',
     'browser:listAnnotations', 'browser:observe', 'browser:pickElement',
+    'dataRetention:evaluatePurge', 'dataRetention:get', 'dataRetention:pending',
     'engines:list',
-    'files:definition', 'files:diagnostics', 'files:list', 'files:read', 'files:search', 'files:symbols',
-    'files:typescriptCompletions', 'files:typescriptDefinitions', 'files:typescriptDiagnostics', 'files:typescriptHover',
+    'files:intelligence',
     'git:status',
     'history:list',
     'learning:list',
@@ -55,11 +55,11 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'migration:scan',
     'modelAttempts:listReconciliations',
     'notificationConnectors:list',
-    'plugins:scan',
+    'plugins:authorize', 'plugins:scan',
     'preview:listAnnotations', 'preview:prepare', 'preview:prepareVisual',
     'projectContext:read', 'projectContext:template',
     'projects:list',
-    'permissions:gui-grants:list', 'permissions:tool-grants:list',
+    'permissions:grants:list',
     'providers:authorization:accounts', 'providers:balance:capability',
     'providers:billing:capability', 'providers:billing:list', 'providers:billing:reconcile',
     'providers:fetchModels', 'providers:fetchPricingCatalog', 'providers:gateway:models',
@@ -73,11 +73,13 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'taskSnapshots:list',
     'terminals:list',
     'transcripts:search',
-    'workflowLedger:diagnose', 'workflowLedger:export', 'workflowLedger:list',
+    'workflowLedger:compareArtifacts', 'workflowLedger:diagnose', 'workflowLedger:export', 'workflowLedger:list',
     'workflowLedger:listArtifactEdges', 'workflowLedger:listArtifactLocations',
-    'workflowLedger:listEvidence', 'workflowLedger:queryArtifactGraph',
+    'workflowLedger:listEvidence', 'workflowLedger:projectDeliveryWorkbench', 'workflowLedger:queryArtifactGraph',
     'workflowLedger:queryEvidence', 'workflowLedger:repairPlan', 'workflowLedger:verify',
-    'workflowLedger:verifyArtifactGraph', 'workflowLedger:verifyEvidence',
+    'workflowLedger:verifyArtifactGraph', 'workflowLedger:verifyArtifactIntegrity', 'workflowLedger:verifyEvidence',
+    'workflowLedger:listDeliveryTrustedIdentities', 'workflowLedger:verifyProjectDelivery',
+    'workflowLedger:verifyProjectDeliveryPackage',
     'workspace:diff',
     'worktrees:applyCheck', 'worktrees:conflictFiles', 'worktrees:exportPatch',
     'worktrees:mergeInspect', 'worktrees:mergePatch', 'worktrees:mergeReceipts',
@@ -85,22 +87,21 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   ], READ_ONLY),
   policyGroup([
     'appFeatures:invoke',
+    'dataRetention:createLegalHold', 'dataRetention:releaseLegalHold', 'dataRetention:updatePolicy',
     'browser:captureAnnotation', 'browser:captureElementAnnotation',
     'digitalWorker:invoke',
     'history:delete', 'history:rename', 'history:setArchived', 'history:setPinned',
     'learning:approve', 'learning:delete', 'learning:reject', 'learning:revoke', 'learning:rollback',
     'memory:accept', 'memory:delete', 'memory:layeredArchive', 'memory:layeredDelete',
     'memory:layeredUpdate', 'memory:propose',
-    'migration:apply', 'migration:rollback',
     'modelAttempts:resolveReconciliation',
     'notificationConnectors:create', 'notificationConnectors:delete',
     'notificationConnectors:setDefault',
-    'permissions:gui-grants:revoke', 'permissions:gui-grants:revoke-all',
-    'permissions:tool-grants:revoke', 'permissions:tool-grants:revoke-all',
-    'plugins:setEnabled',
+    'permissions:grants:revoke',
+    'plugins:approve', 'plugins:setEnabled',
     'preview:saveAnnotation',
     'projects:delete', 'projects:update',
-    'projectWorkspace:invoke',
+      'projectWorkspace:invoke',
     'providers:activateLocalCompute', 'providers:authorization:revoke',
     'providers:billing:remove', 'providers:billing:save',
     'providers:create', 'providers:delete', 'providers:gateway:update', 'providers:update',
@@ -111,11 +112,13 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'settings:update',
     'supervisor:invoke',
     'taskSnapshots:delete', 'taskSnapshots:resolveDagFinalization', 'taskSnapshots:resolveEffect',
-    'workflowLedger:createArtifact', 'workflowLedger:createArtifactEdge',
+    'workflowLedger:createArtifact', 'workflowLedger:createArtifactAcceptance', 'workflowLedger:createArtifactEdge',
     'workflowLedger:createArtifactLocation', 'workflowLedger:createEvidence',
     'workflowLedger:createEvidenceLink', 'workflowLedger:createGoal',
-    'workflowLedger:createWorkItem', 'workflowLedger:reviewAcceptance',
-    'workflowLedger:saveAcceptance', 'workflowLedger:transitionWorkItem'
+    'workflowLedger:createWorkItem', 'workflowLedger:reviewAcceptance', 'workflowLedger:startAcceptanceRepair',
+    'workflowLedger:revokeDeliveryIdentity', 'workflowLedger:saveAcceptance',
+    'workflowLedger:rotateDeliveryIdentity', 'workflowLedger:transitionWorkItem',
+    'workflowLedger:trustDeliveryIdentity', 'workflowLedger:updateDeliveryTrustPolicy'
   ], LOCAL),
   policyGroup([
     'files:write',
@@ -124,6 +127,9 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'workspace:applyHunk', 'workspace:discardHunk',
     'worktrees:applyPatch', 'worktrees:createPr', 'worktrees:remove'
   ], QUERYABLE),
+  policyGroup(['migration:apply', 'migration:rollback'], {
+    ...QUERYABLE, evidence: 'executeMigrationApplyEffect/executeMigrationRollbackEffect'
+  }),
   policyGroup(['plugins:installLocal'], {
     ...QUERYABLE, evidence: 'installLocalPluginWithEffect'
   }),
@@ -150,11 +156,17 @@ export const IPC_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
   }),
   policyGroup(['browser:bounds', 'browser:close'], LOCAL),
   policyGroup([
+    'dataRetention:saveExport',
     'dialog:pickDirectory',
     'plugins:reveal',
     'providers:gateway:copy-token',
     'quickbar:captureScreenshot', 'quickbar:pickFiles', 'quickbar:prepareFiles',
-    'sessions:restoreCheckpoint', 'sessions:rewindFiles'
+    'sessions:restoreCheckpoint', 'sessions:rewindFiles',
+    'workflowLedger:exportArtifact', 'workflowLedger:exportArtifactManifest',
+    'workflowLedger:exportProjectDeliveryManifest', 'workflowLedger:exportProjectDeliveryPackage',
+    'workflowLedger:exportDeliveryIdentityBackup', 'workflowLedger:exportDeliveryIdentityTrustBundle',
+    'workflowLedger:importDeliveryIdentityTrustBundle', 'workflowLedger:restoreDeliveryIdentityBackup',
+    'workflowLedger:saveProjectDeliveryPackageVerificationReceipt'
   ], DIRECT_USER),
   delegatedPolicyGroup({
     'routines:runNow': 'runRoutineNow',
@@ -180,7 +192,7 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'edit_file', 'git_commit', 'git_create_issue', 'git_create_pr', 'git_merge',
     'git_push', 'git_stage', 'git_stage_all', 'write_file'
   ], QUERYABLE),
-  policyGroup(['work_item_comment'], LOCAL),
+  policyGroup(['artifact_register', 'project_knowledge_search', 'work_item_comment'], LOCAL),
   policyGroup([
     'code_forge_delivery', 'search_replace',
     'gui_activate_window', 'gui_click', 'gui_hotkey', 'gui_scroll', 'gui_type'
@@ -197,36 +209,49 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
 export const GATEWAY_ACTION_EFFECT_ENTRY_POLICIES = {
   'projectWorkspace:invoke': mergePolicyGroups(
     policyGroup([
-      'comments:list', 'comments:listProject', 'get', 'goals:get', 'goals:list', 'list',
-      'squads:get', 'squads:list', 'workItems:get', 'workItems:list'
+      'authorization:get', 'collaborationInbox:list', 'comments:list', 'comments:listProject',
+      'get', 'knowledge:preview', 'goals:get', 'goals:list', 'invitations:list', 'list',
+      'members:get', 'members:list', 'sharedApprovals:get', 'sharedApprovals:list',
+      'portfolio:get', 'squads:get', 'squads:list', 'workItems:get', 'workItems:list'
     ], READ_ONLY),
     policyGroup([
-      'archive', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
+      'connectors:mutate', 'knowledge:search',
+      'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
       'export:data', 'goals:acceptance', 'goals:archive', 'goals:create', 'goals:restore',
-      'goals:transition', 'goals:update', 'goalTask:create', 'import:data', 'purge', 'restore',
+      'goals:transition', 'goals:update', 'goalTask:create', 'restore',
+      'invitations:accept', 'invitations:create', 'invitations:revoke',
+      'members:create', 'members:revoke', 'members:restore', 'members:update',
+      'portfolio:dependencies:create', 'portfolio:dependencies:remove',
+      'portfolio:milestones:create', 'portfolio:milestones:delete', 'portfolio:milestones:update',
+      'sharedApprovals:create', 'sharedApprovals:decide', 'sharedApprovals:revoke',
       'squads:archive', 'squads:create', 'squads:members:add', 'squads:members:remove',
-      'squads:restore', 'squads:update', 'update',
+      'squads:restore', 'squads:update', 'templates:apply', 'update',
       'workItems:acceptance', 'workItems:create', 'workItems:lease:acquire',
       'workItems:lease:release', 'workItems:lease:renew', 'workItems:reorder',
       'workItems:transfer', 'workItems:transition', 'workItems:update'
     ], LOCAL),
+    policyGroup(['import:data', 'purge'], QUERYABLE),
     policyGroup(['export'], DIRECT_USER)
   ),
   'digitalWorker:invoke': mergePolicyGroups(
     policyGroup([
-      'getDigitalWorker', 'getDigitalWorkerAssignment', 'getDigitalWorkerAssignmentOwnerJournal',
+      'exportDigitalWorkerHistory', 'getDigitalWorker', 'getDigitalWorkerAssignment',
+      'getDigitalWorkerAssignmentOwnerJournal', 'getDigitalWorkerHistory',
       'getDigitalWorkerLease', 'getDigitalWorkerRoleTemplate', 'getDigitalWorkerStoreSnapshot',
       'listDigitalWorkerAssignmentHistory', 'listDigitalWorkerAssignmentOwnerAudit',
       'listDigitalWorkerAssignments', 'listDigitalWorkerAuditEvents', 'listDigitalWorkerLeases',
-      'listDigitalWorkerRoleTemplates', 'listDigitalWorkers', 'verifyDigitalWorkerStore'
+      'listDigitalWorkerMemory', 'listDigitalWorkerRoleTemplates', 'listDigitalWorkers',
+      'recommendDigitalWorkerTeam', 'verifyDigitalWorkerStore'
     ], READ_ONLY),
     policyGroup([
-      'acquireDigitalWorkerLease', 'activateDigitalWorker',
+      'acquireDigitalWorkerLease', 'activateDigitalWorker', 'approveDigitalWorkerMemory',
       'coordinateDigitalWorkerAssignmentOwner', 'createDigitalWorker',
       'createDigitalWorkerAssignment', 'createDigitalWorkerRoleTemplate',
-      'deleteDigitalWorker', 'deleteDigitalWorkerRoleTemplate',
+      'deleteDigitalWorker', 'deleteDigitalWorkerMemory', 'deleteDigitalWorkerRoleTemplate',
       'heartbeatDigitalWorkerLease', 'pauseDigitalWorker',
-      'reassignDigitalWorkerAssignment', 'recoverDigitalWorkerAssignmentOwners',
+      'proposeDigitalWorkerMemory', 'reassignDigitalWorkerAssignment',
+      'recoverDigitalWorkerAssignmentOwners', 'refreshDigitalWorkerPerformance',
+      'rejectDigitalWorkerMemory', 'revokeDigitalWorkerMemory',
       'releaseDigitalWorkerAssignment', 'releaseDigitalWorkerLease',
       'resumeDigitalWorker', 'retireDigitalWorker', 'updateDigitalWorker',
       'updateDigitalWorkerRoleTemplate'
@@ -236,9 +261,68 @@ export const GATEWAY_ACTION_EFFECT_ENTRY_POLICIES = {
     policyGroup(['events', 'get', 'list'], READ_ONLY),
     policyGroup([
       'approval:request', 'approval:resolve', 'block', 'cancel', 'complete', 'create',
-      'fail', 'lease:acquire', 'lease:heartbeat', 'lease:reassign', 'lease:release',
+      'control:lease:claim', 'fail', 'lease:acquire', 'lease:heartbeat', 'lease:reassign', 'lease:release',
       'pause', 'reconcile', 'recover', 'resume', 'retry', 'start'
     ], LOCAL)
+  ),
+  'appFeatures:invoke': mergePolicyGroups(
+    policyGroup([
+      'session-query/query',
+      'provider-profile/backups', 'provider-profile/backup-preview',
+      'provider-profile/cc-switch-backups', 'provider-profile/cc-switch-preview',
+      'provider-profile/native-backups', 'provider-profile/native-codex-preview',
+      'provider-profile/native-config-backups', 'provider-profile/native-config-preview',
+      'provider-profile/preview',
+      'provider-profile-sync/status', 'provider-profile-sync/preview',
+      'provider-profile-sync/webdav-config', 'provider-profile-sync/webdav-preview',
+      'provider-profile-sync/webdav-history-list', 'provider-profile-sync/webdav-history-preview',
+      'provider-profile-sync/s3-config', 'provider-profile-sync/s3-preview',
+      'provider-profile-sync/s3-history-list', 'provider-profile-sync/s3-history-preview',
+      'studio-result/audit', 'studio-result/export', 'studio-result/get', 'task-plan/get'
+    ], READ_ONLY),
+    policyGroup([
+      'provider-profile/cc-switch-apply', 'provider-profile/cc-switch-rollback',
+      'provider-profile/export', 'provider-profile/native-codex-apply',
+      'provider-profile/native-config-apply', 'provider-profile/native-config-rollback',
+      'provider-profile/native-rollback',
+      'provider-profile-sync/choose-directory', 'provider-profile-sync/disconnect',
+      'provider-profile-sync/webdav-save', 'provider-profile-sync/webdav-remove',
+      'provider-profile-sync/s3-save', 'provider-profile-sync/s3-remove',
+      'studio-result/save', 'task-plan/approve', 'task-plan/create-version', 'task-plan/generate',
+      'task-plan/revoke', 'task-plan/strategy'
+    ], LOCAL),
+    policyGroup([
+      'provider-profile/apply', 'provider-profile/backup-apply', 'provider-profile/backup-delete', 'provider-profile/rollback',
+      'provider-profile-sync/publish', 'provider-profile-sync/apply',
+      'provider-profile-sync/webdav-publish', 'provider-profile-sync/webdav-apply',
+      'provider-profile-sync/webdav-history-apply',
+      'provider-profile-sync/s3-publish', 'provider-profile-sync/s3-apply',
+      'provider-profile-sync/s3-history-apply'
+    ], {
+      ...QUERYABLE,
+      evidence: 'executeProviderProfileOperationDelivery'
+    }),
+    policyGroup([
+      'provider-profile-sync/webdav-test', 'provider-profile-sync/s3-test'
+    ], OPAQUE),
+    policyGroup([
+      'media/continuity:check', 'media/ffmpeg:get', 'media/get', 'media/job:reconcile', 'media/provider:list'
+    ], READ_ONLY),
+    policyGroup([
+      'media/asset:adopt', 'media/asset:bind', 'media/asset:egress', 'media/asset:import', 'media/asset:purge',
+      'media/asset:retention', 'media/asset:voice-clone', 'media/bible:delete', 'media/bible:upsert',
+      'media/budget:update', 'media/compose', 'media/continuity-lock:delete', 'media/continuity-lock:upsert',
+      'media/dialogue:delete', 'media/dialogue:upsert', 'media/production:create', 'media/production:revise',
+      'media/provider:delete', 'media/provider:upsert', 'media/shot:create', 'media/shot:update', 'media/storage:update',
+      'media/timeline:update'
+    ], LOCAL),
+    policyGroup(['media/job:advance', 'media/job:cancel', 'media/job:submit'], {
+      ...QUERYABLE,
+      evidence: 'executeMediaJobEffect'
+    }),
+    delegatedPolicyGroup({
+      'task-plan/dispatch': 'sessionManager.dispatchApprovedTaskPlan'
+    })
   )
 } as const
 

@@ -24,6 +24,7 @@ import type {
   TaskDagExecutionView,
   WorktreeApplyResult
 } from '../../shared/types'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 export interface TaskDagAutoMergeSession {
   sessionId: string
@@ -591,6 +592,7 @@ function runConfiguredVerification(
   const result = spawnSync(shell.command, shell.args, {
     cwd: repoRoot,
     encoding: 'utf8',
+    env: buildMinimalSubprocessEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: timeoutMs,
     maxBuffer: 1024 * 1024,

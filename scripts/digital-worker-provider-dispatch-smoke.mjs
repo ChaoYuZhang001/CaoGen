@@ -232,7 +232,7 @@ async function verifyAnthropicSuccessorRecheck(runtime) {
 function verifyProductionWiring() {
   const openai = source('src/main/openaiEngine.ts')
   const anthropic = source('src/main/anthropicEngine.ts')
-  const guardedPreflight = /preflight:\s*(?:async\s*)?\(\)\s*=>\s*\{\s*await assertDigitalWorkerProviderDispatchAllowed\(this\.meta/
+  const guardedPreflight = /preflight:\s*(?:async\s*)?\(\)\s*=>\s*\{[\s\S]{0,1200}?await assertDigitalWorkerProviderDispatchAllowed\(this\.meta/
   assert.match(openai, guardedPreflight)
   assert.match(anthropic, guardedPreflight)
 }

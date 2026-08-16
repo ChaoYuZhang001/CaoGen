@@ -3,19 +3,15 @@ import Floor from './Floor'
 import Walls from './Walls'
 import WindowWall from './WindowWall'
 import Ceiling from './Ceiling'
-import LoungeSofa from './LoungeSofa'
-import AreaRug from './AreaRug'
-import MeetingTable from './MeetingTable'
-import Bookshelf from './Bookshelf'
-import Whiteboard from './Whiteboard'
 import ServerRack from './ServerRack'
-import CoffeeStation from './CoffeeStation'
 import ApprovalStation from './ApprovalStation'
-import ServiceWayfinding from './ServiceWayfinding'
 import SideGlassCorridor from './SideGlassCorridor'
 import ArchitecturalLightBands from './ArchitecturalLightBands'
 import WorkZoneGlass from './WorkZoneGlass'
 import OperationsBackplane from './OperationsBackplane'
+import CommandCenterStations from './CommandCenterStations'
+import type { CommandCenterSignals } from './CommandCenterStations'
+import { CONTROL_ROOM_LAYOUT } from './controlRoomLayout'
 import Plant from './Plant'
 
 // 房间参数(米):内边长 20 => 墙内壁落在 ±10;中央 x/z∈[-6,6] 留给工位网格。
@@ -24,15 +20,9 @@ const ROOM = 20
 const WALL_H = 5
 const CEILING_BAKED_Y = 6.2
 
-// 面向朝向:默认道具正面朝 +Z。
-// 贴左墙(-X)朝室内 +X:绕 Y 转 +90°;贴右墙(+X)朝室内 -X:绕 Y 转 -90°。
-const FACE_RIGHT = Math.PI / 2
-const FACE_LEFT = -Math.PI / 2
-
 /**
- * 办公室布景层(不含工位):地板 + 三面墙 + 落地窗(占后墙)+ 吊顶,
- * 以及沿墙布置的家具道具 —— 前左休息区(沙发 + 地毯 + 盆栽)、前右角会议桌、
- * 左墙书架 + 白板、右墙服务器机架、茶水角、前区审批确认台、服务动线,四角/休息区盆栽点缀。
+ * 共享控制室布景层(不含数字员工工位):建筑外壳、三类业务设备、中央总控、
+ * Artifact 资产库、审批台以及 Provider / 渲染基础设施。
  *
  * 核心工位网格 x∈[-6,6]、z∈[-5,3] 留空,前缘可放服务设施。
  * 所有子件均为 kit 内既有模块,纯代码几何,统一由 OfficeView 的灯光/阴影渲染。
@@ -41,8 +31,9 @@ export default function OfficeScene({
   position = [0, 0, 0],
   rotation = [0, 0, 0],
   scale = 1,
-  lightMode = false
-}: OfficeProp & { lightMode?: boolean }): React.JSX.Element {
+  lightMode = false,
+  signals = { assistant: 0, project: 0, video: 0, incidents: 0 }
+}: OfficeProp & { lightMode?: boolean; signals?: CommandCenterSignals }): React.JSX.Element {
   return (
     <group position={position} rotation={rotation} scale={scale}>
       {/* ---- 建筑外壳 ---- */}
@@ -75,36 +66,19 @@ export default function OfficeScene({
       {/* 吊顶:下移至 y=WALL_H,与墙顶/窗顶对齐;默认剖切视角隐藏实体,避免遮挡办公区 */}
       <Ceiling position={[0, WALL_H - CEILING_BAKED_Y, 0]} presentationMode />
 
-      {/* ---- 服务动线:贴地路线 + 卫生间/餐饮侧边入口 ---- */}
-      <ServiceWayfinding />
+      {/* 助手、项目、视频和中央指挥四类设施。所有信号均来自真实只读投影。 */}
+      <CommandCenterStations signals={signals} />
 
-      {/* ---- 前左:休息区 ---- */}
-      {/* 地毯划分休息区(青色发光边框呼吸) */}
-      <AreaRug position={[1.6, 0, 8.1]} scale={1.5} />
-      {/* 沙发:背靠前墙(+Z),面朝室内 -Z */}
-      <LoungeSofa position={[1.6, 0, 8.3]} />
+      {/* Provider / 模型路由 / 视频渲染共用算力机架。 */}
+      <ServerRack position={CONTROL_ROOM_LAYOUT.infrastructure} scale={1.16} />
 
-      {/* ---- 前右角:会议桌 ---- */}
-      <MeetingTable position={[7, 0, 6.5]} seats={4} />
-
-      {/* ---- 左墙(-X):书架 + 白板,正面朝室内 +X ---- */}
-      <Bookshelf position={[-9.7, 0, -3]} rotation={[0, FACE_RIGHT, 0]} />
-      <Whiteboard position={[-9.6, 0, 3]} rotation={[0, FACE_RIGHT, 0]} />
-
-      {/* ---- 右侧服务区:服务器机架 + 茶水角,正面朝室内 -X ---- */}
-      <ServerRack position={[9.55, 0, -4]} rotation={[0, FACE_LEFT, 0]} />
-      <CoffeeStation position={[5.48, 0, 2.02]} rotation={[0, FACE_LEFT, 0]} scale={0.9} />
-
-      {/* ---- 前区:审批确认台,等待授权的 Agent 会离席到这里处理确认 ---- */}
-      <ApprovalStation position={[5.18, 0, 0.78]} rotation={[0, FACE_LEFT, 0]} scale={0.86} />
+      {/* 中央审批台处理授权、暂停、恢复和重试。 */}
+      <ApprovalStation position={CONTROL_ROOM_LAYOUT.approval} scale={1.02} />
 
       {/* ---- 盆栽点缀 ---- */}
-      {/* 后墙两角(落地窗两侧) */}
+      {/* 后墙两角(落地窗两侧)，仅用于空间层次，不占用业务首屏。 */}
       <Plant position={[-8, 0, -8]} kind="tall" />
       <Plant position={[8, 0, -8]} kind="tall" />
-      {/* 休息区两侧 */}
-      <Plant position={[-9.25, 0, 8.95]} kind="tall" />
-      <Plant position={[4.1, 0, 8.7]} kind="tall" />
     </group>
   )
 }

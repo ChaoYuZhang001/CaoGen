@@ -57,6 +57,10 @@ export interface ProjectDebugState {
   finishedAt: string
   exitCode: number | null
   error: string
+  workflowArtifactId?: string
+  workflowEvidenceId?: string
+  workflowAcceptanceId?: string
+  evidenceError?: string
 }
 
 export interface ProjectDebugDiscoveryResult {

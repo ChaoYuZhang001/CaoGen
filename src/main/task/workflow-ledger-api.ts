@@ -37,6 +37,8 @@ import {
 import type {
   WorkflowAcceptanceInput,
   WorkflowAcceptanceRecord,
+  WorkflowArtifactAcceptanceCreateInput,
+  WorkflowArtifactAcceptanceCreateResult,
   WorkflowArtifactInput,
   WorkflowArtifactRecord,
   WorkflowArtifactEdgeInput,
@@ -64,6 +66,7 @@ import type {
   WorkflowLedgerRendererSelection,
   WorkflowLedgerSelection,
   WorkflowLedgerVerification,
+  WorkflowProjectDeliveryWorkbench,
   WorkflowWorkItemProjectionInput,
   WorkflowWorkItemRecord,
   WorkflowWorkItemStatus
@@ -77,13 +80,24 @@ import {
   setupWorkflowEvidenceSchema,
   verifyWorkflowEvidence as verifyWorkflowEvidenceRecords
 } from './workflow-evidence-store'
-import { readAndVerifyEvents } from './workflow-ledger-query'
+import {
+  readAcceptances,
+  readAndVerifyEvents,
+  readArtifacts,
+  readEvidenceLinks
+} from './workflow-ledger-query'
 import { assertWorkflowEvidenceEventCoverage } from './workflow-evidence-event-coverage'
+import {
+  readArtifactLocations,
+  verifyWorkflowArtifactGraph as verifyWorkflowArtifactGraphInDatabase
+} from './workflow-ledger-artifact-graph-query'
 import {
   toWorkflowAcceptanceError,
   WorkflowAcceptanceGateError,
   type WorkflowAcceptanceGateOptions
 } from './workflow-acceptance-guard'
+import { workflowArtifactAcceptanceIdentities } from './workflow-artifact-acceptance'
+import { currentArtifactLineageLeafIdsByArtifact } from './artifact-lineage'
 
 export type WorkflowLedgerWriteOptions = WorkflowAcceptanceGateOptions
 
@@ -130,6 +144,137 @@ export function toRendererWorkflowLedger(
       }))
     }
   }
+}
+
+export async function getProjectDeliveryWorkbench(
+  rawProjectId: string,
+  rootDir?: string
+): Promise<WorkflowProjectDeliveryWorkbench> {
+  const projectId = rawProjectId.trim()
+  if (!projectId) throw new Error('Project ID is required')
+  return readTaskSnapshotDatabase(rootDir, (db) => {
+    setupWorkflowLedgerSchema(db)
+    setupWorkflowEvidenceSchema(db)
+    verifyWorkflowArtifactGraphInDatabase(db)
+    const allEvidence = readAllWorkflowEvidenceForIntegrity(db)
+    verifyWorkflowEvidenceRecords(db)
+    assertWorkflowEvidenceEventCoverage(allEvidence, readAndVerifyEvents(db))
+
+    const artifacts = readArtifacts(db).filter((record) => record.projectId === projectId)
+    const locations = readArtifactLocations(db).filter((record) => record.projectId === projectId)
+    const evidence = allEvidence.filter((record) => record.projectId === projectId)
+    const acceptances = readAcceptances(db).filter((record) => record.projectId === projectId)
+    const evidenceLinks = readEvidenceLinks(db).filter((record) => record.projectId === projectId)
+    const supersededIds = new Set(artifacts.flatMap((artifact) => artifact.supersedesId ? [artifact.supersedesId] : []))
+    const successorIdsByArtifact = artifactSuccessors(artifacts)
+    const currentIdsByArtifact = currentArtifactLineageLeafIdsByArtifact(artifacts)
+    const lineageIdsByArtifact = artifactLineageIds(artifacts, successorIdsByArtifact)
+    const acceptanceEvidenceIds = new Set(acceptances.flatMap((acceptance) => acceptance.evidenceRefs))
+    for (const link of evidenceLinks) {
+      if (link.acceptanceId) acceptanceEvidenceIds.add(link.evidenceId)
+    }
+
+    const deliveryArtifacts = artifacts
+      .map((artifact) => {
+        const artifactEvidenceIds = new Set(
+          evidence.filter((record) => record.artifactId === artifact.id).map((record) => record.evidenceId)
+        )
+        for (const link of evidenceLinks) {
+          if (link.artifactId === artifact.id) artifactEvidenceIds.add(link.evidenceId)
+        }
+        const artifactAcceptanceIds = new Set<string>()
+        for (const acceptance of acceptances) {
+          if (acceptance.evidenceRefs.some((evidenceId) => artifactEvidenceIds.has(evidenceId))) {
+            artifactAcceptanceIds.add(acceptance.id)
+          }
+        }
+        for (const link of evidenceLinks) {
+          if (link.artifactId === artifact.id && link.acceptanceId) artifactAcceptanceIds.add(link.acceptanceId)
+        }
+        const artifactLocations = locations.filter((location) => location.artifactId === artifact.id)
+        return {
+          artifact,
+          locations: artifactLocations,
+          evidenceIds: [...artifactEvidenceIds].sort(),
+          acceptanceIds: [...artifactAcceptanceIds].sort(),
+          isCurrent: !supersededIds.has(artifact.id),
+          ...(artifact.supersedesId ? { predecessorArtifactId: artifact.supersedesId } : {}),
+          successorArtifactIds: [...(successorIdsByArtifact.get(artifact.id) ?? [])],
+          currentArtifactIds: [...(currentIdsByArtifact.get(artifact.id) ?? [])],
+          lineageArtifactIds: [...(lineageIdsByArtifact.get(artifact.id) ?? [artifact.id])],
+          available: artifactLocations.some((location) => location.availability === 'available')
+        }
+      })
+      .sort((left, right) => right.artifact.updatedAt - left.artifact.updatedAt || left.artifact.id.localeCompare(right.artifact.id))
+    const countAcceptance = (status: typeof acceptances[number]['status']): number =>
+      acceptances.filter((acceptance) => acceptance.status === status).length
+
+    return {
+      projectId,
+      generatedAt: Date.now(),
+      summary: {
+        artifactCount: artifacts.length,
+        currentArtifactCount: deliveryArtifacts.filter((item) => item.isCurrent).length,
+        availableArtifactCount: deliveryArtifacts.filter((item) => item.available).length,
+        evidenceCount: evidence.length,
+        unlinkedEvidenceCount: evidence.filter((record) => !acceptanceEvidenceIds.has(record.evidenceId)).length,
+        acceptanceCount: acceptances.length,
+        pendingAcceptanceCount: countAcceptance('pending') + countAcceptance('verifying'),
+        failedAcceptanceCount: countAcceptance('failed'),
+        passedAcceptanceCount: countAcceptance('passed'),
+        waivedAcceptanceCount: countAcceptance('waived')
+      },
+      artifacts: deliveryArtifacts,
+      evidence: [...evidence].sort((left, right) => right.observedAt - left.observedAt || left.evidenceId.localeCompare(right.evidenceId)),
+      acceptances: [...acceptances].sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id)),
+      evidenceLinks: [...evidenceLinks].sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id))
+    }
+  })
+}
+
+function artifactSuccessors(
+  artifacts: readonly WorkflowArtifactRecord[]
+): ReadonlyMap<string, readonly string[]> {
+  const artifactIds = new Set(artifacts.map((artifact) => artifact.id))
+  const successors = new Map<string, string[]>()
+  for (const artifact of artifacts) {
+    if (!artifact.supersedesId || !artifactIds.has(artifact.supersedesId)) continue
+    const values = successors.get(artifact.supersedesId) ?? []
+    values.push(artifact.id)
+    successors.set(artifact.supersedesId, values)
+  }
+  for (const values of successors.values()) values.sort()
+  return successors
+}
+
+function artifactLineageIds(
+  artifacts: readonly WorkflowArtifactRecord[],
+  successors: ReadonlyMap<string, readonly string[]>
+): ReadonlyMap<string, readonly string[]> {
+  const byId = new Map(artifacts.map((artifact) => [artifact.id, artifact]))
+  const roots = artifacts
+    .filter((artifact) => !artifact.supersedesId || !byId.has(artifact.supersedesId))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+  const result = new Map<string, readonly string[]>()
+  for (const root of roots) {
+    const lineage: WorkflowArtifactRecord[] = []
+    const pending = [root.id]
+    const visited = new Set<string>()
+    while (pending.length > 0) {
+      const id = pending.shift()!
+      if (visited.has(id)) continue
+      visited.add(id)
+      const artifact = byId.get(id)
+      if (!artifact) continue
+      lineage.push(artifact)
+      pending.push(...(successors.get(id) ?? []))
+    }
+    const ids = lineage
+      .sort((left, right) => left.version - right.version || left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+      .map((artifact) => artifact.id)
+    for (const id of ids) result.set(id, ids)
+  }
+  return result
 }
 
 export async function verifyPersistedWorkflowLedger(
@@ -227,6 +372,119 @@ export async function createWorkflowArtifact(
   })
 }
 
+export async function createWorkflowArtifactAcceptance(
+  input: WorkflowArtifactAcceptanceCreateInput,
+  rootDir?: string
+): Promise<WorkflowArtifactAcceptanceCreateResult> {
+  const artifactId = input.artifactId.trim()
+  if (!artifactId) throw new Error('Artifact ID is required')
+  return mutateTaskSnapshotDatabase(rootDir, (db) => {
+    setupWorkflowLedgerSchema(db)
+    setupWorkflowEvidenceSchema(db)
+    const artifact = findWorkflowArtifact(db, artifactId)
+    if (!artifact) throw new Error(`workflow artifact ${artifactId} was not found`)
+    assertArtifactAcceptanceOwnership(db, artifact)
+    const projectId = artifact.projectId
+    if (!projectId) throw new Error(`workflow artifact ${artifactId} has no Project ownership`)
+
+    const { acceptanceId, criterionId, evidenceId, linkId } =
+      workflowArtifactAcceptanceIdentities(artifactId)
+    const existingAcceptance = findWorkflowAcceptance(db, acceptanceId)
+    const observedAt = existingAcceptance?.createdAt ?? Date.now()
+    const criteria = [`交付物 ${artifact.title} 可定位、内容正确且满足交付要求`]
+    const acceptance = existingAcceptance ?? projectWorkflowAcceptance(db, {
+      id: acceptanceId,
+      projectId,
+      criteria,
+      criterionPolicies: [{
+        criterionId,
+        criterionIndex: 0,
+        evidenceKind: 'delivery_check',
+        allowedSources: ['runtime', 'human']
+      }],
+      status: 'pending',
+      revision: 1,
+      createdAt: observedAt,
+      updatedAt: observedAt
+    }, { caller: 'user', actorId: 'artifact-acceptance-authoring' })
+    assertArtifactAcceptanceContract(artifact.id, acceptance, projectId, criteria, criterionId)
+
+    const bindingEvidence = recordWorkflowEvidence(db, {
+      evidenceId,
+      projectId,
+      ...(artifact.goalId ? { goalId: artifact.goalId } : {}),
+      ...(artifact.workItemId ? { workItemId: artifact.workItemId } : {}),
+      ...(artifact.runId ? { runId: artifact.runId } : {}),
+      artifactId: artifact.id,
+      kind: 'observation',
+      title: `Artifact Acceptance binding: ${artifact.title}`,
+      summary: 'Canonical binding record only; passing this Acceptance still requires matching delivery_check Evidence.',
+      contentDigest: digest({ contract: 'artifact-acceptance-binding-v1', artifactId, acceptanceId }),
+      metadata: { contract: 'artifact-acceptance-binding-v1', acceptanceId }
+    }, {
+      source: 'runtime',
+      verifier: 'artifact-acceptance-authoring',
+      observedAt
+    })
+    const bindingLink = linkWorkflowEvidence(db, {
+      id: linkId,
+      evidenceId,
+      projectId,
+      ...(artifact.runId ? { runId: artifact.runId } : {}),
+      artifactId: artifact.id,
+      acceptanceId,
+      evidenceOrigin: 'workflow',
+      relation: 'supports',
+      createdAt: observedAt
+    })
+    return {
+      acceptance,
+      bindingEvidence,
+      bindingLink,
+      disposition: existingAcceptance ? 'existing' : 'created'
+    }
+  })
+}
+
+function assertArtifactAcceptanceOwnership(
+  db: Parameters<typeof findWorkflowArtifact>[0],
+  artifact: WorkflowArtifactRecord
+): void {
+  const goal = artifact.goalId ? findWorkflowGoal(db, artifact.goalId) : null
+  const workItem = artifact.workItemId ? findWorkflowWorkItem(db, artifact.workItemId) : null
+  const run = artifact.runId ? findWorkflowRun(db, artifact.runId) : null
+  if (artifact.goalId && !goal) throw new Error(`workflow artifact ${artifact.id} references missing Goal`)
+  if (artifact.workItemId && !workItem) throw new Error(`workflow artifact ${artifact.id} references missing WorkItem`)
+  if (artifact.runId && !run) throw new Error(`workflow artifact ${artifact.id} references missing Run`)
+  for (const owner of [goal, workItem, run]) {
+    if (owner && owner.projectId !== artifact.projectId) {
+      throw new Error(`workflow artifact ${artifact.id} crosses Project ownership`)
+    }
+  }
+  if (workItem && artifact.goalId && workItem.goalId !== artifact.goalId) {
+    throw new Error(`workflow artifact ${artifact.id} Goal/WorkItem ownership differs`)
+  }
+  if (run && (run.workItemId !== artifact.workItemId || run.goalId !== artifact.goalId)) {
+    throw new Error(`workflow artifact ${artifact.id} Run ownership differs`)
+  }
+}
+
+function assertArtifactAcceptanceContract(
+  artifactId: string,
+  acceptance: WorkflowAcceptanceRecord,
+  projectId: string,
+  criteria: readonly string[],
+  criterionId: string
+): void {
+  const policy = acceptance.criterionPolicies?.[0]
+  if (acceptance.projectId !== projectId || acceptance.goalId !== undefined || acceptance.workItemId !== undefined ||
+      digest(acceptance.criteria) !== digest(criteria) || acceptance.criterionPolicies?.length !== 1 ||
+      policy?.criterionId !== criterionId || policy.criterionIndex !== 0 || policy.evidenceKind !== 'delivery_check' ||
+      digest(policy.allowedSources) !== digest(['runtime', 'human'])) {
+    throw new Error(`Artifact Acceptance contract conflicts with persisted record: ${artifactId}`)
+  }
+}
+
 export async function createWorkflowArtifactEdge(
   input: WorkflowArtifactEdgeInput,
   rootDir?: string
@@ -276,29 +534,39 @@ export async function createWorkflowEvidence(
     verifier: 'main-process'
   }
 ): Promise<WorkflowEvidenceRecord> {
-  return mutateTaskSnapshotDatabase(rootDir, (db) => {
-    setupWorkflowLedgerSchema(db)
-    setupWorkflowEvidenceSchema(db)
-    assertWorkflowEvidenceReferences(db, input)
-    const record = appendWorkflowEvidence(db, input as WorkflowEvidenceInput, authority)
-    appendWorkflowEvent(db, {
-      eventId: `workflow:evidence-record:${record.evidenceId}`,
-      streamId: record.runId ? `run:${record.runId}` : `project:${record.projectId}`,
-      entityType: 'system',
-      entityId: record.evidenceId,
-      kind: 'workflow.evidence.recorded',
-      payload: { ...record },
-      occurredAt: record.createdAt,
-      correlationId: record.runId ?? record.workItemId ?? record.goalId ?? record.evidenceId
-    }, {
-      projectId: record.projectId,
-      goalId: record.goalId,
-      workItemId: record.workItemId,
-      runId: record.runId
-    })
-    assertWorkflowEvidenceEventCoverage([record], readAndVerifyEvents(db))
-    return record
+  return mutateTaskSnapshotDatabase(rootDir, (db) => recordWorkflowEvidence(db, input, authority))
+}
+
+/** Shared in-transaction Evidence projection for compound durable writes. */
+export function recordWorkflowEvidence(
+  db: Parameters<typeof appendWorkflowEvidence>[0],
+  input: WorkflowEvidenceCreateInput,
+  authority: Pick<AppendWorkflowEvidenceOptions, 'source' | 'verifier' | 'observedAt'> = {
+    source: 'runtime',
+    verifier: 'main-process'
+  }
+): WorkflowEvidenceRecord {
+  setupWorkflowLedgerSchema(db)
+  setupWorkflowEvidenceSchema(db)
+  assertWorkflowEvidenceReferences(db, input)
+  const record = appendWorkflowEvidence(db, input as WorkflowEvidenceInput, authority)
+  appendWorkflowEvent(db, {
+    eventId: `workflow:evidence-record:${record.evidenceId}`,
+    streamId: record.runId ? `run:${record.runId}` : `project:${record.projectId}`,
+    entityType: 'system',
+    entityId: record.evidenceId,
+    kind: 'workflow.evidence.recorded',
+    payload: { ...record },
+    occurredAt: record.createdAt,
+    correlationId: record.runId ?? record.workItemId ?? record.goalId ?? record.evidenceId
+  }, {
+    projectId: record.projectId,
+    goalId: record.goalId,
+    workItemId: record.workItemId,
+    runId: record.runId
   })
+  assertWorkflowEvidenceEventCoverage([record], readAndVerifyEvents(db))
+  return record
 }
 
 export async function listWorkflowEvidence(

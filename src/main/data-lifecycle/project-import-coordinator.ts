@@ -14,12 +14,27 @@ import {
   createProductionProjectAggregateService
 } from '../project-aggregate/project-aggregate-factory'
 import { projectAggregateCanonicalJson } from '../project-aggregate/codec'
-import { projectLearningNamespace } from '../project-aggregate/project-memory-adapter'
+import {
+  projectLearningNamespace,
+  projectLearningNamespaceDigest
+} from '../project-aggregate/project-memory-adapter'
 import { ProjectWorkspaceStore } from '../project-workspace/store'
+import { getProjectPortfolioStore } from '../project-portfolio/store'
+import { getMediaStore } from '../media/media-store'
 import { ProjectImportJournal, PROJECT_IMPORT_PHASES, type ProjectImportJournalEntry, type ProjectImportPhase } from './project-import-journal'
 import { ProjectImportSourceStore } from './project-import-source-store'
-import { parseProjectAggregateImport, projectImportSemanticDigest } from './project-import-validation'
+import {
+  parseProjectAggregateImport,
+  projectImportSemanticDigest,
+  projectImportSemanticMismatchPath
+} from './project-import-validation'
 import { importWorkflowProjectAggregate, verifyWorkflowProjectAggregateImportable } from './workflow-project-import'
+import {
+  assertProjectPortableRuntimeImportable,
+  importProjectPortableRuntime,
+  rebindProjectPortableArtifactSources,
+  verifyProjectPortableRuntime
+} from './project-portable-runtime'
 import {
   assertProjectRoutineSliceImportable,
   importProjectRoutineSlice,
@@ -27,10 +42,17 @@ import {
 } from '../routines/routine-project-store'
 
 export interface ProjectImportOptions {
+  /** Stable caller-owned operation ID for Effect reconciliation; production direct imports omit it. */
+  operationId?: string
   /** Test-only crash checkpoint; production callers leave this undefined. */
   failAfterPhase?: ProjectImportPhase
   /** Test-only window after a store commit but before its journal advance. */
   failBeforeJournalPhase?: ProjectImportPhase
+}
+
+export interface PreparedProjectAggregateImport {
+  bundle: ProjectAggregateExportBundle
+  execute(options?: ProjectImportOptions): Promise<ProjectImportResult>
 }
 
 export async function importProjectAggregate(
@@ -38,24 +60,38 @@ export async function importProjectAggregate(
   userDataRoot: string,
   options: ProjectImportOptions = {}
 ): Promise<ProjectImportResult> {
+  return (await prepareProjectAggregateImport(rawBundle, userDataRoot)).execute(options)
+}
+
+export async function prepareProjectAggregateImport(
+  rawBundle: unknown,
+  userDataRoot: string
+): Promise<PreparedProjectAggregateImport> {
   const root = requiredRoot(userDataRoot)
   const bundle = parseProjectAggregateImport(rawBundle)
   if (bundle.projectId === MANAGED_PERSONAL_WORKSPACE_ID) {
     throw new Error('Project import cannot use the managed personal Workspace identity')
   }
   await preflightProjectImport(root, bundle)
-  const operationId = randomUUID()
-  const source = new ProjectImportSourceStore(root).write(operationId, bundle)
-  const entry = await new ProjectImportJournal(root).begin({
-    operationId,
-    projectId: bundle.projectId,
-    sourcePath: source.path,
-    sourceDigest: source.sourceDigest,
-    exportDigest: source.exportDigest,
-    sourceAggregateDigest: bundle.aggregate.aggregateDigest,
-    sourceSemanticDigest: projectImportSemanticDigest(bundle.aggregate)
-  })
-  return resumeProjectImport(root, entry, options)
+  return {
+    bundle,
+    execute: async (options: ProjectImportOptions = {}) => {
+      const operationId = options.operationId === undefined
+        ? randomUUID()
+        : requiredId(options.operationId, 'operationId')
+      const source = new ProjectImportSourceStore(root).write(operationId, bundle)
+      const entry = await new ProjectImportJournal(root).begin({
+        operationId,
+        projectId: bundle.projectId,
+        sourcePath: source.path,
+        sourceDigest: source.sourceDigest,
+        exportDigest: source.exportDigest,
+        sourceAggregateDigest: bundle.aggregate.aggregateDigest,
+        sourceSemanticDigest: projectImportSemanticDigest(bundle.aggregate)
+      })
+      return resumeProjectImport(root, entry, options)
+    }
+  }
 }
 
 export async function recoverPendingProjectImports(userDataRoot: string): Promise<{
@@ -97,14 +133,16 @@ export async function verifyProjectImport(
     throw new Error('Project import source aggregate receipt changed')
   }
   await verifyProjectRoutineSlice(resolve(root, 'routines'), entry.projectId, bundle.automation)
+  await verifyProjectPortableRuntime(bundle, root)
+  if (bundle.media !== undefined) {
+    const media = await getMediaStore(root).exportProjectSlice(entry.projectId)
+    if (media.mediaDigest !== bundle.media.mediaDigest) throw new Error('Project import Media readback changed after completion')
+  }
   return resultFrom(entry, aggregate.objectCounts)
 }
 
 async function preflightProjectImport(root: string, bundle: ProjectAggregateExportBundle): Promise<void> {
   const aggregate = bundle.aggregate
-  if (aggregate.memory.some((entry) => entry.namespace !== 'project_id')) {
-    throw new Error('Project import cannot restore legacy path Memory without an explicit namespace mapping')
-  }
   const workspaceState = await new ProjectWorkspaceStore(root).open().then((store) => store.getState())
   assertWorkspaceImportable(workspaceState, aggregate)
   assertWorkforceImportable(new DigitalWorkerStore(root), bundle)
@@ -116,8 +154,11 @@ async function preflightProjectImport(root: string, bundle: ProjectAggregateExpo
   if (service.seals.readProject(aggregate.projectId)) {
     throw new Error(`Project import aggregate seal conflict: ${aggregate.projectId}`)
   }
-  await verifyWorkflowProjectAggregateImportable(aggregate, root)
+  await verifyWorkflowProjectAggregateImportable(rebindProjectPortableArtifactSources(bundle, root), root)
+  await assertProjectPortableRuntimeImportable(bundle, root)
   await assertProjectRoutineSliceImportable(resolve(root, 'routines'), aggregate.projectId, bundle.automation)
+  const media = await getMediaStore(root).countProject(aggregate.projectId)
+  if (media.productions > 0 || media.jobs > 0) throw new Error(`Project import Media identity conflict: ${aggregate.projectId}`)
 }
 
 async function resumeProjectImport(
@@ -129,6 +170,7 @@ async function resumeProjectImport(
   let entry = initial
   const bundle = verifiedSourceBundle(root, entry)
   const aggregate = bundle.aggregate
+  const destinationAggregate = rebindProjectPortableArtifactSources(bundle, root)
   const current = (): number => PROJECT_IMPORT_PHASES.indexOf(entry.phase)
   const advance = async (
     phase: ProjectImportPhase,
@@ -144,7 +186,11 @@ async function resumeProjectImport(
       goals: aggregate.goals,
       workItems: aggregate.workItems,
       squads: aggregate.squads,
+      members: aggregate.members,
+      invitations: aggregate.invitations,
       comments: aggregate.comments,
+      sharedApprovals: aggregate.sharedApprovals,
+      inboxReceipts: aggregate.inboxReceipts ?? [],
       events: workspaceEvents(aggregate.audit, aggregate.projectId)
     }))
     injectBeforeJournal(options, 'workspace_imported')
@@ -165,15 +211,28 @@ async function resumeProjectImport(
   }
 
   if (current() < phaseIndex('workflow_imported')) {
-    await importWorkflowProjectAggregate(aggregate, root)
+    await importWorkflowProjectAggregate(destinationAggregate, root)
     injectBeforeJournal(options, 'workflow_imported')
     await advance('workflow_imported')
+  }
+
+  if (current() < phaseIndex('runtime_imported')) {
+    await importProjectPortableRuntime(bundle, root)
+    injectBeforeJournal(options, 'runtime_imported')
+    await advance('runtime_imported')
   }
 
   if (current() < phaseIndex('automation_imported')) {
     await importProjectRoutineSlice(resolve(root, 'routines'), aggregate.projectId, bundle.automation)
     injectBeforeJournal(options, 'automation_imported')
     await advance('automation_imported')
+  }
+
+  if (bundle.portfolio !== undefined) {
+    await getProjectPortfolioStore(root).importProjectSlice(bundle.portfolio)
+  }
+  if (bundle.media !== undefined) {
+    await getMediaStore(root).importProjectSlice(bundle.media)
   }
 
   if (current() < phaseIndex('learning_imported')) {
@@ -187,7 +246,9 @@ async function resumeProjectImport(
     const live = await service.verifyLiveProject(aggregate.projectId)
     const importedSemanticDigest = projectImportSemanticDigest(live)
     if (importedSemanticDigest !== entry.sourceSemanticDigest) {
-      throw new Error('Project import readback is not semantically equivalent to its source')
+      const mismatch = projectImportSemanticMismatchPath(aggregate, live)
+      const auditSummary = `sourceAudit=${aggregate.audit.length},liveAudit=${live.audit.length}`
+      throw new Error(`Project import readback is not semantically equivalent to its source${mismatch ? ` at ${mismatch}` : ''} (${auditSummary})`)
     }
     const existingSeal = service.seals.readProject(aggregate.projectId)
     const seal = existingSeal ?? await service.sealProject(aggregate.projectId, { expectedAggregateRevision: 0 })
@@ -221,7 +282,10 @@ async function importProjectLearning(
 ): Promise<void> {
   const learningRoot = resolve(root, 'learning')
   const namespace = projectLearningNamespace(aggregate.projectId)
-  const records = aggregate.memory.map((entry) => structuredClone(entry.record)).sort((left, right) => left.id.localeCompare(right.id))
+  const project = projectLearningNamespaceDigest(aggregate.projectId)
+  const records = aggregate.memory
+    .map((entry) => ({ ...structuredClone(entry.record), project }))
+    .sort((left, right) => left.id.localeCompare(right.id))
   const audit = learningEvents(aggregate.audit, aggregate.projectId)
   await mutateLearningState(learningRoot, namespace, (state) => {
     const existing = { records: [...state.records].sort((left, right) => left.id.localeCompare(right.id)), audit: state.audit }
@@ -242,7 +306,11 @@ function assertWorkspaceImportable(state: ProjectWorkspaceState, aggregate: Proj
     ...identityConflicts(state.goals, aggregate.goals).map((id) => `goal:${id}`),
     ...identityConflicts(state.workItems, aggregate.workItems).map((id) => `work_item:${id}`),
     ...identityConflicts(state.squads, aggregate.squads).map((id) => `squad:${id}`),
+    ...identityConflicts(state.members, aggregate.members).map((id) => `member:${id}`),
+    ...identityConflicts(state.invitations, aggregate.invitations).map((id) => `invitation:${id}`),
     ...identityConflicts(state.comments, aggregate.comments).map((id) => `comment:${id}`),
+    ...identityConflicts(state.sharedApprovals, aggregate.sharedApprovals).map((id) => `shared_approval:${id}`),
+    ...identityConflicts(state.inboxReceipts, aggregate.inboxReceipts ?? []).map((id) => `inbox_receipt:${id}`),
     ...identityConflicts(state.events, workspaceEvents(aggregate.audit, aggregate.projectId)).map((id) => `event:${id}`)
   ]
   if (conflicts.length > 0) throw new Error(`Project import Workspace identity conflict: ${conflicts.sort().join(', ')}`)
@@ -298,7 +366,7 @@ function learningEvents(audit: readonly ProjectAggregateAuditRecord[], projectId
       throw new Error('Project import contains an invalid Learning audit wrapper')
     }
     const wrapper = entry.value as Record<string, unknown>
-    if (wrapper.projectId !== projectId || wrapper.namespace !== 'project_id' ||
+    if (wrapper.projectId !== projectId ||
         !wrapper.event || typeof wrapper.event !== 'object' || Array.isArray(wrapper.event)) {
       throw new Error('Project import contains an invalid Learning audit wrapper')
     }

@@ -96,11 +96,12 @@ export async function runRoutineWithHistory(
   rootDir: string,
   routine: Routine,
   callback: RoutineRunCallback,
-  nextRunAt: number | null
+  nextRunAt: number | null,
+  runId?: string
 ): Promise<RoutineRunRecord> {
   const startedAt = Date.now()
   let record: RoutineRunRecord = {
-    id: randomUUID(),
+    id: runId?.trim() || randomUUID(),
     routineId: routine.id,
     routineName: routine.name,
     projectId: routine.projectId,
@@ -111,7 +112,8 @@ export async function runRoutineWithHistory(
     dispatchState: 'preparing',
     nextRunAt
   }
-  await appendRun(rootDir, record)
+  const reservation = await reserveRun(rootDir, record)
+  if (!reservation.created) return reservation.record
   try {
     const result = await callback(routine, record)
     const metadata = result && typeof result === 'object'
@@ -375,10 +377,18 @@ export async function countProjectRoutineRuns(rootDir: string, projectId: string
   return (await listRoutineRuns(rootDir)).filter((run) => run.projectId === expectedProjectId).length
 }
 
-async function appendRun(rootDir: string, record: RoutineRunRecord): Promise<void> {
-  await withRunStoreWriteLock(rootDir, async () => {
+async function reserveRun(rootDir: string, record: RoutineRunRecord): Promise<{ record: RoutineRunRecord; created: boolean }> {
+  return withRunStoreWriteLock(rootDir, async () => {
     const file = await readRuns(rootDir)
-    await writeRuns(rootDir, [record, ...file.runs.filter((run) => run.id !== record.id)].slice(0, MAX_RUNS))
+    const existing = file.runs.find((run) => run.id === record.id)
+    if (existing) {
+      if (existing.routineId !== record.routineId || existing.projectId !== record.projectId) {
+        throw new Error(`Routine Run identity conflict: ${record.id}`)
+      }
+      return { record: existing, created: false }
+    }
+    await writeRuns(rootDir, [record, ...file.runs].slice(0, MAX_RUNS))
+    return { record, created: true }
   })
 }
 

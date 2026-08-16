@@ -100,25 +100,7 @@ interface SessionDraftMetaInput {
 
 function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
   const { opts, resumeHistory, resumeWorktreeRecord } = input
-  // P0 收编: permissionMode 由 taskStrategy 派生，不再接受外部直接设置。
-  // 恢复会话时检测旧 bypassPermissions/plan 值并记录迁移标记(P0 仅 console.warn, P1-3 再实现 banner)。
-  const migration = resumeHistory
-    ? migrateLegacyPermissionMode(resumeHistory.permissionMode, input.taskStrategy)
-    : null
-  const derivedPermissionMode = migration
-    ? migration.mode
-    : derivePermissionModeFromStrategy(input.taskStrategy)
-  if (migration?.downgradedFromBypass) {
-    console.warn(
-      `[caogen] 会话恢复: 旧 permissionMode='bypassPermissions' 已降级为派生值 '${derivedPermissionMode}'(taskStrategy=${input.taskStrategy})。` +
-      `如需跳过权限请在 Routine 中配置。`
-    )
-  }
-  if (migration?.migratedFromPlan) {
-    console.warn(
-      `[caogen] 会话恢复: 旧 permissionMode='plan' 已被派生值 '${derivedPermissionMode}' 覆盖(taskStrategy=${input.taskStrategy})。`
-    )
-  }
+  const derivedPermissionMode = sessionPermissionMode(resumeHistory, input.taskStrategy)
   const meta = newSessionMeta({
     ...sessionOwnership(opts, input.historyMode === 'fork' ? undefined : resumeHistory),
     ...sessionWorktreeIdentity(input.historyMode === 'resume' ? resumeHistory : undefined, resumeWorktreeRecord),
@@ -155,6 +137,31 @@ function createSessionDraftMeta(input: SessionDraftMetaInput): SessionMeta {
     conversationForkSourceSessionId: input.historyMode === 'fork' ? resumeHistory?.id : undefined,
     responsesContext: input.historyMode === 'resume' ? resumeHistory?.responsesContext : undefined
   }
+}
+
+function sessionPermissionMode(
+  resumeHistory: HistoryEntry | undefined,
+  taskStrategy: SessionMeta['taskStrategy']
+): SessionMeta['permissionMode'] {
+  // Permission mode is derived from strategy; legacy resume values are never trusted directly.
+  const migration = resumeHistory
+    ? migrateLegacyPermissionMode(resumeHistory.permissionMode, taskStrategy)
+    : null
+  const derivedPermissionMode = migration
+    ? migration.mode
+    : derivePermissionModeFromStrategy(taskStrategy)
+  if (migration?.downgradedFromBypass) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='bypassPermissions' 已降级为派生值 '${derivedPermissionMode}'(taskStrategy=${taskStrategy})。` +
+      `如需跳过权限请在 Routine 中配置。`
+    )
+  }
+  if (migration?.migratedFromPlan) {
+    console.warn(
+      `[caogen] 会话恢复: 旧 permissionMode='plan' 已被派生值 '${derivedPermissionMode}' 覆盖(taskStrategy=${taskStrategy})。`
+    )
+  }
+  return derivedPermissionMode
 }
 
 function sessionOwnership(opts: CreateSessionOptions, history?: HistoryEntry) {

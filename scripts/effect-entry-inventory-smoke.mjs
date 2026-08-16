@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
+import { discoverEffectEntries } from './lib/effect-entry-inventory.mjs'
 
 const repoRoot = process.cwd()
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-effect-entry-inventory-'))
@@ -167,21 +168,14 @@ function validatePolicies(label, policies, agentTool) {
 }
 
 function validateGatewayActions(gateways) {
-  const specs = {
-    'projectWorkspace:invoke': ['src/main/ipc/project-workspace-handlers.ts', 'PROJECT_WORKSPACE_HANDLERS'],
-    'digitalWorker:invoke': ['src/main/ipc/digital-worker-handlers.ts', 'DIGITAL_WORKER_ACTION_HANDLERS'],
-    'supervisor:invoke': ['src/main/ipc/supervisor-handlers.ts', 'HANDLERS']
-  }
-  assert.deepEqual(Object.keys(gateways).sort(), Object.keys(specs).sort(), 'gateway inventory set drifted')
-  for (const [channel, [relativePath, declarationName]] of Object.entries(specs)) {
-    const source = parse(path.join(repoRoot, relativePath))
-    const initializer = unwrapExpression(findVariable(source, declarationName).initializer)
-    assert(ts.isObjectLiteralExpression(initializer), `${declarationName} must remain an object literal`)
-    const actions = initializer.properties.flatMap((item) => {
-      if (!item.name) return []
-      if (ts.isIdentifier(item.name) || ts.isStringLiteralLike(item.name)) return [item.name.text]
-      return []
-    })
+  const channels = ['appFeatures:invoke', 'projectWorkspace:invoke', 'digitalWorker:invoke', 'supervisor:invoke']
+  assert.deepEqual(Object.keys(gateways).sort(), channels.sort(), 'gateway inventory set drifted')
+  const discovered = discoverEffectEntries(repoRoot).entries
+  for (const channel of channels) {
+    const prefix = `ipc-action:${channel}#`
+    const actions = discovered
+      .filter((entry) => entry.surface === 'ipc_action' && entry.id.startsWith(prefix))
+      .map((entry) => entry.id.slice(prefix.length))
     assertExactInventory(`${channel} action`, actions, gateways[channel])
     validatePolicies(`${channel} action`, gateways[channel], false)
   }

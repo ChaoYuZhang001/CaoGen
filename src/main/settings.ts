@@ -53,6 +53,7 @@ const DEFAULTS: AppSettings = {
   driveMode: 'core',
   defaultTaskStrategy: 'execute',
   experienceMode: 'assistant',
+  experienceRecommendationDismissedId: '',
   defaultModel: '',
   defaultPermissionMode: 'default',
   defaultProviderId: '',
@@ -108,7 +109,10 @@ const DEFAULTS: AppSettings = {
   notificationsEnabled: true,
   preventDisplaySleep: true,
   autoSkillLearningEnabled: false,
-  office: { qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false },
+  office: {
+    qualityMode: 'auto', showBadges: true, liveliness: 1, catEars: false,
+    spaceTheme: 'control-room', outfitPalette: 'role-default', hairStyle: 'role-default', teamLayout: 'grid'
+  },
   layout: {
     sidebarDesignVersion: 2,
     sidebarCollapsed: false,
@@ -167,7 +171,14 @@ function normalizeOffice(raw: unknown, fallback: AppSettings['office']): AppSett
     qualityMode: normalizeOfficeQualityMode(office.qualityMode, fallback.qualityMode),
     showBadges: typeof office.showBadges === 'boolean' ? office.showBadges : fallback.showBadges,
     liveliness: clampNumber(office.liveliness, fallback.liveliness, 0.2, 1.2, 1),
-    catEars: typeof office.catEars === 'boolean' ? office.catEars : fallback.catEars
+    catEars: typeof office.catEars === 'boolean' ? office.catEars : fallback.catEars,
+    spaceTheme: office.spaceTheme === 'creative-studio' || office.spaceTheme === 'quiet-library'
+      ? office.spaceTheme : 'control-room',
+    outfitPalette: office.outfitPalette === 'graphite' || office.outfitPalette === 'teal' || office.outfitPalette === 'rose'
+      ? office.outfitPalette : 'role-default',
+    hairStyle: office.hairStyle === 'short' || office.hairStyle === 'long' || office.hairStyle === 'tied'
+      ? office.hairStyle : 'role-default',
+    teamLayout: office.teamLayout === 'team-photo' ? 'team-photo' : 'grid'
   }
 }
 
@@ -203,7 +214,7 @@ function normalizeExperienceMode(
   raw: unknown,
   fallback: AppSettings['experienceMode']
 ): AppSettings['experienceMode'] {
-  return raw === 'assistant' || raw === 'studio' ? raw : fallback
+  return raw === 'assistant' || raw === 'studio' || raw === 'video' ? raw : fallback
 }
 
 function normalizeProviderCircuitBreaker(
@@ -239,45 +250,61 @@ function normalizeSandboxMode(raw: unknown): AppSettings['sandboxMode'] {
 function normalizeModelRoutingRules(raw: unknown): ModelRoutingRule[] {
   if (!Array.isArray(raw)) return []
   return raw
-    .map((item, index): ModelRoutingRule | null => {
-      if (!item || typeof item !== 'object') return null
-      const record = item as Partial<ModelRoutingRule>
-      const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : `rule-${index + 1}`
-      const name = typeof record.name === 'string' ? record.name.slice(0, 80) : ''
-      const match = typeof record.match === 'string' ? record.match.slice(0, 500) : ''
-      const keywordMode = record.keywordMode === 'all' ? 'all' : 'any'
-      const taskKinds = Array.isArray(record.taskKinds)
-        ? [...new Set(record.taskKinds.filter((item): item is ModelRoutingTaskKind => MODEL_ROUTING_TASK_KINDS.has(item as ModelRoutingTaskKind)))].slice(0, MODEL_ROUTING_TASK_KINDS.size)
-        : []
-      const minRiskLevel =
-        record.minRiskLevel === 'low' || record.minRiskLevel === 'medium' || record.minRiskLevel === 'high'
-          ? record.minRiskLevel
-          : undefined
-      const whenStrategy =
-        record.whenStrategy === 'quality' ||
-        record.whenStrategy === 'cost' ||
-        record.whenStrategy === 'speed' ||
-        record.whenStrategy === 'balanced'
-          ? record.whenStrategy
-          : undefined
-      const providerId = typeof record.providerId === 'string' ? record.providerId.trim() : ''
-      const model = typeof record.model === 'string' ? record.model.trim() : ''
-      if (!name && !match && taskKinds.length === 0 && !minRiskLevel && !whenStrategy && !providerId && !model) return null
-      return {
-        id,
-        enabled: record.enabled !== false,
-        name,
-        match,
-        keywordMode,
-        taskKinds,
-        minRiskLevel,
-        whenStrategy,
-        providerId,
-        model
-      }
-    })
+    .map(normalizeModelRoutingRule)
     .filter((item): item is ModelRoutingRule => Boolean(item))
     .slice(0, 20)
+}
+
+function normalizeModelRoutingRule(item: unknown, index: number): ModelRoutingRule | null {
+  if (!item || typeof item !== 'object') return null
+  const record = item as Partial<ModelRoutingRule>
+  const name = boundedRoutingText(record.name, 80, false)
+  const match = boundedRoutingText(record.match, 500, false)
+  const taskKinds = normalizeRoutingTaskKinds(record.taskKinds)
+  const minRiskLevel = normalizeRoutingRisk(record.minRiskLevel)
+  const whenStrategy = normalizeRoutingStrategy(record.whenStrategy)
+  const providerId = boundedRoutingText(record.providerId)
+  const model = boundedRoutingText(record.model)
+  if (![name, match, taskKinds.length, minRiskLevel, whenStrategy, providerId, model].some(Boolean)) return null
+  return {
+    id: routingRuleId(record.id, index),
+    enabled: record.enabled !== false,
+    name,
+    match,
+    keywordMode: record.keywordMode === 'all' ? 'all' : 'any',
+    taskKinds,
+    minRiskLevel,
+    whenStrategy,
+    providerId,
+    model
+  }
+}
+
+function routingRuleId(value: unknown, index: number): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : `rule-${index + 1}`
+}
+
+function boundedRoutingText(value: unknown, maxLength?: number, trim = true): string {
+  if (typeof value !== 'string') return ''
+  const normalized = trim ? value.trim() : value
+  return maxLength === undefined ? normalized : normalized.slice(0, maxLength)
+}
+
+function normalizeRoutingTaskKinds(value: unknown): ModelRoutingTaskKind[] {
+  if (!Array.isArray(value)) return []
+  const valid = value.filter((item): item is ModelRoutingTaskKind =>
+    MODEL_ROUTING_TASK_KINDS.has(item as ModelRoutingTaskKind))
+  return [...new Set(valid)].slice(0, MODEL_ROUTING_TASK_KINDS.size)
+}
+
+function normalizeRoutingRisk(value: unknown): ModelRoutingRule['minRiskLevel'] {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : undefined
+}
+
+function normalizeRoutingStrategy(value: unknown): ModelRoutingRule['whenStrategy'] {
+  return value === 'quality' || value === 'cost' || value === 'speed' || value === 'balanced'
+    ? value
+    : undefined
 }
 
 function settingsFile(): string {
@@ -309,6 +336,7 @@ export function getSettings(): AppSettings {
       driveMode: normalizeCaoGenDriveMode(raw.driveMode),
       defaultTaskStrategy: normalizeDefaultTaskStrategy(raw.defaultTaskStrategy, DEFAULTS.defaultTaskStrategy),
       experienceMode: normalizeExperienceMode(raw.experienceMode, DEFAULTS.experienceMode),
+      experienceRecommendationDismissedId: normalizeRecommendationId(raw.experienceRecommendationDismissedId),
       sandboxMode: normalizeSandboxMode(sandboxMode),
       schedulerStrategy: normalizeSchedulerStrategy(raw.schedulerStrategy, DEFAULTS.schedulerStrategy),
       modelRoutingRules: normalizeModelRoutingRules(raw.modelRoutingRules),
@@ -363,6 +391,9 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     experienceMode: patch.experienceMode === undefined
       ? prev.experienceMode
       : normalizeExperienceMode(patch.experienceMode, prev.experienceMode),
+    experienceRecommendationDismissedId: patch.experienceRecommendationDismissedId === undefined
+      ? prev.experienceRecommendationDismissedId
+      : normalizeRecommendationId(patch.experienceRecommendationDismissedId),
     sandboxMode: patch.sandboxMode === undefined ? prev.sandboxMode : normalizeSandboxMode(patch.sandboxMode),
     schedulerStrategy:
       patch.schedulerStrategy === undefined
@@ -394,6 +425,12 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   }
   cache = next
   return next
+}
+
+function normalizeRecommendationId(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const normalized = value.trim()
+  return normalized.length <= 500 && /^[A-Za-z0-9:._-]*$/.test(normalized) ? normalized : ''
 }
 
 class UnsupportedSettingsSchemaError extends Error {

@@ -74,17 +74,27 @@ function runGate() {
   runCrashCheck('persist Evidence Link then strong-kill', 'create-link', { stage: 'research' })
   runCheck('fresh-process Link readback still blocks pending handoff', 'probe', { checkpoint: 'link' })
   runCheck('pass byte-backed Acceptance', 'pass-acceptance', { stage: 'research' })
-  runCrashCheck('persist WorkItem Artifact attachment then strong-kill', 'attach-artifact', {
-    stage: 'research'
+  runStageHandoffCrashCheck('persist stage prepared then strong-kill', 'research', 'prepared')
+  runCheck('fresh-process recovers prepared stage operation', 'recover-stage-handoff', {
+    stage: 'research', handoffCheckpoint: 'prepared'
   })
   runCheck('fresh-process attachment and prompt handoff', 'probe', { checkpoint: 'attachment' })
 
-  runCheck('requirements stage consumes Artifact identity and is waived by user authority', 'complete-stage', {
-    stage: 'requirements'
+  runStageHandoffCrashCheck('persist input edges then strong-kill', 'requirements', 'input_edges')
+  runCheck('fresh-process recovers input-edge checkpoint', 'recover-stage-handoff', {
+    stage: 'requirements', handoffCheckpoint: 'input_edges'
   })
-  runCheck('design stage consumes authorized waiver handoff', 'complete-stage', { stage: 'design' })
-  runCheck('implementation stage completes through passed Acceptance', 'complete-stage', {
-    stage: 'implementation'
+  runStageHandoffCrashCheck(
+    'persist WorkItem Artifact reference then strong-kill',
+    'design',
+    'workitem_reference'
+  )
+  runCheck('fresh-process recovers WorkItem-reference checkpoint', 'recover-stage-handoff', {
+    stage: 'design', handoffCheckpoint: 'workitem_reference'
+  })
+  runStageHandoffCrashCheck('persist stage committed then strong-kill', 'implementation', 'committed')
+  runCheck('fresh-process preserves committed stage without replay', 'recover-stage-handoff', {
+    stage: 'implementation', handoffCheckpoint: 'committed'
   })
   runCheck('review stage receives implementation Artifact without user restatement', 'prepare-review')
   runCheck('failed review creates repair WorkItem and Acceptance', 'fail-review')
@@ -101,9 +111,18 @@ function runGate() {
   assert.deepEqual(second, first)
   report.summary = {
     ...first,
-    strongKillCheckpoints: ['artifact', 'evidence', 'acceptance', 'link', 'workitem_attachment'],
-    strongKillBoundary: 'after production API return and before the next stage',
-    freshProcessReadbacks: 9,
+    strongKillCheckpoints: [
+      'artifact',
+      'evidence',
+      'acceptance',
+      'link',
+      'stage_prepared',
+      'stage_input_edges',
+      'stage_workitem_reference',
+      'stage_committed'
+    ],
+    strongKillBoundary: 'exact cross-Store stage checkpoints and production API boundaries',
+    freshProcessReadbacks: 13,
     reportRedaction: 'production Studio Result export excludes raw Run error material'
   }
 }
@@ -119,6 +138,24 @@ function runCrashCheck(id, action, extra = {}) {
     expectStrongKill: true
   })
   report.checks.push({ id, status: 'passed', mode: 'strong_kill_after_commit' })
+  return result
+}
+
+function runStageHandoffCrashCheck(id, stage, handoffCheckpoint) {
+  const result = runWorker({
+    action: 'crash-stage-handoff',
+    stage,
+    handoffCheckpoint
+  }, {
+    expectStrongKill: true,
+    expectedCheckpoint: handoffCheckpoint
+  })
+  report.checks.push({
+    id,
+    status: 'passed',
+    mode: 'strong_kill_at_stage_checkpoint',
+    checkpoint: handoffCheckpoint
+  })
   return result
 }
 
@@ -143,8 +180,9 @@ function runWorker(input, options = {}) {
   const strongKillObserved = process.platform === 'win32'
     ? child.signal === null && child.status !== 0
     : child.signal === 'SIGKILL'
+  const expectedCheckpoint = options.expectedCheckpoint ?? 'after_commit'
   if (options.expectStrongKill && strongKillObserved &&
-      response.ok && response.checkpoint === 'after_commit') {
+      response.ok && response.checkpoint === expectedCheckpoint) {
     return { signal: child.signal, status: child.status, checkpoint: response.checkpoint }
   }
   if (options.expectStrongKill || child.status !== 0 || !response.ok) {
@@ -212,9 +250,14 @@ function installElectronStub() {
   const electronDir = path.join(outDir, 'node_modules', 'electron')
   mkdirSync(electronDir, { recursive: true })
   writeFileSync(path.join(electronDir, 'index.js'), [
-    `export const app = { getPath: () => ${JSON.stringify(rootDir)} }`,
+    // Keep the app singleton's own startup store separate from the explicit
+    // fixture root passed to each action; this prevents auto-repair startup
+    // from racing the staged-flow protocol.
+    `export const app = { getPath: () => ${JSON.stringify(path.join(rootDir, 'app-user-data'))}, focus() {} }`,
     'export const ipcMain = { handle() {} }',
-    'export const BrowserWindow = { getAllWindows: () => [] }'
+    'export const BrowserWindow = { getAllWindows: () => [] }',
+    'export const dialog = {}',
+    'export const Notification = class { static isSupported() { return false } once() {} show() {} }'
   ].join('\n') + '\n', 'utf8')
   writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n', 'utf8')
 }

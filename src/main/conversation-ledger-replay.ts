@@ -18,6 +18,11 @@ export interface PortableConversationReplay {
   characters: number
 }
 
+export interface PortableConversationReplayOptions {
+  /** Exclude Provider routing identity so the same semantic ledger hashes equally across adapters. */
+  providerNeutral?: boolean
+}
+
 export interface ConfirmedToolReplay {
   toolUseId: string
   toolName: string
@@ -109,7 +114,8 @@ export function recordConfirmedToolReplay(
  */
 export function buildPortableConversationReplay(
   entries: TranscriptEntry[],
-  currentMessageId?: string
+  currentMessageId?: string,
+  options: PortableConversationReplayOptions = {}
 ): PortableConversationReplay | null {
   const turns: PortableReplayTurn[] = []
   let current: PortableReplayTurn | undefined
@@ -140,72 +146,8 @@ export function buildPortableConversationReplay(
     }
 
     const turn = ensureTurn()
-    if (event.kind === 'assistant-message') {
-      const text = event.blocks
-        .filter((block) => block.type === 'text')
-        .map((block) => block.type === 'text' ? block.text : '')
-        .join('')
-        .trim()
-      if (text) turn.units.push(`[assistant]\n${boundedReplayText(redactPortableReplayText(text), 4_000)}`)
-      for (const block of event.blocks) {
-        if (block.type !== 'tool_use') continue
-        const index = turn.units.length
-        turn.toolUnits.set(block.id, index)
-        turn.units.push(
-          `[assistant tool_call id=${block.id} name=${block.name}]\n` +
-          boundedReplayText(stableReplayJson(redactPortableReplayValue(block.input)), 2_000)
-        )
-      }
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'tool-result') {
-      const result = portableToolResultSummary(event.toolUseId, event.content, event.isError)
-      const callIndex = turn.toolUnits.get(event.toolUseId)
-      if (callIndex === undefined) turn.units.push(result)
-      else turn.units[callIndex] = `${turn.units[callIndex]}\n${result}`
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'permission-request') {
-      turn.units.push(`[permission_request id=${event.request.requestId}] ${event.request.toolName}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'permission-resolved') {
-      turn.units.push(`[permission request=${event.requestId}] ${event.behavior}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'checkpoint') {
-      turn.units.push(`[checkpoint] ${event.messageId}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'checkpoint-restore') {
-      turn.units.push(`[checkpoint_restore mode=${event.mode ?? 'both'}] ${event.messageId}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'routing') {
-      turn.units.push(`[routing] ${event.providerId}/${event.model} · ${redactPortableReplayText(event.reason)}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'failover') {
-      turn.units.push(`[provider_failover] ${event.fromProviderId} -> ${event.toProviderId} · ${redactPortableReplayText(event.reason)}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'provider-key-failover') {
-      turn.units.push(`[provider_key_failover] ${event.providerId}: key identity changed · ${redactPortableReplayText(event.reason)}`)
-      turn.eventCount += 1
-      continue
-    }
-    if (event.kind === 'hook-event' && event.event === 'context-compressed') {
-      turn.units.push(`[context_compressed] ${boundedReplayText(redactPortableReplayText(event.detail ?? ''), 1_000)}`)
-      turn.eventCount += 1
-    }
+    if (appendPortableReplayCoreEvent(turn, event)) continue
+    appendPortableReplayRoutingEvent(turn, event, options)
   }
 
   const serialized = turns
@@ -232,6 +174,79 @@ export function buildPortableConversationReplay(
     eventCount: selected.reduce((sum, turn) => sum + turn.eventCount, 0),
     attachmentCount: selected.reduce((sum, turn) => sum + turn.attachmentCount, 0),
     characters: text.length
+  }
+}
+
+function appendPortableReplayCoreEvent(turn: PortableReplayTurn, event: TranscriptEntry['event']): boolean {
+  if (event.kind === 'assistant-message') {
+    const text = event.blocks.filter((block) => block.type === 'text').map((block) => block.type === 'text' ? block.text : '').join('').trim()
+    if (text) turn.units.push(`[assistant]\n${boundedReplayText(redactPortableReplayText(text), 4_000)}`)
+    for (const block of event.blocks) {
+      if (block.type !== 'tool_use') continue
+      const index = turn.units.length
+      turn.toolUnits.set(block.id, index)
+      turn.units.push(`[assistant tool_call id=${block.id} name=${block.name}]\n${boundedReplayText(stableReplayJson(redactPortableReplayValue(block.input)), 2_000)}`)
+    }
+    turn.eventCount += 1
+    return true
+  }
+  if (event.kind === 'tool-result') {
+    const result = portableToolResultSummary(event.toolUseId, event.content, event.isError)
+    const callIndex = turn.toolUnits.get(event.toolUseId)
+    if (callIndex === undefined) turn.units.push(result)
+    else turn.units[callIndex] = `${turn.units[callIndex]}\n${result}`
+    turn.eventCount += 1
+    return true
+  }
+  if (event.kind === 'permission-request') {
+    turn.units.push(`[permission_request id=${event.request.requestId}] ${event.request.toolName}`)
+    turn.eventCount += 1
+    return true
+  }
+  if (event.kind === 'permission-resolved') {
+    turn.units.push(`[permission request=${event.requestId}] ${event.behavior}`)
+    turn.eventCount += 1
+    return true
+  }
+  if (event.kind === 'checkpoint') {
+    turn.units.push(`[checkpoint] ${event.messageId}`)
+    turn.eventCount += 1
+    return true
+  }
+  if (event.kind === 'checkpoint-restore') {
+    turn.units.push(`[checkpoint_restore mode=${event.mode ?? 'both'}] ${event.messageId}`)
+    turn.eventCount += 1
+    return true
+  }
+  return false
+}
+
+function appendPortableReplayRoutingEvent(
+  turn: PortableReplayTurn,
+  event: TranscriptEntry['event'],
+  options: PortableConversationReplayOptions
+): void {
+  if (event.kind === 'routing') {
+    if (options.providerNeutral) return
+    turn.units.push(`[routing] ${event.providerId}/${event.model} · ${redactPortableReplayText(event.reason)}`)
+    turn.eventCount += 1
+    return
+  }
+  if (event.kind === 'failover') {
+    if (options.providerNeutral) return
+    turn.units.push(`[provider_failover] ${event.fromProviderId} -> ${event.toProviderId} · ${redactPortableReplayText(event.reason)}`)
+    turn.eventCount += 1
+    return
+  }
+  if (event.kind === 'provider-key-failover') {
+    if (options.providerNeutral) return
+    turn.units.push(`[provider_key_failover] ${event.providerId}: key identity changed · ${redactPortableReplayText(event.reason)}`)
+    turn.eventCount += 1
+    return
+  }
+  if (event.kind === 'hook-event' && event.event === 'context-compressed') {
+    turn.units.push(`[context_compressed] ${boundedReplayText(redactPortableReplayText(event.detail ?? ''), 1_000)}`)
+    turn.eventCount += 1
   }
 }
 

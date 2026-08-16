@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { writeSync } from 'node:fs'
 import {
   FLOW_ORDER,
   GOAL_ID,
@@ -137,6 +138,64 @@ export async function attachAndFinalizeStage(api, payload, stage) {
 
 export async function completeStage(api, payload, stage) {
   assert(!['research', 'review'].includes(stage.name), `stage ${stage.name} requires a specialized action`)
+  await prepareStageForHandoff(api, payload, stage)
+  return stageStep(stage, 'finalize', () => attachAndFinalizeStage(api, payload, stage))
+}
+
+export async function crashStageHandoffAtCheckpoint(api, payload, stage) {
+  const checkpoint = payload.handoffCheckpoint
+  assert(
+    ['prepared', 'input_edges', 'workitem_reference', 'committed'].includes(checkpoint),
+    'handoffCheckpoint is invalid'
+  )
+  if (stage.name !== 'research') {
+    await prepareStageForHandoff(api, payload, stage)
+  }
+  await api.handoff.attachProducedArtifactToStage({
+    artifactId: stage.artifactId,
+    projectId: PROJECT_ID,
+    workItemId: stage.workItemId,
+    runId: stage.runId,
+    rootDir: payload.rootDir
+  }, {
+    onCheckpoint(observed) {
+      if (observed !== checkpoint) return
+      writeSync(1, JSON.stringify({ ok: true, checkpoint: observed }))
+      process.kill(process.pid, 'SIGKILL')
+    }
+  })
+  throw stageCheckpointError(stage.name, checkpoint)
+}
+
+export async function recoverStageHandoffAfterCrash(api, payload, stage) {
+  const checkpoint = payload.handoffCheckpoint
+  const before = await stageAttachmentSnapshot(api, payload, stage)
+  assertStageCheckpoint(before, checkpoint)
+  const recovery = await api.handoff.recoverProducedArtifactStageAttachments(payload.rootDir)
+  if (checkpoint === 'committed') {
+    assert(!recovery.recovered.includes(stage.artifactId))
+  } else {
+    assert(recovery.recovered.includes(stage.artifactId))
+  }
+  assert.equal(recovery.failures.length, 0)
+  const after = await stageAttachmentSnapshot(api, payload, stage)
+  assert.equal(after.prepared, true)
+  assert.equal(after.committed, true)
+  assert.equal(after.workItemReference, true)
+  assert.deepEqual(after.edgeSourceIds, after.sourceArtifactIds)
+  const workItem = await finalizeWorkItem(api, payload, stage, stage.decision)
+  await transitionPersistedRun(api, payload, stage.sessionId, 'completed')
+  return {
+    artifactId: stage.artifactId,
+    checkpoint,
+    recovered: recovery.recovered.includes(stage.artifactId),
+    sourceArtifactIds: after.sourceArtifactIds,
+    workItemId: workItem.id,
+    status: workItem.status
+  }
+}
+
+async function prepareStageForHandoff(api, payload, stage) {
   await stageStep(stage, 'ready', () => markStageReady(api, payload, stage.workItemId))
   await stageStep(stage, 'handoff', () => assertImmediateHandoff(api, payload, stage))
   await stageStep(stage, 'artifact', () => createStageArtifact(api, payload, stage))
@@ -148,7 +207,6 @@ export async function completeStage(api, payload, stage) {
   } else {
     await stageStep(stage, 'review', () => reviewAcceptance(api, payload, stage, 'passed', stage.evidenceId))
   }
-  return stageStep(stage, 'finalize', () => attachAndFinalizeStage(api, payload, stage))
 }
 
 export async function prepareReview(api, payload) {
@@ -211,6 +269,55 @@ async function assertImmediateHandoff(api, payload, stage) {
   if (stage.dependencyIds.length === 0) return
   const result = await assertHandoffArtifact(api, payload, stage.workItemId, upstreamArtifactId(stage.name))
   assertPromptCarriesArtifact(result.prompt, result.item)
+}
+
+async function stageAttachmentSnapshot(api, payload, stage) {
+  const ledger = await api.workflow.listPersistedWorkflowLedger(
+    { projectId: PROJECT_ID, limit: 500 },
+    payload.rootDir
+  )
+  const prepared = ledger.events.items.find((event) =>
+    event.entityId === stage.artifactId && event.kind === 'workflow.artifact.stage.prepared')
+  const committed = ledger.events.items.some((event) =>
+    event.entityId === stage.artifactId && event.kind === 'workflow.artifact.stage.committed')
+  assert(prepared)
+  assert(Array.isArray(prepared.payload.sourceArtifactIds))
+  const sourceArtifactIds = [...prepared.payload.sourceArtifactIds].sort()
+  const edges = await api.workflow.listWorkflowArtifactEdges({
+    projectId: PROJECT_ID,
+    toArtifactId: stage.artifactId,
+    relation: 'input_to',
+    limit: 100
+  }, payload.rootDir)
+  const { store } = await commandContext(api, payload)
+  const workItem = await store.getWorkItem(stage.workItemId)
+  assert(workItem)
+  return {
+    prepared: true,
+    committed,
+    sourceArtifactIds,
+    edgeSourceIds: edges.items.map((edge) => edge.fromArtifactId).sort(),
+    workItemReference: workItem.artifactRefs.includes(stage.artifactId)
+  }
+}
+
+function assertStageCheckpoint(snapshot, checkpoint) {
+  assert.equal(snapshot.prepared, true)
+  assert.equal(snapshot.committed, checkpoint === 'committed')
+  assert.equal(
+    snapshot.workItemReference,
+    checkpoint === 'workitem_reference' || checkpoint === 'committed'
+  )
+  const edgesExpected = checkpoint !== 'prepared'
+  assert.deepEqual(snapshot.edgeSourceIds, edgesExpected ? snapshot.sourceArtifactIds : [])
+}
+
+function stageCheckpointError(stageName, checkpoint) {
+  const error = new Error('stage checkpoint was not reached')
+  Object.assign(error, {
+    code: `VERIFIED_DELIVERY_${stageName.toUpperCase()}_${checkpoint.toUpperCase()}_NOT_REACHED`
+  })
+  return error
 }
 
 async function waiveAcceptance(api, payload, stage) {

@@ -8,9 +8,13 @@ import type {
   ProjectWorkspaceKind,
   ProjectWorkspaceManifest,
   ProjectWorkspacePatch,
+  ProjectMember,
+  ProjectInvitation,
   ProjectSquad,
   WorkItem,
-  WorkItemComment
+  WorkItemComment,
+  WorkItemSharedApproval,
+  ProjectCollaborationInboxReceipt
 } from '../../shared/project-workspace-types'
 import { isProjectWorkspaceKind, PROJECT_WORKSPACE_SCHEMA_VERSION } from '../../shared/project-workspace-types'
 import {
@@ -27,6 +31,7 @@ import { ProjectWorkspaceError } from './errors'
 import { appendEvent, atomicWrite, ProjectWorkspacePersistence } from './persistence'
 import type { DeleteOptions, ListOptions } from './repository-types'
 import { activeWorkspaceFrom, workspaceFrom } from './state-access'
+import { assertProjectAuthorized, projectMutationActor } from './project-authorization'
 
 export class WorkspaceRepository {
   constructor(private readonly persistence: ProjectWorkspacePersistence) {}
@@ -71,6 +76,9 @@ export class WorkspaceRepository {
   async update(id: string, patch: ProjectWorkspacePatch, options?: MutationOptions | number): Promise<ProjectWorkspace> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const workspace = activeWorkspaceFrom(state, id)
+      assertProjectAuthorized(state, workspace, projectMutationActor(options), 'edit', {
+        allowDeleted: true
+      })
       this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       applyWorkspacePatch(workspace, patch)
       workspace.updatedAt = now
@@ -83,6 +91,7 @@ export class WorkspaceRepository {
   async archive(id: string, options?: MutationOptions | number): Promise<ProjectWorkspace> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const workspace = workspaceFrom(state, id)
+      assertProjectAuthorized(state, workspace, projectMutationActor(options), 'edit', { allowInactive: true })
       this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       if (workspace.status === 'deleted') throw new ProjectWorkspaceError('deleted', `workspace ${id} is deleted`)
       workspace.status = 'archived'
@@ -97,8 +106,13 @@ export class WorkspaceRepository {
   async restore(id: string, options?: MutationOptions | number): Promise<ProjectWorkspace> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const workspace = workspaceFrom(state, id)
-      this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       if (workspace.status === 'active') return workspace
+      if (workspace.status !== 'archived' && workspace.status !== 'deleted') throw new ProjectWorkspaceError('project_inactive', `Project ${id} cannot be restored`)
+      assertProjectAuthorized(state, workspace, projectMutationActor(options), 'edit', {
+        allowDeleted: true,
+        allowInactive: true
+      })
+      this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       workspace.status = 'active'
       workspace.archivedAt = undefined
       workspace.deletedAt = undefined
@@ -113,6 +127,7 @@ export class WorkspaceRepository {
     if (options.permanent) return this.purge(id, options)
     return this.persistence.mutate(options, ({ state, now }) => {
       const workspace = workspaceFrom(state, id)
+      assertProjectAuthorized(state, workspace, projectMutationActor(options), 'edit', { allowInactive: true })
       this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       if (workspace.status === 'deleted') return workspace
       workspace.status = 'deleted'
@@ -127,12 +142,17 @@ export class WorkspaceRepository {
   async purge(id: string, options: MutationOptions | number = {}): Promise<undefined> {
     return this.persistence.mutate(options, ({ state, now }) => {
       const workspace = workspaceFrom(state, id)
+      assertProjectAuthorized(state, workspace, projectMutationActor(options), 'edit', { allowDeleted: true })
       this.persistence.assertEntityRevision(workspace.revision, options, 'workspace')
       const purgeRevision = workspace.revision + 1
       state.goals = state.goals.filter((goal) => goal.projectId !== id)
       state.workItems = state.workItems.filter((item) => item.projectId !== id)
       state.squads = state.squads.filter((item) => item.projectId !== id)
+      state.members = state.members.filter((item) => item.projectId !== id)
+      state.invitations = state.invitations.filter((item) => item.projectId !== id)
       state.comments = state.comments.filter((item) => item.projectId !== id)
+      state.sharedApprovals = state.sharedApprovals.filter((item) => item.projectId !== id)
+      state.inboxReceipts = state.inboxReceipts.filter((item) => item.projectId !== id)
       state.events = state.events.filter((entry) => entry.projectId !== id)
       state.workspaces = state.workspaces.filter((candidate) => candidate.id !== id)
       appendEvent(state, id, 'workspace', id, 'workspace.purged', purgeRevision, { status: 'purged' }, now)
@@ -149,7 +169,11 @@ export class WorkspaceRepository {
       state.goals,
       state.workItems,
       state.squads,
+      state.members,
+      state.invitations,
       state.comments,
+      state.sharedApprovals,
+      state.inboxReceipts,
       state.events
     )
     const manifest: ProjectWorkspaceManifest = { ...body, digest: digest(body) }
@@ -209,7 +233,11 @@ function buildManifestBody(
   goals: Goal[],
   workItems: WorkItem[],
   squads: ProjectSquad[],
+  members: ProjectMember[],
+  invitations: ProjectInvitation[],
   comments: WorkItemComment[],
+  sharedApprovals: WorkItemSharedApproval[],
+  inboxReceipts: ProjectCollaborationInboxReceipt[],
   events: ProjectWorkspaceEvent[]
 ): Omit<ProjectWorkspaceManifest, 'digest'> {
   const projectId = workspace.id
@@ -223,7 +251,11 @@ function buildManifestBody(
     goals: redact(goals.filter((goal) => goal.projectId === projectId)) as Goal[],
     workItems: redact(workItems.filter((item) => item.projectId === projectId)) as WorkItem[],
     squads: redact(squads.filter((squad) => squad.projectId === projectId)) as ProjectSquad[],
+    members: redact(members.filter((member) => member.projectId === projectId)) as ProjectMember[],
+    invitations: redact(invitations.filter((invitation) => invitation.projectId === projectId)) as ProjectInvitation[],
     comments: redact(comments.filter((comment) => comment.projectId === projectId)) as WorkItemComment[],
+    sharedApprovals: redact(sharedApprovals.filter((approval) => approval.projectId === projectId)) as WorkItemSharedApproval[],
+    inboxReceipts: redact(inboxReceipts.filter((receipt) => receipt.projectId === projectId)) as ProjectCollaborationInboxReceipt[],
     events: redact(events.filter((entry) => entry.projectId === projectId)) as ProjectWorkspaceEvent[]
   }
 }

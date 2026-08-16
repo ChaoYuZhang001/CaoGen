@@ -8,11 +8,13 @@ mkdirSync(path.join(repoRoot, 'test-results'), { recursive: true })
 const tempRoot = mkdtempSync(path.join(repoRoot, 'test-results', 'caogen-openai-p2-tools-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
+process.env.CAOGEN_USER_DATA_DIR = path.join(tempRoot, 'user-data')
 
 try {
   mkdirSync(projectRoot, { recursive: true })
   compile(['src/main/openaiTools.ts'], outDir)
   const toolsModule = await import(pathToFileURL(findCompiled(outDir, 'openaiTools.js')).href)
+  const pluginRuntime = await import(pathToFileURL(findCompiled(outDir, 'plugin-runtime-authorization.js')).href)
   const names = toolsModule.OPENAI_CODING_TOOLS.map((tool) => tool.function.name)
   for (const expected of ['draft_skill', 'optimize_skill', 'route_model', 'china_notify', 'gitee_prepare']) {
     assert(names.includes(expected), `${expected} should be registered`)
@@ -59,17 +61,22 @@ try {
     ].join('\n'),
     'utf8'
   )
-  const optimized = await toolsModule.executeCodingTool(
+  const optimizationArgs = {
+    id: 'Tailwind 配置沉淀',
+    outcome: 'corrected',
+    summary: '用户修正: 需要同步检查 postcss.config.js,否则样式未生效。',
+    correctionSteps: ['同步检查 postcss.config.js 是否加载 tailwindcss。'],
+    verification: ['npm.cmd run build']
+  }
+  const unapprovedOptimization = await toolsModule.executeCodingTool(
     'optimize_skill',
-    {
-      id: 'Tailwind 配置沉淀',
-      outcome: 'corrected',
-      summary: '用户修正: 需要同步检查 postcss.config.js,否则样式未生效。',
-      correctionSteps: ['同步检查 postcss.config.js 是否加载 tailwindcss。'],
-      verification: ['npm.cmd run build']
-    },
+    optimizationArgs,
     projectRoot
   )
+  assertEqual(unapprovedOptimization.ok, false)
+  assert(unapprovedOptimization.output.includes('"status": "not_found"'), 'unapproved Skill must not enter optimization')
+  pluginRuntime.approveManagedLearningSkillRuntime(projectRoot, skillPath)
+  const optimized = await toolsModule.executeCodingTool('optimize_skill', optimizationArgs, projectRoot)
   assertEqual(optimized.ok, true)
   assert(optimized.output.includes('"status": "drafted"'), 'optimize_skill should create a pending Skill draft')
   assert(optimized.output.includes('"draftStatus": "draft"'), 'optimize_skill should disclose draft status')

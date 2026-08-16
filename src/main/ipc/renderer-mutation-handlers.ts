@@ -1,4 +1,4 @@
-import type { GitCommitResult, WorkspaceHunkResult, WriteTextFileResult } from '../../shared/types'
+import type { GitCommitResult, SessionMeta, WorkspaceHunkResult, WriteTextFileResult } from '../../shared/types'
 import { isAbsolute, resolve } from 'node:path'
 import {
   prepareImageAttachmentBytes,
@@ -26,11 +26,20 @@ type OperationGateway = typeof executeInteractiveOperationEffect
 type CompletedOutcome<T> = Extract<InteractiveOperationEffectOutcome<T>, { status: 'completed' }>
 type IncompleteOutcome<T> = Exclude<InteractiveOperationEffectOutcome<T>, { status: 'completed' }>
 
+interface RendererOperationContext {
+  cwd: string
+  projectId?: string
+  workspaceId?: string
+  goalId?: string
+  workItemId?: string
+}
+
 export async function executeInteractiveOperationEffectWriteFile(
   id: string,
   relPath: unknown,
   content: unknown,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
@@ -38,9 +47,10 @@ export async function executeInteractiveOperationEffectWriteFile(
   const safeContent = typeof content === 'string' ? content : ''
   const outcome = await runOperation({
     kind: 'file_write',
+    rootDir,
     title: '保存项目文件',
     sourceSessionId: id,
-    projectId: context.projectId,
+    ...rendererOperationOwnership(context),
     cwd: context.cwd,
     toolName: 'write_file',
     toolInput: { path: safePath, content: safeContent },
@@ -59,16 +69,18 @@ export async function executeInteractiveOperationEffectWriteFile(
 export async function executeInteractiveOperationEffectGitCommit(
   id: string,
   message: unknown,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
   const safeMessage = typeof message === 'string' ? message : ''
   const outcome = await runOperation({
     kind: 'git_commit',
+    rootDir,
     title: '提交 Git 改动',
     sourceSessionId: id,
-    projectId: context.projectId,
+    ...rendererOperationOwnership(context),
     cwd: context.cwd,
     toolName: 'git_commit',
     toolInput: { message: safeMessage },
@@ -88,7 +100,8 @@ export async function executeInteractiveOperationEffectDiscardHunk(
   id: string,
   filePath: unknown,
   hunkPatch: unknown,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
@@ -96,9 +109,10 @@ export async function executeInteractiveOperationEffectDiscardHunk(
   const safePatch = typeof hunkPatch === 'string' ? hunkPatch : ''
   const outcome = await runOperation({
     kind: 'workspace_hunk_discard',
+    rootDir,
     title: '丢弃工作区 hunk',
     sourceSessionId: id,
-    projectId: context.projectId,
+    ...rendererOperationOwnership(context),
     cwd: context.cwd,
     toolName: 'workspace_discard_hunk',
     toolInput: { filePath: safePath, hunkPatch: safePatch },
@@ -118,7 +132,8 @@ export async function executeInteractiveOperationEffectGitIndex(
   id: string,
   channel: GitIndexEffectIpcChannel,
   toolInput: Record<string, unknown>,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
@@ -126,9 +141,10 @@ export async function executeInteractiveOperationEffectGitIndex(
   const effectInput: GitIndexEffectInput = { toolName, cwd: context.cwd, toolInput }
   const outcome = await runOperation({
     kind: 'git_index_update',
+    rootDir,
     title: gitIndexOperationTitle(channel),
     sourceSessionId: id,
-    projectId: context.projectId,
+    ...rendererOperationOwnership(context),
     cwd: context.cwd,
     toolName,
     toolInput,
@@ -148,7 +164,8 @@ export async function executeInteractiveOperationEffectCopyImage(
   id: string,
   sourcePath: unknown,
   attachmentsRoot: string,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
@@ -158,7 +175,13 @@ export async function executeInteractiveOperationEffectCopyImage(
       isAbsolute(sourcePath) ? sourcePath : resolve(context.cwd, sourcePath)
     )
     return executePreparedImageAttachmentEffect(
-      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      {
+        sourceSessionId: id,
+        ...rendererOperationOwnership(context),
+        cwd: context.cwd,
+        attachmentsRoot,
+        rootDir
+      },
       prepared,
       'user_file',
       runOperation
@@ -172,7 +195,8 @@ export async function executeInteractiveOperationEffectCopyDocument(
   id: string,
   sourcePath: unknown,
   attachmentsRoot: string,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
@@ -183,7 +207,13 @@ export async function executeInteractiveOperationEffectCopyDocument(
       context.cwd
     )
     return executePreparedDocumentAttachmentEffect(
-      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      {
+        sourceSessionId: id,
+        ...rendererOperationOwnership(context),
+        cwd: context.cwd,
+        attachmentsRoot,
+        rootDir
+      },
       prepared,
       runOperation
     )
@@ -197,14 +227,21 @@ export async function executeInteractiveOperationEffectSaveImageBytes(
   data: ImageAttachmentBytesInput,
   mime: string | undefined,
   attachmentsRoot: string,
-  runOperation: OperationGateway
+  runOperation: OperationGateway,
+  rootDir?: string
 ) {
   const context = rendererOperationContext(id)
   if (!context) return { ok: false, error: '会话不存在' }
   try {
     const prepared = prepareImageAttachmentBytes(data, { mime })
     return executePreparedImageAttachmentEffect(
-      { sourceSessionId: id, projectId: context.projectId, cwd: context.cwd, attachmentsRoot },
+      {
+        sourceSessionId: id,
+        ...rendererOperationOwnership(context),
+        cwd: context.cwd,
+        attachmentsRoot,
+        rootDir
+      },
       prepared,
       'renderer_bytes',
       runOperation
@@ -214,9 +251,37 @@ export async function executeInteractiveOperationEffectSaveImageBytes(
   }
 }
 
-function rendererOperationContext(id: string): { cwd: string; projectId?: string } | undefined {
+function rendererOperationContext(id: string): RendererOperationContext | undefined {
   const session = sessionManager.get(id)
-  return session?.meta.cwd ? { cwd: session.meta.cwd, projectId: session.meta.projectId } : undefined
+  if (!session?.meta.cwd) return undefined
+  return {
+    cwd: session.meta.cwd,
+    ...canonicalRendererOperationOwnership(session.meta)
+  }
+}
+
+export function canonicalRendererOperationOwnership(
+  meta: Pick<SessionMeta, 'workspaceId' | 'goalId' | 'workItemId'>
+): Omit<RendererOperationContext, 'cwd'> {
+  const workspaceId = meta.workspaceId?.trim()
+  const goalId = meta.goalId?.trim()
+  const workItemId = meta.workItemId?.trim()
+  return {
+    ...(workspaceId ? { projectId: workspaceId, workspaceId } : {}),
+    ...(goalId ? { goalId } : {}),
+    ...(workItemId ? { workItemId } : {})
+  }
+}
+
+function rendererOperationOwnership(
+  context: RendererOperationContext
+): Omit<RendererOperationContext, 'cwd'> {
+  return {
+    ...(context.projectId ? { projectId: context.projectId } : {}),
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+    ...(context.goalId ? { goalId: context.goalId } : {}),
+    ...(context.workItemId ? { workItemId: context.workItemId } : {})
+  }
 }
 
 function safeGitCommit(cwd: string, message: string): GitCommitResult {

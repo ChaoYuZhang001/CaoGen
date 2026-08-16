@@ -56,6 +56,7 @@ export function getWorkspaceDiff(cwd: string): WorkspaceDiff {
   try {
     repoRoot = execFileSync('git', withSafeLocalGitConfig(['-C', cwd, 'rev-parse', '--show-toplevel']), {
       encoding: 'utf8',
+      env: isolatedLocalGitEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe']
     }).trim()
     output = execFileSync(
@@ -63,6 +64,7 @@ export function getWorkspaceDiff(cwd: string): WorkspaceDiff {
       withSafeLocalGitConfig(['-C', cwd, 'diff', '--no-ext-diff', '--no-textconv', '--binary', '--', '.']),
       {
         encoding: 'buffer',
+        env: isolatedLocalGitEnv(process.env),
         maxBuffer: MAX_EXEC_BUFFER,
         stdio: ['ignore', 'pipe', 'pipe']
       }
@@ -100,6 +102,7 @@ function getUntrackedFilesDiff(cwd: string, repoRoot: string): { files: Workspac
       withSafeLocalGitConfig(['-C', cwd, 'ls-files', '--others', '--exclude-standard', '-z', '--full-name', '--', '.']),
       {
         encoding: 'buffer',
+        env: isolatedLocalGitEnv(process.env),
         maxBuffer: MAX_EXEC_BUFFER,
         stdio: ['ignore', 'pipe', 'pipe']
       }

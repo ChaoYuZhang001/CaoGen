@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 export interface GitCliOverride {
   executable: string
@@ -23,7 +24,11 @@ export function gitCliOverrideExists(command: 'gh' | 'glab'): boolean {
 export function gitCliAvailable(command: 'gh' | 'glab', timeoutMs: number): boolean {
   if (gitCliOverrideExists(command)) return true
   const probe = process.platform === 'win32' ? 'where' : 'which'
-  return spawnSync(probe, [command], { stdio: 'ignore', timeout: timeoutMs }).status === 0
+  return spawnSync(probe, [command], {
+    env: buildMinimalSubprocessEnv(),
+    stdio: 'ignore',
+    timeout: timeoutMs
+  }).status === 0
 }
 
 export function gitCliForProvider(provider: 'github' | 'gitlab'): 'gh' | 'glab' {

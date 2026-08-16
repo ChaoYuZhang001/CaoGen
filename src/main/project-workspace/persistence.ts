@@ -41,7 +41,11 @@ function emptyState(): ProjectWorkspaceState {
     goals: [],
     workItems: [],
     squads: [],
+    members: [],
+    invitations: [],
     comments: [],
+    sharedApprovals: [],
+    inboxReceipts: [],
     events: []
   }
 }
@@ -65,7 +69,7 @@ function assertState(value: unknown): asserts value is ProjectWorkspaceState {
       throw new ProjectWorkspaceError('corrupt_store', `project workspace store ${field} is invalid`)
     }
   }
-  for (const field of ['squads', 'comments'] as const) {
+  for (const field of ['squads', 'members', 'invitations', 'comments', 'sharedApprovals', 'inboxReceipts'] as const) {
     if (candidate[field] !== undefined && !Array.isArray(candidate[field])) {
       throw new ProjectWorkspaceError('corrupt_store', `project workspace store ${field} is invalid`)
     }
@@ -88,7 +92,11 @@ export function parseProjectWorkspaceState(raw: string): ProjectWorkspaceState {
   return {
     ...value,
     squads: value.squads ?? [],
-    comments: value.comments ?? []
+    members: value.members ?? [],
+    invitations: value.invitations ?? [],
+    comments: value.comments ?? [],
+    sharedApprovals: value.sharedApprovals ?? [],
+    inboxReceipts: value.inboxReceipts ?? []
   }
 }
 

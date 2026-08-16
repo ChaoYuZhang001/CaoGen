@@ -2,6 +2,7 @@ import type {
   TaskPlanApi,
   TaskPlanApprovalInput,
   TaskPlanDraftInput,
+  TaskPlanGenerateInput,
   TaskStrategy
 } from '../shared/types'
 import { invokeAppFeature } from './app-feature'
@@ -14,10 +15,14 @@ export const taskPlanApi: TaskPlanApi = {
   setTaskStrategy: (sessionId: string, strategy: TaskStrategy) =>
     invoke('strategy', sessionId, strategy),
   getTaskPlan: (sessionId: string) => invoke('get', sessionId),
+  generateTaskPlan: (sessionId: string, input: TaskPlanGenerateInput) =>
+    invoke('generate', sessionId, input),
   createTaskPlanVersion: (sessionId: string, draft: TaskPlanDraftInput) =>
     invoke('create-version', sessionId, draft),
   approveTaskPlan: (sessionId: string, input: TaskPlanApprovalInput) =>
     invoke('approve', sessionId, input),
+  dispatchApprovedTaskPlan: (sessionId: string, input: TaskPlanApprovalInput) =>
+    invoke('dispatch', sessionId, input),
   revokeTaskPlanApproval: (sessionId: string, input: TaskPlanApprovalInput) =>
     invoke('revoke', sessionId, input)
 }

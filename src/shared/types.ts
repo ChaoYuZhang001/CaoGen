@@ -1,13 +1,12 @@
-/**
- * 主进程 / 预加载 / 渲染进程共享的类型定义。
- * 仅包含类型(编译期擦除),两侧 tsconfig 都会引入本目录。
- */
+/** 主进程、预加载与渲染进程共享的编译期类型。 */
 import type { EffectRecord, EffectStatus, InteractiveOperationKind, InteractiveOperationSource, MigrationImportOperationResult, TaskRunOperationMetadata } from './effect-types'
 import type { TaskDagAutoMergeView, TaskDagFinalizationRecord, TaskDagFinalizationResolution, TaskDagFinalizationView } from './task-dag-finalization-types'
 import type { DigitalWorkerApi, DigitalWorkerBinding } from './digital-worker-types'
 import type { ModelAttemptRecoveryApi } from './model-attempt-types'
 import type { WorkflowLedgerApi } from './workflow-types'
 import type { ProjectWorkspaceApi } from './project-workspace-types'
+import type { ProjectPortfolioApi } from './project-portfolio-types'
+import type { RemoteApi } from './remote-types'
 import type { OutboundContextManifest } from './project-workspace-types'
 import type { LearningApi } from './learning-types'
 import type { SupervisorStateApi } from './supervisor-types'
@@ -23,13 +22,27 @@ import type { ProjectDataLifecycleApi } from './data-lifecycle-types'
 import type { PluginInstallResult, PluginUninstallResult } from './plugin-types'
 import type { TerminalEffectApi } from './terminal-operation-types'
 import type { BrowserNavigationEffectApi, BrowserViewState } from './browser-operation-types'
+import type { MediaApi } from './media-types'
+import type { SessionQueryInput, SessionQueryPage } from './session-query-types'
 import type { NotificationConnectorInput, NotificationConnectorView } from './notification-connector-types'
 import type { ProviderApiKeyInput, ProviderApiKeyUpdateInput, ProviderCredentialPolicy, ProviderCredentialRoutingMode } from './provider-credential-routing-types'
 import type { ProviderAuthorization } from './provider-authorization-types'
 import type { ProviderAnthropicRuntimeConfig } from './provider-anthropic-runtime-types'
 import type { ProviderGeminiRuntimeConfig } from './provider-gemini-runtime-types'
+import type {
+  PluginRegistryItem, PluginRegistryRevealResult, PluginRegistryScanOptions,
+  PluginRegistrySetEnabledResult, PluginRegistryTrustMutationResult, PluginRegistryView
+} from './plugin-registry-types'
+import type {
+  ListProjectFilesResult, ProjectDiagnosticsResult, ProjectSymbolSearchResult,
+  ReadTextFileResult, SearchProjectTextResult, SemanticCompletionResult,
+  SemanticDefinitionResult, SemanticDiagnosticsResult, SemanticHoverResult,
+  TypeScriptLanguageInput, WriteTextFileResult
+} from './file-intelligence-types'
 export type { ProviderAuthorization, ProviderAuthorizationMethod, ProviderAuthorizationStatus } from './provider-authorization-types'
 export type * from './provider-anthropic-runtime-types'
+export type * from './plugin-registry-types'
+export type * from './file-intelligence-types'
 export type { UserMessageAttachmentView } from './attachment-types'
 export type * from './provider-profile-types'
 export type * from './provider-profile-webdav-types'
@@ -52,6 +65,10 @@ export * from './workflow-repair'
 export type * from './digital-worker-types'
 export type * from './watercolor-character'
 export type * from './project-workspace-types'
+export type * from './project-portfolio-types'
+export type * from './remote-types'
+export type * from './project-connector-catalog'
+export { PROJECT_CONNECTOR_CATALOG } from './project-connector-catalog'
 export { MANAGED_PERSONAL_WORKSPACE_ID } from './project-workspace-types'
 export type * from './learning-types'
 export type * from './supervisor-types'
@@ -59,6 +76,8 @@ export type * from './provider-authorization-types'
 export type * from './provider-balance-types'
 export type * from './terminal-operation-types'
 export type * from './browser-operation-types'
+export type * from './media-types'
+export type * from './session-query-types'
 export type {
   EffectEvidenceKind,
   EffectEvidenceRecord,
@@ -206,6 +225,16 @@ export interface ModelRoutingAlternativeView {
   reliability: number
   estimatedCostUsd: number
   latencyEmaMs?: number
+  scoreBreakdown?: {
+    capability: number
+    quality: number
+    acceptanceQuality: number
+    acceptanceSamples: number
+    speed: number
+    cost: number
+    health: number
+    composite: number
+  }
 }
 
 /** 一次自动调度的结构化决策日志，供聊天、控制面板和 3D 办公复用。 */
@@ -222,6 +251,9 @@ export interface ModelRoutingDecisionView {
   reliability?: number
   estimatedCostUsd?: number
   latencyEmaMs?: number
+  scoreBreakdown?: ModelRoutingAlternativeView['scoreBreakdown']
+  /** SHA-256 of the non-secret route inputs and candidate scores. */
+  decisionDigest?: string
   remainingBudgetUsd?: number
   manualOverrideApplied: boolean
   selectionReason?: string
@@ -749,6 +781,8 @@ export interface TaskDagTask {
   dependencies: string[]
   role: TaskDagRole
   prompt: string
+  /** Approved Project plan steps bind child Runs to their projected canonical WorkItem. */
+  workItemId?: string
 }
 
 export interface TaskDag {
@@ -945,14 +979,23 @@ export type TaskRunStatus =
 
 export type TaskStepStatus = TaskRunStatus
 
-export interface TaskRunContinuation {
-  schemaVersion: 1
-  kind: 'conversation_fork'
-  sourceSessionId: string
-  sourceRunId: string
-  sourceSdkSessionId: string
-  sourceCheckpointId?: string
-}
+export type TaskRunContinuation =
+  | {
+      schemaVersion: 1
+      kind: 'conversation_fork'
+      sourceSessionId: string
+      sourceRunId: string
+      sourceSdkSessionId: string
+      sourceCheckpointId?: string
+    }
+  | {
+      schemaVersion: 1
+      kind: 'work_item_transfer'
+      requestId: string
+      assignmentId: string
+      sourceSessionId?: string
+      sourceRunId?: string
+    }
 
 export interface TaskStepRecord {
   id: string
@@ -1233,6 +1276,10 @@ export interface StartSuggestion {
 }
 
 export type OfficeQualityMode = 'auto' | 'high' | 'balanced' | 'low'
+export type OfficeSpaceTheme = 'control-room' | 'creative-studio' | 'quiet-library'
+export type OfficeOutfitPalette = 'role-default' | 'graphite' | 'teal' | 'rose'
+export type OfficeHairStyle = 'role-default' | 'short' | 'long' | 'tied'
+export type OfficeTeamLayout = 'grid' | 'team-photo'
 
 export interface OfficeSettings {
   /** 3D 控制室画质;auto 仅持久化请求档位,实际档位由运行时测量决定。 */
@@ -1243,6 +1290,14 @@ export interface OfficeSettings {
   liveliness: number
   /** 趣味外观:给小人加猫耳 */
   catEars: boolean
+  /** 原创空间主题，不改变真实任务/状态投影。 */
+  spaceTheme: OfficeSpaceTheme
+  /** 水墨角色服装色调；仅作为原创资产视觉处理。 */
+  outfitPalette: OfficeOutfitPalette
+  /** 水墨角色发型轮廓。 */
+  hairStyle: OfficeHairStyle
+  /** 常规工位或团队合影式排布。 */
+  teamLayout: OfficeTeamLayout
 }
 
 export type ChatDensity = 'comfortable' | 'compact'
@@ -1269,8 +1324,10 @@ export interface AppSettings {
   driveMode: CaoGenDriveMode
   /** 新任务默认策略;单个 Session 可以显式覆盖且不改写该偏好。 */
   defaultTaskStrategy: TaskStrategy
-  /** Assistant/Studio 默认入口；单任务可通过 experienceModeOverride 临时覆盖。 */
-  experienceMode: 'assistant' | 'studio'
+  /** 助手、项目工作台或视频工作室的默认顶层入口。 */
+  experienceMode: 'assistant' | 'studio' | 'video'
+  /** 用户已忽略的可解释体验建议；只隐藏同一输入版本，不允许系统静默应用建议。 */
+  experienceRecommendationDismissedId: string
   /** 空字符串 = 跟随 CLI 默认 */
   defaultModel: string
   defaultPermissionMode: PermissionModeId
@@ -1999,127 +2056,6 @@ export interface CheckpointRestoreResult {
   note?: string
 }
 
-export type PluginRegistryKind = 'plugin' | 'skill' | 'agent' | 'mcp'
-export type PluginRegistrySourceKind = 'project' | 'user' | 'codex' | 'other'
-export type PluginRegistryEnabledSource = 'manifest' | 'user'
-export type PluginRegistryTrustStatus = 'approved' | 'approval_required' | 'changed' | 'invalid'
-
-export interface PluginCapabilityManifest {
-  schemaVersion: 1
-  capabilities: string[]
-  transport?: 'stdio' | 'http' | 'unknown'
-  /** Names only. Values from MCP configuration never cross into Renderer. */
-  environmentVariables?: string[]
-  digest: string
-}
-
-export interface PluginCapabilityDiff {
-  added: string[]
-  removed: string[]
-  expanded: boolean
-}
-
-export interface PluginRegistryTrustView {
-  status: PluginRegistryTrustStatus
-  approvedAt?: string
-  approvedContentDigest?: string
-  approvedCapabilityDigest?: string
-  capabilityDiff: PluginCapabilityDiff
-  reason?: string
-}
-
-export interface PluginRegistryProvenance {
-  origin: 'project_local' | 'user_local' | 'codex_local' | 'managed_local' | 'other_local'
-  sourceKind: PluginRegistrySourceKind
-  managed: boolean
-}
-
-export interface PluginRegistryItem {
-  id: string
-  name: string
-  kind: PluginRegistryKind
-  sourceKind?: PluginRegistrySourceKind
-  sourceRoot: string
-  path: string
-  enabled: boolean
-  enabledSource?: PluginRegistryEnabledSource
-  enabledUpdatedAt?: string
-  summary?: string
-  /** manifest / frontmatter 声明的版本;未声明为空 */
-  version?: string
-  /** manifest 声明的权限/能力清单(mcp 为环境变量名);仅声明,未经运行时验证 */
-  permissions?: string[]
-  /** 位于 ~/.claude/plugins 下(CaoGen 托管,可卸载) */
-  managed?: boolean
-  /** SHA-256 over raw file bytes or a canonical, symlink-safe directory walk. */
-  contentDigest?: string
-  provenance: PluginRegistryProvenance
-  capabilityManifest: PluginCapabilityManifest
-  trust: PluginRegistryTrustView
-}
-
-export interface PluginRegistryDiagnostic {
-  code:
-    | 'root_missing'
-    | 'read_failed'
-    | 'json_parse_failed'
-    | 'json_shape_invalid'
-    | 'max_files_reached'
-    | 'digest_failed'
-  message: string
-  path: string
-}
-
-export interface PluginRegistryView {
-  roots: string[]
-  items: PluginRegistryItem[]
-  diagnostics: PluginRegistryDiagnostic[]
-  limits: {
-    maxFiles: number
-    maxDepth: number
-  }
-  scannedAt: string
-  truncated: boolean
-}
-
-export interface PluginRegistryScanOptions {
-  maxFiles?: number
-  maxDepth?: number
-  maxReadBytes?: number
-  includeSiblingProjectMcp?: boolean
-  /** CaoGen 托管插件根;位于其下的条目标记 managed 可卸载 */
-  managedRoot?: string
-}
-
-export interface PluginRegistryRevealResult {
-  ok: boolean
-  path?: string
-  error?: string
-}
-
-export interface PluginRegistrySetEnabledResult {
-  ok: boolean
-  item?: PluginRegistryItem
-  error?: string
-}
-
-export interface PluginRegistryTrustMutationResult {
-  ok: boolean
-  item?: PluginRegistryItem
-  error?: string
-}
-
-/** MCP 运行态探测结果(stdio initialize 握手 / http 可达) */
-export interface McpProbeResult {
-  id: string
-  ok: boolean
-  transport: 'stdio' | 'http' | 'unknown'
-  serverName?: string
-  serverVersion?: string
-  latencyMs?: number
-  error?: string
-}
-
 export type RoutinePermissionMode = PermissionModeId
 
 export interface RoutineNotificationOptions {
@@ -2472,150 +2408,6 @@ export type WorktreePullRequestResult =
       snapshotId?: string
     }
 
-export type ProjectFileKind = 'file' | 'directory'
-
-export interface ProjectFileEntry {
-  path: string
-  name: string
-  kind: ProjectFileKind
-  size?: number
-  mtimeMs: number
-}
-
-export interface ListProjectFilesResult {
-  ok: boolean
-  root?: string
-  entries: ProjectFileEntry[]
-  truncated?: boolean
-  error?: string
-}
-
-export interface ProjectTextSearchMatch {
-  path: string
-  line: number
-  column: number
-  snippet: string
-  matchStart: number
-  matchLength: number
-}
-
-export interface SearchProjectTextResult {
-  ok: boolean
-  query?: string
-  matches: ProjectTextSearchMatch[]
-  filesScanned?: number
-  filesMatched?: number
-  truncated?: boolean
-  error?: string
-}
-
-export interface ProjectDiagnostic {
-  path: string
-  line: number
-  column: number
-  endLine: number
-  endColumn: number
-  severity: 'error' | 'warning' | 'info'
-  source: string
-  code: string
-  message: string
-}
-
-export interface ProjectDiagnosticsResult {
-  ok: boolean
-  diagnostics: ProjectDiagnostic[]
-  analyzedFiles: number
-  supportedFiles: number
-  truncated: boolean
-  error?: string
-}
-
-export interface ProjectSymbolLocation {
-  name: string
-  kind: string
-  path: string
-  line: number
-  column: number
-  endLine: number
-  signature: string
-  exported: boolean
-}
-
-export interface ProjectSymbolSearchResult {
-  ok: boolean
-  symbols: ProjectSymbolLocation[]
-  error?: string
-}
-
-export interface TypeScriptLanguageInput {
-  path: string
-  content: string
-  line: number
-  column: number
-}
-
-export interface SemanticCompletionItem {
-  label: string
-  kind: string
-  detail: string
-  insertText: string
-}
-
-export interface SemanticCompletionResult {
-  ok: boolean
-  engine: 'typescript-lsp'
-  items: SemanticCompletionItem[]
-  error?: string
-}
-
-export interface SemanticHoverResult {
-  ok: boolean
-  engine: 'typescript-lsp'
-  markdown: string
-  error?: string
-}
-
-export interface SemanticDefinitionLocation {
-  path: string
-  line: number
-  column: number
-  endLine: number
-  endColumn: number
-}
-
-export interface SemanticDefinitionResult {
-  ok: boolean
-  engine: 'typescript-lsp'
-  locations: SemanticDefinitionLocation[]
-  error?: string
-}
-
-export interface SemanticDiagnostic extends ProjectDiagnostic {}
-
-export interface SemanticDiagnosticsResult {
-  ok: boolean
-  engine: 'typescript-lsp'
-  diagnostics: SemanticDiagnostic[]
-  error?: string
-}
-
-export interface ReadTextFileResult {
-  ok: boolean
-  path?: string
-  content?: string
-  bytes?: number
-  mtimeMs?: number
-  error?: string
-}
-
-export interface WriteTextFileResult {
-  ok: boolean
-  path?: string
-  bytes?: number
-  mtimeMs?: number
-  error?: string
-}
-
 export type PreviewType = 'html' | 'markdown' | 'text' | 'csv' | 'json' | 'image' | 'pdf' | 'office' | 'unknown'
 export type PreviewMode = 'text' | 'asset' | 'unsupported'
 
@@ -2799,8 +2591,9 @@ export type MenuCommand =
   | { type: 'select-session'; index: number }
 
 /** 通过 contextBridge 暴露给渲染进程的 API */
-export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, ProjectTestApi, ProjectDebugApi, ProjectRefactorApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
+export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, ProjectPortfolioApi, RemoteApi, MediaApi, ProjectTestApi, ProjectDebugApi, ProjectRefactorApi, DigitalWorkerApi, ModelAttemptRecoveryApi, LearningApi, SupervisorStateApi, ProviderProfileApi, TaskPlanApi, MigrationApi, StudioResultApi, ProjectDataLifecycleApi, TerminalEffectApi, BrowserNavigationEffectApi {
   listSessions(): Promise<SessionMeta[]>
+  querySessions(input?: SessionQueryInput): Promise<SessionQueryPage>
   listPendingPermissions(sessionId: string): Promise<PermissionRequestInfo[]>
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>
   suggestFiles(sessionId: string, query: string): Promise<string[]>

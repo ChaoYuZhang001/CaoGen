@@ -230,9 +230,25 @@ try {
     assigneeId: activeWorker.id,
     assignedBy: 'owner-a'
   })
-  const retired = await restarted.retireDigitalWorker(activeWorker.id, { now: 1_006 })
+  await assertRejects(
+    restarted.retireDigitalWorker(activeWorker.id, { now: 1_006 }),
+    (error) => error?.code === 'CONFLICT' && /active Assignment/.test(String(error?.message)),
+    'DigitalWorker retirement must fail closed while an Assignment is active'
+  )
+  assertEqual(
+    (await restarted.getAssignment(inFlightAssignment.id))?.status,
+    'active',
+    'rejected retirement must preserve the active Assignment'
+  )
+  const releasedForRetirement = await restarted.releaseAssignment(
+    inFlightAssignment.id,
+    inFlightAssignment.revision,
+    { now: 1_007, reason: 'worker retirement' }
+  )
+  const retired = await restarted.retireDigitalWorker(activeWorker.id, { now: 1_008 })
   assertEqual(retired.status, 'retired', 'DigitalWorker supports retirement')
-  assertEqual((await restarted.getAssignment(inFlightAssignment.id))?.status, 'active', 'retirement does not delete an in-flight Assignment')
+  assertEqual(releasedForRetirement.status, 'released', 'retirement requires the active Assignment to be released')
+  assertEqual((await restarted.getAssignment(inFlightAssignment.id))?.status, 'released', 'retirement preserves released Assignment history')
   await assertRejects(
     restarted.createAssignment({
       projectId: 'project-a',

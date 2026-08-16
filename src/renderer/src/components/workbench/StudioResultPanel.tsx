@@ -63,7 +63,7 @@ export default function StudioResultPanel({
 
   const tabs = useMemo(() => [
     { id: 'summary' as const, label: labels.summary },
-    { id: 'artifacts' as const, label: `${labels.artifacts}${snapshot ? ` ${snapshot.summary.artifacts}` : ''}` },
+    { id: 'artifacts' as const, label: `${labels.artifacts}${snapshot ? ` ${snapshot.summary.currentArtifacts}/${snapshot.summary.artifacts}` : ''}` },
     { id: 'evidence' as const, label: `${labels.evidence}${snapshot ? ` ${snapshot.summary.evidence}` : ''}` },
     { id: 'timeline' as const, label: labels.timeline }
   ], [labels, snapshot])
@@ -140,6 +140,7 @@ function useStudioResult(sessionId: string | null, labels: Labels, language: 'zh
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
   const [message, setMessage] = useState<string>()
+  const refreshTimer = useRef<number | undefined>()
   const savedLabel = labels.saved
   const refresh = useCallback(async (): Promise<void> => {
     if (!sessionId) {
@@ -161,6 +162,45 @@ function useStudioResult(sessionId: string | null, labels: Labels, language: 'zh
     setMessage(undefined)
     void refresh()
   }, [refresh])
+
+  // Repair/retest projections are emitted by the main process after the
+  // Session event that started them. Keep the result surface on the same
+  // canonical snapshot without refreshing on every streamed token.
+  useEffect(() => {
+    if (!sessionId) return
+    const scheduleRefresh = (): void => {
+      if (refreshTimer.current !== undefined) window.clearTimeout(refreshTimer.current)
+      refreshTimer.current = window.setTimeout(() => {
+        refreshTimer.current = undefined
+        void refresh()
+      }, 250)
+    }
+    const unsubscribe = window.agentDesk.onSessionEvent((eventSessionId, event) => {
+      if (eventSessionId !== sessionId) return
+      if (event.kind === 'turn-result' || event.kind === 'status' || event.kind === 'checkpoint-restore' || event.kind === 'meta') {
+        scheduleRefresh()
+      }
+    })
+    return () => {
+      unsubscribe()
+      if (refreshTimer.current !== undefined) {
+        window.clearTimeout(refreshTimer.current)
+        refreshTimer.current = undefined
+      }
+    }
+  }, [refresh, sessionId])
+
+  useEffect(() => {
+    if (!sessionId || snapshot?.state !== 'ready') return
+    const hasActiveWorkflow = snapshot.acceptances.some((acceptance) =>
+      acceptance.deliveryScope !== 'historical' &&
+      (acceptance.status === 'pending' || acceptance.status === 'verifying' || acceptance.status === 'failed')) ||
+      snapshot.workItems.some((item) => !['done', 'failed', 'cancelled'].includes(item.status))
+    if (!hasActiveWorkflow) return
+    const interval = window.setInterval(() => { void refresh() }, 2500)
+    return () => window.clearInterval(interval)
+  }, [refresh, sessionId, snapshot])
+
   const save = useCallback(async (): Promise<void> => {
     if (!sessionId || snapshot?.state !== 'ready') return
     setMessage(undefined)
@@ -206,24 +246,61 @@ function useResultAcceptanceReview(
   const [acceptances, setAcceptances] = useState<WorkflowAcceptanceRecord[]>([])
   const [evidence, setEvidence] = useState<WorkflowEvidenceRecord[]>([])
   const acceptanceIds = snapshot?.acceptances.map((acceptance) => acceptance.id).join('\n') ?? ''
+  const projectId = snapshot?.scope.workspaceId
   const refresh = useCallback(async (): Promise<void> => {
     const ids = new Set(acceptanceIds ? acceptanceIds.split('\n') : [])
-    if (ids.size === 0) {
+    if (ids.size === 0 || !projectId) {
       setAcceptances([])
       setEvidence([])
       await refreshSnapshot()
       return
     }
-    const [ledger, nextEvidence] = await Promise.all([
-      window.agentDesk.listWorkflowLedger({ limit: 25 }),
-      window.agentDesk.queryWorkflowEvidence({ limit: 100 })
+    const [nextAcceptances, nextEvidence] = await Promise.all([
+      loadResultAcceptances(projectId, ids),
+      loadResultEvidence(projectId)
     ])
-    setAcceptances(ledger.acceptances.items.filter((acceptance) => ids.has(acceptance.id)))
-    setEvidence(nextEvidence.items)
+    setAcceptances(nextAcceptances)
+    setEvidence(nextEvidence)
     await refreshSnapshot()
-  }, [acceptanceIds, refreshSnapshot])
+  }, [acceptanceIds, projectId, refreshSnapshot])
   useEffect(() => { void refresh() }, [refresh])
   return { acceptances, evidence, refresh }
+}
+
+async function loadResultAcceptances(
+  projectId: string,
+  ids: ReadonlySet<string>
+): Promise<WorkflowAcceptanceRecord[]> {
+  const found = new Map<string, WorkflowAcceptanceRecord>()
+  let cursor: string | undefined
+  do {
+    const selection = await window.agentDesk.listWorkflowLedger({
+      projectId,
+      limit: 250,
+      ...(cursor ? { cursor } : {})
+    })
+    for (const acceptance of selection.acceptances.items) {
+      if (ids.has(acceptance.id)) found.set(acceptance.id, acceptance)
+    }
+    if (found.size === ids.size || !selection.acceptances.hasMore) break
+    cursor = selection.acceptances.nextCursor
+  } while (cursor)
+  return [...found.values()].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+}
+
+async function loadResultEvidence(projectId: string): Promise<WorkflowEvidenceRecord[]> {
+  const records: WorkflowEvidenceRecord[] = []
+  let cursor: string | undefined
+  do {
+    const page = await window.agentDesk.queryWorkflowEvidence({
+      projectId,
+      limit: 500,
+      ...(cursor ? { cursor } : {})
+    })
+    records.push(...page.items)
+    cursor = page.nextCursor
+  } while (cursor)
+  return records
 }
 
 function errorMessage(cause: unknown): string {
@@ -257,7 +334,12 @@ function ReadyResult({
     evidenceIds: string[]
     acceptanceIds: string[]
   } | undefined>()
-  const [repairByAcceptanceId, setRepairByAcceptanceId] = useState<Record<string, string>>({})
+  const [reportedRepairByAcceptanceId, setReportedRepairByAcceptanceId] = useState<Record<string, string>>({})
+  const repairByAcceptanceId = useMemo(() => ({
+    ...Object.fromEntries(snapshot.acceptances.flatMap((acceptance) =>
+      acceptance.repairWorkItemId ? [[acceptance.id, acceptance.repairWorkItemId]] : [])),
+    ...reportedRepairByAcceptanceId
+  }), [reportedRepairByAcceptanceId, snapshot.acceptances])
 
   // T07:Artifact → Evidence 下钻:切到 evidence Tab 并高亮/滚动
   const handleDrillEvidence = useCallback((artifact: StudioResultArtifact) => {
@@ -267,13 +349,27 @@ function ReadyResult({
 
   // T06:review 产生 repair 时回填映射,供 failed 行渲染 repair 入口
   const handleRepairReported = useCallback((repair: { acceptanceId: string; workItemId: string }) => {
-    setRepairByAcceptanceId((prev) => ({ ...prev, [repair.acceptanceId]: repair.workItemId }))
+    setReportedRepairByAcceptanceId((prev) => ({ ...prev, [repair.acceptanceId]: repair.workItemId }))
   }, [])
 
   // T06:repair 入口跳转(复用 openTool('tasks')/openSubagentPanel 契约,不新增 IPC)
-  const handleOpenRepair = useCallback((workItemId: string) => {
-    void openTool('tasks')
-  }, [openTool])
+  const handleOpenRepair = useCallback(async (workItemId: string): Promise<void> => {
+    const acceptanceId = Object.entries(repairByAcceptanceId)
+      .find(([, candidateWorkItemId]) => candidateWorkItemId === workItemId)?.[0]
+    const acceptance = acceptanceReview.acceptances.find((candidate) => candidate.id === acceptanceId)
+    if (!acceptance) {
+      throw new Error(language === 'en'
+        ? 'The failed Acceptance is no longer available for this repair.'
+        : '当前返工对应的失败 Acceptance 已不可用。')
+    }
+    const started = await window.agentDesk.startWorkflowAcceptanceRepair(acceptance.id)
+    if (started.workItemId !== workItemId) {
+      throw new Error(language === 'en'
+        ? 'The repair WorkItem changed while it was starting.'
+        : '返工任务在启动时发生了身份变化。')
+    }
+    await acceptanceReview.refresh()
+  }, [acceptanceReview, language, repairByAcceptanceId])
 
   // T09(P1-1):把 Evidence 关联到 Artifact(复用 createWorkflowEvidence + createWorkflowEvidenceLink, relation=verifies)
   const evidenceProjectId = acceptanceReview.acceptances[0]?.projectId
@@ -415,7 +511,8 @@ function SummaryView({
 }: ResultViewProps & { verdict?: DeliveryVerdictDetail; language?: 'zh' | 'en' }): React.JSX.Element {
   const metrics = [
     [labels.runs, snapshot.summary.runs],
-    [labels.artifacts, snapshot.summary.artifacts],
+    [labels.deliveryReady, `${snapshot.summary.readyArtifacts}/${snapshot.summary.currentArtifacts}`],
+    [labels.deliveryAttention, snapshot.summary.attentionArtifacts],
     [labels.evidence, snapshot.summary.evidence],
     [labels.acceptance, `${snapshot.summary.passedAcceptances}/${snapshot.summary.acceptances}`],
     [labels.tests, snapshot.summary.tests],
@@ -498,35 +595,78 @@ function ArtifactView({
   onDrillEvidence: (artifact: StudioResultArtifact) => void
   onOpen: (location: StudioResultArtifactLocation) => void
 }): React.JSX.Element {
+  const currentArtifacts = snapshot.artifacts.filter((artifact) => artifact.deliveryScope === 'current')
+  const historicalArtifacts = snapshot.artifacts.filter((artifact) => artifact.deliveryScope === 'historical')
   return (
     <div className="studio-result-content" role="tabpanel" data-studio-result-view="artifacts">
       {snapshot.artifacts.length === 0 ? <div className="studio-result-muted studio-result-list-empty">{labels.noArtifacts}</div> : (
-        <div className="studio-result-artifact-list">
-          {snapshot.artifacts.map((artifact) => (
-            <ArtifactRow
-              key={artifact.id}
-              artifact={artifact}
-              labels={labels}
-              language={language}
-              evidenceProjectId={evidenceProjectId}
-              onAttachEvidence={onAttachEvidence}
-              onDrillEvidence={onDrillEvidence}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
+        <>
+          <section className="studio-result-section studio-result-current-artifacts" data-studio-result-current-artifacts>
+            <h3>{language === 'en' ? 'Current deliverables' : '当前交付版本'}</h3>
+            <div className="studio-result-artifact-list">
+              {currentArtifacts.map((artifact) => (
+                <ArtifactRow
+                  key={artifact.id}
+                  artifact={artifact}
+                  labels={labels}
+                  language={language}
+                  evidenceProjectId={evidenceProjectId}
+                  onAttachEvidence={onAttachEvidence}
+                  onDrillEvidence={onDrillEvidence}
+                  onOpen={onOpen}
+                />
+              ))}
+            </div>
+          </section>
+          {historicalArtifacts.length > 0 && (
+            <section className="studio-result-section studio-result-historical-artifacts" data-studio-result-historical-artifacts>
+              <h3>{language === 'en' ? 'Historical versions' : '历史版本'}</h3>
+              <div className="studio-result-artifact-list">
+                {historicalArtifacts.map((artifact) => (
+                  <ArtifactRow
+                    key={artifact.id}
+                    artifact={artifact}
+                    labels={labels}
+                    language={language}
+                    evidenceProjectId={evidenceProjectId}
+                    onAttachEvidence={onAttachEvidence}
+                    onDrillEvidence={onDrillEvidence}
+                    onOpen={onOpen}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
     </div>
   )
 }
 
 function artifactVerificationStatus(artifact: StudioResultArtifact, language: 'zh' | 'en'): { label: string; tone: 'good' | 'warn' | 'bad' } {
-  const hasEvidence = artifact.evidenceIds.length > 0
-  const hasAcceptance = artifact.acceptanceIds.length > 0
-  if (hasEvidence && hasAcceptance) return language === 'en' ? { label: 'covered', tone: 'good' } : { label: '已覆盖', tone: 'good' }
-  if (hasEvidence) return language === 'en' ? { label: 'has evidence', tone: 'warn' } : { label: '有证据', tone: 'warn' }
-  if (hasAcceptance) return language === 'en' ? { label: 'linked to acceptance', tone: 'warn' } : { label: '已关联验收', tone: 'warn' }
-  return language === 'en' ? { label: 'not covered', tone: 'bad' } : { label: '未覆盖', tone: 'bad' }
+  const statuses = language === 'en' ? {
+    ready: { label: 'ready to deliver', tone: 'good' as const },
+    verification_pending: { label: 'acceptance pending', tone: 'warn' as const },
+    evidence_missing: { label: 'evidence missing', tone: 'bad' as const },
+    failed: { label: 'acceptance failed', tone: 'bad' as const },
+    unavailable: { label: 'file unavailable', tone: 'bad' as const },
+    superseded: { label: 'historical', tone: 'warn' as const }
+  } : {
+    ready: { label: '可交付', tone: 'good' as const },
+    verification_pending: { label: '待验收', tone: 'warn' as const },
+    evidence_missing: { label: '缺少证据', tone: 'bad' as const },
+    failed: { label: '验收失败', tone: 'bad' as const },
+    unavailable: { label: '文件不可用', tone: 'bad' as const },
+    superseded: { label: '历史版本', tone: 'warn' as const }
+  }
+  return statuses[artifact.deliveryStatus]
+}
+
+function artifactCategoryLabel(artifact: StudioResultArtifact, language: 'zh' | 'en'): string {
+  const labels = language === 'en'
+    ? { office: 'Office', code: 'Code', media: 'Media', report: 'Report', package: 'Package', other: 'Artifact' }
+    : { office: 'Office 文档', code: '代码', media: '媒体', report: '报告', package: '交付包', other: '产物' }
+  return labels[artifact.deliveryCategory]
 }
 
 function ArtifactRow({
@@ -576,14 +716,33 @@ function ArtifactRow({
   }
 
   return (
-    <section className="studio-result-artifact" data-studio-result-artifact={artifact.id}>
+    <section
+      className={`studio-result-artifact studio-result-artifact-${artifact.deliveryScope}`}
+      data-studio-result-artifact={artifact.id}
+      data-studio-result-artifact-scope={artifact.deliveryScope}
+    >
       <div className="studio-result-row-head">
         <div>
+          <div className="studio-result-artifact-badges">
+            <span className="studio-result-artifact-category">{artifactCategoryLabel(artifact, language)}</span>
+            <span className={`studio-result-status status-${verification.tone}`}>{verification.label}</span>
+          </div>
           <h3>{artifact.title}</h3>
-          <span>{artifact.kind} · v{artifact.version}</span>
+          <span>
+            {artifact.kind} · v{artifact.version}
+            {' · '}
+            {artifact.deliveryScope === 'current'
+              ? (language === 'en' ? 'current deliverable' : '当前可交付版本')
+              : (language === 'en' ? 'superseded historical version' : '已被替代的历史版本')}
+          </span>
         </div>
         <code>{shortDigest(artifact.digest)}</code>
       </div>
+      {artifact.deliveryScope === 'historical' && artifact.currentArtifactIds.length > 0 && (
+        <div className="studio-result-artifact-successor">
+          {language === 'en' ? 'Replaced by' : '已由当前版本替代'}: {artifact.currentArtifactIds.map(shortId).join(', ')}
+        </div>
+      )}
       <div className="studio-result-location-list">
         {artifact.locations.length === 0 ? <span className="studio-result-muted">{labels.noLocation}</span> : artifact.locations.map((location) => (
           <div key={location.id} className="studio-result-location">
@@ -602,8 +761,7 @@ function ArtifactRow({
           {' · '}
           {language === 'en' ? 'Acceptance' : '验证'} {artifact.acceptanceIds.length}
           {' · '}
-          {language === 'en' ? 'status' : '验证状态'}：
-          <span className={`studio-result-status status-${verification.tone}`}>{verification.label}</span>
+          {language === 'en' ? 'Delivery' : '交付状态'}：{verification.label}
         </span>
         <button type="button" className="studio-result-icon-button" data-artifact-drill onClick={() => onDrillEvidence(artifact)}>
           {language === 'en' ? 'Drill down' : '下钻证据'}
@@ -666,11 +824,14 @@ function EvidenceView({
   drill?: { artifactId: string; evidenceIds: string[]; acceptanceIds: string[] }
   repairByAcceptanceId: Record<string, string>
   onRepairReported: (repair: { acceptanceId: string; workItemId: string }) => void
-  onOpenRepair: (workItemId: string) => void
+  onOpenRepair: (workItemId: string) => Promise<void> | void
 }): React.JSX.Element {
   const drillEvidenceSet = useMemo(() => new Set(drill?.evidenceIds ?? []), [drill])
   const drillAcceptanceSet = useMemo(() => new Set(drill?.acceptanceIds ?? []), [drill])
   const [highlightId, setHighlightId] = useState<string | undefined>()
+  const acceptanceScope = useMemo(() => new Map(
+    snapshot.acceptances.map((acceptance) => [acceptance.id, acceptance.deliveryScope])
+  ), [snapshot.acceptances])
   useEffect(() => {
     if (!drill) return
     const target = drill.evidenceIds[0] ?? drill.acceptanceIds[0]
@@ -694,15 +855,19 @@ function EvidenceView({
         {/* T05:Acceptance 聚合条(pending/verifying/passed/failed/waived 计数) */}
         <AcceptanceSummary detail={verdict} language={language} />
         {snapshot.acceptances.length === 0 ? <div className="studio-result-muted">{labels.noAcceptance}</div> : acceptanceReview.acceptances.length > 0 ? acceptanceReview.acceptances.map((acceptance) => (
-          <WorkflowAcceptanceRow
-            key={acceptance.id}
-            acceptance={acceptance}
-            evidence={acceptanceReview.evidence}
-            onRefresh={acceptanceReview.refresh}
-            repairWorkItemId={repairByAcceptanceId[acceptance.id]}
-            onOpenRepair={onOpenRepair}
-            onRepairReported={onRepairReported}
-          />
+          acceptanceScope.get(acceptance.id) === 'historical' ? (
+            <HistoricalAcceptanceRow key={acceptance.id} id={acceptance.id} status={acceptance.status} language={language} />
+          ) : (
+            <WorkflowAcceptanceRow
+              key={acceptance.id}
+              acceptance={acceptance}
+              evidence={acceptanceReview.evidence}
+              onRefresh={acceptanceReview.refresh}
+              repairWorkItemId={repairByAcceptanceId[acceptance.id]}
+              onOpenRepair={onOpenRepair}
+              onRepairReported={onRepairReported}
+            />
+          )
         )) : snapshot.acceptances.map((acceptance) => (
           <div
             key={acceptance.id}
@@ -713,6 +878,9 @@ function EvidenceView({
             <span className={`studio-result-status status-${statusTone(acceptance.status)}`}>{acceptance.status}</span>
             <strong>{acceptance.criteria.length} {labels.criteria}</strong>
             <span>{acceptance.coveredCriteria}/{acceptance.criteria.length} {labels.covered}</span>
+            {acceptance.deliveryScope === 'historical' && (
+              <span>{language === 'en' ? 'historical superseded version' : '已被新版本取代的历史记录'}</span>
+            )}
           </div>
         ))}
       </section>
@@ -741,6 +909,24 @@ function EvidenceView({
           </div>
         ))}
       </section>
+    </div>
+  )
+}
+
+function HistoricalAcceptanceRow({
+  id,
+  status,
+  language
+}: {
+  id: string
+  status: string
+  language: 'zh' | 'en'
+}): React.JSX.Element {
+  return (
+    <div className="studio-result-evidence-row" data-studio-result-acceptance={id}>
+      <span className={`studio-result-status status-${statusTone(status)}`}>{status}</span>
+      <strong>{id}</strong>
+      <span>{language === 'en' ? 'Historical superseded Artifact version' : '已被新 Artifact 版本取代，不阻塞当前交付'}</span>
     </div>
   )
 }
@@ -989,10 +1175,11 @@ interface Labels {
   modelAttemptAuditIntegrityError: string; missingReferences: string; actor: string; run: string
   provider: string; model: string; protocol: string; keyLabel: string; tool: string
   effectTarget: string; resultDigest: string
+  deliveryReady: string; deliveryAttention: string
 }
 
 const ZH: Labels = {
-  title: '结果', refresh: '刷新结果', export: '导出交付报告', saved: '交付报告已导出', loading: '正在校验结果…', loadFailed: '结果校验失败',
+  title: '结果', refresh: '刷新结果', export: '导出可移植交付包', saved: '可移植交付包已导出', loading: '正在校验结果…', loadFailed: '结果校验失败',
   noConversation: '没有当前对话', noConversationDetail: '选择一个对话后查看结果。', unbound: '当前是对话分组',
   unboundDetail: '该对话尚未绑定 canonical Project、Goal 或 WorkItem。', unavailable: '结果暂不可用', tryRefresh: '刷新后重试。',
   resultViews: '结果视图', quickActions: '结果工具', summary: '摘要', artifacts: '产物', evidence: '证据', timeline: '时间线',
@@ -1005,11 +1192,11 @@ const ZH: Labels = {
   auditLoading: '正在校验审计记录…', auditLoadFailed: '审计记录加载失败，请重新打开时间线。', auditUnbound: '当前对话没有可审计的 Project 归属。',
   projectAuditIntegrityError: 'Project 审计账本完整性校验失败。', modelAttemptAuditIntegrityError: '模型调用账本完整性校验失败。',
   missingReferences: '发现 {count} 条缺失引用', actor: '执行者', run: '运行', provider: 'Provider', model: '模型', protocol: '协议',
-  keyLabel: 'Key 标签', tool: '工具', effectTarget: 'Effect 目标类型', resultDigest: '结果摘要'
+  keyLabel: 'Key 标签', tool: '工具', effectTarget: 'Effect 目标类型', resultDigest: '结果摘要', deliveryReady: '可交付产物', deliveryAttention: '需处理产物'
 }
 
 const EN: Labels = {
-  title: 'Results', refresh: 'Refresh results', export: 'Export delivery report', saved: 'Delivery report exported', loading: 'Verifying results…', loadFailed: 'Result verification failed',
+  title: 'Results', refresh: 'Refresh results', export: 'Export portable delivery package', saved: 'Portable delivery package exported', loading: 'Verifying results…', loadFailed: 'Result verification failed',
   noConversation: 'No active conversation', noConversationDetail: 'Select a conversation to inspect its results.', unbound: 'Conversation group',
   unboundDetail: 'This conversation is not bound to a canonical Project, Goal, or WorkItem.', unavailable: 'Results unavailable', tryRefresh: 'Refresh to try again.',
   resultViews: 'Result views', quickActions: 'Result tools', summary: 'Summary', artifacts: 'Artifacts', evidence: 'Evidence', timeline: 'Timeline',
@@ -1023,5 +1210,5 @@ const EN: Labels = {
   auditUnbound: 'This conversation has no auditable Project ownership.', projectAuditIntegrityError: 'Project audit ledger integrity verification failed.',
   modelAttemptAuditIntegrityError: 'Model attempt ledger integrity verification failed.', missingReferences: '{count} missing references found',
   actor: 'Actor', run: 'Run', provider: 'Provider', model: 'Model', protocol: 'Protocol', keyLabel: 'Key label', tool: 'Tool',
-  effectTarget: 'Effect target kind', resultDigest: 'Result digest'
+  effectTarget: 'Effect target kind', resultDigest: 'Result digest', deliveryReady: 'Ready artifacts', deliveryAttention: 'Need attention'
 }

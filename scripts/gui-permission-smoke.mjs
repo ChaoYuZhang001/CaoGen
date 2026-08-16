@@ -474,13 +474,12 @@ check('permission card exposes the full executable tail while redacting credenti
 
 check('gui grant ipc exposes read and revoke only', () => {
   const preload = source('src/preload/index.ts')
-  const ipc = source('src/main/ipc.ts')
+  const ipc = source('src/main/ipc/permission-grant-handlers.ts')
   for (const marker of ['listGuiAutomationGrants', 'revokeGuiAutomationGrant', 'revokeAllGuiAutomationGrants']) {
     assert(preload.includes(marker), `preload missing ${marker}`)
   }
-  assert(ipc.includes("'permissions:gui-grants:list'"), 'main IPC must expose grant list')
-  assert(ipc.includes("'permissions:gui-grants:revoke'"), 'main IPC must expose exact revoke')
-  assert(ipc.includes("'permissions:gui-grants:revoke-all'"), 'main IPC must expose revoke-all')
+  assert(ipc.includes("'permissions:grants:list'"), 'main IPC must expose grant list')
+  assert(ipc.includes("'permissions:grants:revoke'"), 'main IPC must expose exact and revoke-all dispatch')
   assert(!preload.includes('createGuiAutomationGrant'), 'renderer must not expose a grant creation API')
 })
 
@@ -489,14 +488,14 @@ check('tool capability renderer surface exposes read and revoke only', () => {
   assert(permissionBar.includes('req.capabilities'), 'permission card must show the actual capability set')
   const settings = source('src/renderer/src/components/SettingsModal.tsx')
   const preload = source('src/preload/index.ts')
-  const ipc = source('src/main/ipc.ts')
+  const ipc = source('src/main/ipc/permission-grant-handlers.ts')
   assert(permissionBar.includes('req.toolGrantScope'), 'permission card must require main-computed tool scope')
   assert(permissionBar.includes('TOOL_TEMPORARY_GRANT_MESSAGE'), 'permission card must send exact tool grant token')
   for (const marker of ['listToolCapabilityGrants', 'revokeToolCapabilityGrant', 'revokeAllToolCapabilityGrants']) {
     assert(preload.includes(marker), `preload missing ${marker}`)
     assert(settings.includes(marker), `settings missing ${marker}`)
   }
-  for (const channel of ["'permissions:tool-grants:list'", "'permissions:tool-grants:revoke'", "'permissions:tool-grants:revoke-all'"]) {
+  for (const channel of ["'permissions:grants:list'", "'permissions:grants:revoke'"]) {
     assert(ipc.includes(channel), `main IPC missing ${channel}`)
   }
   assert(!preload.includes('createToolCapabilityGrant'), 'renderer must not expose a tool grant creation API')

@@ -48,6 +48,11 @@ import {
 import { effectRecordIntegrityMatches } from './effect-record-integrity'
 import { reconcileLocalEffectTarget } from './effect-reconciler-local-targets'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
+import { reconcileProjectPortableExportEffectTarget } from '../project-export-effect-target'
+import { reconcileProjectPortableImportEffectTarget } from '../project-import-effect-target'
+import { reconcileProjectPermanentDeletionEffectTarget } from '../project-deletion-effect-target'
+import { reconcileProviderProfileOperationTarget } from '../provider/provider-profile-operation-target'
+import { reconcileMediaJobOperationTarget } from '../media/media-job-effect-target'
 const GIT_LOCAL_TIMEOUT_MS = 15_000
 const GIT_SCAN_TIMEOUT_MS = 30_000
 const GIT_REMOTE_TIMEOUT_MS = 30_000
@@ -140,7 +145,8 @@ export async function buildEffectDescriptor(input: {
 
 export async function reconcileEffect(
   effect: EffectRecord,
-  observationOptions: EffectFileObservationOptions = {}
+  observationOptions: EffectFileObservationOptions = {},
+  rootDir?: string
 ): Promise<EffectReconciliationResult> {
   try {
     if (!effectRecordIntegrityMatches(effect)) {
@@ -165,6 +171,21 @@ export async function reconcileEffect(
     if (effect.target.kind === 'mcp_tool_call') return await reconcileMcpEffectTarget(effect.target)
     if (effect.target.kind === 'webhook_message_send') return reconcileWebhookMessageEffectTarget(effect.target)
     if (effect.target.kind === 'office_artifact') return reconcileOfficeArtifactEffectTarget(effect.target)
+    if (effect.target.kind === 'project_portable_export') {
+      return await reconcileProjectPortableExportEffectTarget(effect.target, rootDir)
+    }
+    if (effect.target.kind === 'project_portable_import') {
+      return await reconcileProjectPortableImportEffectTarget(effect.target, rootDir)
+    }
+    if (effect.target.kind === 'project_permanent_deletion') {
+      return await reconcileProjectPermanentDeletionEffectTarget(effect.target, rootDir)
+    }
+    if (effect.target.kind === 'provider_profile_operation') {
+      return await reconcileProviderProfileOperationTarget(effect.target, rootDir)
+    }
+    if (effect.target.kind === 'media_job_operation') {
+      return await reconcileMediaJobOperationTarget(effect.target)
+    }
     if (effect.target.kind === 'unsupported') {
       return unresolved({
         kind: 'unsupported',

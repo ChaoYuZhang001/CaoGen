@@ -297,24 +297,43 @@ function optionalStoredQuota(value: unknown, providerId: unknown, accountId: unk
   if (value === undefined) return true
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const quota = value as Partial<ProviderAuthorizationQuotaView>
-  return quota.providerId === providerId
-    && quota.accountId === accountId
-    && (quota.status === 'ready' || quota.status === 'expired' || quota.status === 'unavailable')
-    && typeof quota.queriedAt === 'number'
-    && validStoredTimestamp(quota.queriedAt)
-    && Array.isArray(quota.tiers)
-    && quota.tiers.length <= 16
-    && quota.tiers.every((tier) => Boolean(tier)
-      && typeof tier.name === 'string'
-      && tier.name.length > 0
-      && tier.name.length <= 80
-      && typeof tier.utilization === 'number'
-      && Number.isFinite(tier.utilization)
-      && tier.utilization >= 0
-      && tier.utilization <= 100
-      && optionalFiniteNumber(tier.windowSeconds)
-      && optionalStoredTimestamp(tier.resetsAt))
-    && (quota.errorCode === undefined || (typeof quota.errorCode === 'string' && quota.errorCode.length <= 160))
+  return isStoredQuotaHeader(quota, providerId, accountId)
+    && quota.tiers.every(isStoredQuotaTier)
+    && optionalStoredErrorCode(quota.errorCode)
+}
+
+function isStoredQuotaHeader(
+  quota: Partial<ProviderAuthorizationQuotaView>,
+  providerId: unknown,
+  accountId: unknown
+): quota is ProviderAuthorizationQuotaView {
+  return [
+    quota.providerId === providerId,
+    quota.accountId === accountId,
+    ['ready', 'expired', 'unavailable'].includes(String(quota.status)),
+    typeof quota.queriedAt === 'number' && validStoredTimestamp(quota.queriedAt),
+    Array.isArray(quota.tiers),
+    Array.isArray(quota.tiers) && quota.tiers.length <= 16
+  ].every(Boolean)
+}
+
+function isStoredQuotaTier(tier: ProviderAuthorizationQuotaView['tiers'][number]): boolean {
+  if (!tier) return false
+  return [
+    typeof tier.name === 'string',
+    tier.name.length > 0,
+    tier.name.length <= 80,
+    typeof tier.utilization === 'number',
+    Number.isFinite(tier.utilization),
+    tier.utilization >= 0,
+    tier.utilization <= 100,
+    optionalFiniteNumber(tier.windowSeconds),
+    optionalStoredTimestamp(tier.resetsAt)
+  ].every(Boolean)
+}
+
+function optionalStoredErrorCode(value: unknown): boolean {
+  return value === undefined || (typeof value === 'string' && value.length <= 160)
 }
 
 function optionalFiniteNumber(value: unknown): boolean {

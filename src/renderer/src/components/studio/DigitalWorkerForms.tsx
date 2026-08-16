@@ -4,7 +4,6 @@ import type {
   DigitalWorker,
   DigitalWorkerAssignment,
   DigitalWorkerInput,
-  DigitalWorkerMemoryDraftInput,
   DigitalWorkerRoleRecommendation,
   JsonObject,
   RoleTemplate,
@@ -22,45 +21,12 @@ import {
 } from './digital-worker-studio-model'
 import type { WatercolorCharacterRole } from '../../../../shared/watercolor-character'
 
+export { WorkerMemoryForm } from './WorkerMemoryForm'
+
 interface RoleTemplateFormProps {
   busy: boolean
   onCancel: () => void
   onSubmit: (input: RoleTemplateInput) => Promise<boolean>
-}
-
-interface WorkerMemoryFormProps {
-  busy: boolean
-  onSubmit: (input: DigitalWorkerMemoryDraftInput) => Promise<boolean>
-}
-
-export function WorkerMemoryForm({ busy, onSubmit }: WorkerMemoryFormProps): React.JSX.Element {
-  const [memoryKind, setMemoryKind] = useState('working-preference')
-  const [title, setTitle] = useState('')
-  const [body, setBody] = useState('')
-  const [reason, setReason] = useState('')
-  const submit = async (event: React.FormEvent): Promise<void> => {
-    event.preventDefault()
-    if (await onSubmit({
-      memoryKind: memoryKind.trim(),
-      title: title.trim(),
-      body: body.trim(),
-      reason: reason.trim(),
-      confidence: 1
-    })) {
-      setTitle('')
-      setBody('')
-      setReason('')
-    }
-  }
-  return (
-    <form className="dws-memory-form" onSubmit={(event) => void submit(event)} data-dws-form="worker-memory">
-      <label className="dws-field"><span>类型</span><input value={memoryKind} onChange={(event) => setMemoryKind(event.target.value)} required maxLength={128} /></label>
-      <label className="dws-field"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={512} /></label>
-      <label className="dws-field dws-field-wide"><span>记忆内容</span><textarea value={body} onChange={(event) => setBody(event.target.value)} required maxLength={100000} rows={3} /></label>
-      <label className="dws-field dws-field-wide"><span>保留原因</span><input value={reason} onChange={(event) => setReason(event.target.value)} required maxLength={2000} /></label>
-      <button type="submit" className="dws-button dws-button-primary" disabled={busy || !title.trim() || !body.trim() || !reason.trim()}>{busy ? '提交中...' : '提交审核'}</button>
-    </form>
-  )
 }
 
 export function RoleTemplateForm({ busy, onCancel, onSubmit }: RoleTemplateFormProps): React.JSX.Element {
@@ -98,7 +64,10 @@ export function RoleTemplateForm({ busy, onCancel, onSubmit }: RoleTemplateFormP
       }}
     >
       <div className="dws-editor-heading">
-        <h3 id={titleId}>新建岗位模板</h3>
+        <div>
+          <h3 id={titleId}>新建岗位</h3>
+          <span>只需填写岗位名称和主要职责</span>
+        </div>
         <button type="button" className="dws-button dws-button-quiet" onClick={onCancel} disabled={busy}>取消</button>
       </div>
       <div className="dws-form-grid">
@@ -106,22 +75,35 @@ export function RoleTemplateForm({ busy, onCancel, onSubmit }: RoleTemplateFormP
           <span>岗位名称</span>
           <input ref={nameRef} value={name} onChange={(event) => setName(event.target.value)} required maxLength={80} />
         </label>
-        <label className="dws-field">
-          <span>岗位目标</span>
-          <input value={purpose} onChange={(event) => setPurpose(event.target.value)} required maxLength={240} />
-        </label>
         <label className="dws-field dws-field-wide">
-          <span>岗位职责说明</span>
-          <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={3} maxLength={4000} />
+          <span>主要职责</span>
+          <textarea
+            value={purpose}
+            onChange={(event) => setPurpose(event.target.value)}
+            required
+            rows={2}
+            maxLength={240}
+            placeholder="例如：整理资料并输出可交付的项目报告"
+          />
         </label>
-        <label className="dws-field">
-          <span>能力标签</span>
-          <input value={capabilities} onChange={(event) => setCapabilities(event.target.value)} placeholder="研究, 写作, 审核" />
-        </label>
-        <label className="dws-field">
-          <span>技能标签</span>
-          <input value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="资料检索, 文档整理" />
-        </label>
+        <details className="dws-advanced dws-field-wide">
+          <summary>高级设置</summary>
+          <p>补充执行说明和能力标签，不填写也能创建</p>
+          <div className="dws-form-grid">
+            <label className="dws-field dws-field-wide">
+              <span>详细执行说明</span>
+              <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={3} maxLength={4000} />
+            </label>
+            <label className="dws-field">
+              <span>能力标签</span>
+              <input value={capabilities} onChange={(event) => setCapabilities(event.target.value)} placeholder="研究, 写作, 审核" />
+            </label>
+            <label className="dws-field">
+              <span>技能标签</span>
+              <input value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="资料检索, 文档整理" />
+            </label>
+          </div>
+        </details>
       </div>
       <div className="dws-editor-actions">
         <button type="submit" className="dws-button dws-button-primary" disabled={busy || !name.trim() || !purpose.trim()}>
@@ -146,12 +128,8 @@ interface HireWorkerIdentityFieldsProps {
   roles: readonly RoleTemplate[]
   displayName: string
   roleId: string
-  watercolorRole: WatercolorCharacterRole
-  responsibilities: string
   setDisplayName: Dispatch<SetStateAction<string>>
   onRoleIdChange: (roleId: string) => void
-  setWatercolorRole: Dispatch<SetStateAction<WatercolorCharacterRole>>
-  setResponsibilities: Dispatch<SetStateAction<string>>
 }
 
 function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.JSX.Element {
@@ -159,12 +137,8 @@ function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.J
     roles,
     displayName,
     roleId,
-    watercolorRole,
-    responsibilities,
     setDisplayName,
-    onRoleIdChange,
-    setWatercolorRole,
-    setResponsibilities
+    onRoleIdChange
   } = props
   const nameRef = useRef<HTMLInputElement>(null)
 
@@ -172,6 +146,13 @@ function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.J
 
   return (
     <>
+      <label className="dws-field">
+        <span>岗位</span>
+        <select value={roleId} onChange={(event) => onRoleIdChange(event.target.value)} required>
+          <option value="" disabled>选择岗位</option>
+          {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+        </select>
+      </label>
       <label className="dws-field">
         <span>员工名称</span>
         <input
@@ -182,37 +163,18 @@ function HireWorkerIdentityFields(props: HireWorkerIdentityFieldsProps): React.J
           maxLength={80}
         />
       </label>
-      <label className="dws-field">
-        <span>岗位模板</span>
-        <select value={roleId} onChange={(event) => onRoleIdChange(event.target.value)} required>
-          <option value="" disabled>选择岗位</option>
-          {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-        </select>
-      </label>
-      <label className="dws-field">
-        <span>水墨岗位形象</span>
-        <select
-          value={watercolorRole}
-          onChange={(event) => setWatercolorRole(event.target.value as WatercolorCharacterRole)}
-          data-dws-watercolor-role
-        >
-          {WATERCOLOR_ROLE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      </label>
-      <label className="dws-field dws-field-wide">
-        <span>职责范围</span>
-        <textarea
-          value={responsibilities}
-          onChange={(event) => setResponsibilities(event.target.value)}
-          rows={3}
-          placeholder="每行一项职责"
-          maxLength={2000}
-        />
-      </label>
     </>
   )
+}
+
+function roleResponsibility(roleId: string, roles: readonly RoleTemplate[]): string {
+  const role = roles.find((candidate) => candidate.id === roleId)
+  return role?.instructions.trim() || role?.purpose.trim() || ''
+}
+
+function generatedWorkerName(roleId: string, roles: readonly RoleTemplate[]): string {
+  const role = roles.find((candidate) => candidate.id === roleId)
+  return role ? `${role.name} 01` : ''
 }
 
 interface HireWorkerDataScopeFieldsProps {
@@ -285,14 +247,12 @@ interface HireWorkerPolicyFieldsProps {
   requireUserApproval: boolean
   escalationTarget: string
   escalateAfterFailures: string
-  activate: boolean
   setMonthlyBudget: Dispatch<SetStateAction<string>>
   setConcurrency: Dispatch<SetStateAction<string>>
   setMinimumEvidenceCount: Dispatch<SetStateAction<string>>
   setRequireUserApproval: Dispatch<SetStateAction<boolean>>
   setEscalationTarget: Dispatch<SetStateAction<string>>
   setEscalateAfterFailures: Dispatch<SetStateAction<string>>
-  setActivate: Dispatch<SetStateAction<boolean>>
 }
 
 function HireWorkerPolicyFields(props: HireWorkerPolicyFieldsProps): React.JSX.Element {
@@ -303,14 +263,12 @@ function HireWorkerPolicyFields(props: HireWorkerPolicyFieldsProps): React.JSX.E
     requireUserApproval,
     escalationTarget,
     escalateAfterFailures,
-    activate,
     setMonthlyBudget,
     setConcurrency,
     setMinimumEvidenceCount,
     setRequireUserApproval,
     setEscalationTarget,
-    setEscalateAfterFailures,
-    setActivate
+    setEscalateAfterFailures
   } = props
   return (
     <>
@@ -378,10 +336,6 @@ function HireWorkerPolicyFields(props: HireWorkerPolicyFieldsProps): React.JSX.E
           required
         />
       </label>
-      <label className="dws-check dws-field-wide">
-        <input type="checkbox" checked={activate} onChange={(event) => setActivate(event.target.checked)} />
-        <span>入职后立即启用</span>
-      </label>
     </>
   )
 }
@@ -436,12 +390,17 @@ function buildHireWorkerInput(values: HireWorkerInputValues): DigitalWorkerInput
 export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
   const { projectId, roles, initialRoleId, recommendation, busy, onCancel, onSubmit } = props
   const titleId = useId()
-  const [displayName, setDisplayName] = useState(recommendation ? `${recommendation.name} 01` : '')
-  const [roleId, setRoleId] = useState(initialRoleId || roles[0]?.id || '')
+  const defaultRoleId = initialRoleId || roles[0]?.id || ''
+  const [displayName, setDisplayName] = useState(
+    recommendation ? `${recommendation.name} 01` : generatedWorkerName(defaultRoleId, roles)
+  )
+  const [roleId, setRoleId] = useState(defaultRoleId)
   const [watercolorRole, setWatercolorRole] = useState<WatercolorCharacterRole>(() =>
     suggestedWatercolorRole(initialRoleId || roles[0]?.id || '', roles)
   )
-  const [responsibilities, setResponsibilities] = useState(recommendation?.responsibilities.join('\n') ?? '')
+  const [responsibilities, setResponsibilities] = useState(
+    recommendation?.responsibilities.join('\n') || roleResponsibility(defaultRoleId, roles)
+  )
   const [monthlyBudget, setMonthlyBudget] = useState(jsonNumberText(recommendation?.budgetPolicy.maxAmount))
   const [concurrency, setConcurrency] = useState(jsonNumberText(recommendation?.budgetPolicy.maxConcurrentRuns) || '1')
   const [allowedDataClasses, setAllowedDataClasses] = useState(jsonStringList(recommendation?.dataScope.allowedDataClasses))
@@ -469,8 +428,16 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
   }, [initialRoleId, roles])
 
   const selectRole = (nextRoleId: string): void => {
+    const previousGeneratedName = generatedWorkerName(roleId, roles)
+    const previousResponsibility = roleResponsibility(roleId, roles)
     setRoleId(nextRoleId)
     setWatercolorRole(suggestedWatercolorRole(nextRoleId, roles))
+    setDisplayName((current) => current.trim() === '' || current === previousGeneratedName
+      ? generatedWorkerName(nextRoleId, roles)
+      : current)
+    setResponsibilities((current) => current.trim() === '' || current === previousResponsibility
+      ? roleResponsibility(nextRoleId, roles)
+      : current)
   }
 
   const submit = async (event: React.FormEvent): Promise<void> => {
@@ -509,7 +476,7 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
       <div className="dws-editor-heading">
         <div>
           <h3 id={titleId}>招聘数字员工</h3>
-          <span className="dws-code">{projectId}</span>
+          <span>岗位职责和安全策略已经自动配置，可直接招聘</span>
         </div>
         <button type="button" className="dws-button dws-button-quiet" onClick={onCancel} disabled={busy}>取消</button>
       </div>
@@ -518,40 +485,66 @@ export function HireWorkerForm(props: HireWorkerFormProps): React.JSX.Element {
           roles={roles}
           displayName={displayName}
           roleId={roleId}
-          watercolorRole={watercolorRole}
-          responsibilities={responsibilities}
           setDisplayName={setDisplayName}
           onRoleIdChange={selectRole}
-          setWatercolorRole={setWatercolorRole}
-          setResponsibilities={setResponsibilities}
         />
-        <PermissionFields permissions={permissions} setPermissions={setPermissions} />
-        <HireWorkerDataScopeFields
-          allowedDataClasses={allowedDataClasses}
-          deniedDataClasses={deniedDataClasses}
-          allowedResourceIds={allowedResourceIds}
-          requireExplicitScope={requireExplicitScope}
-          setAllowedDataClasses={setAllowedDataClasses}
-          setDeniedDataClasses={setDeniedDataClasses}
-          setAllowedResourceIds={setAllowedResourceIds}
-          setRequireExplicitScope={setRequireExplicitScope}
-        />
-        <HireWorkerPolicyFields
-          monthlyBudget={monthlyBudget}
-          concurrency={concurrency}
-          minimumEvidenceCount={minimumEvidenceCount}
-          requireUserApproval={requireUserApproval}
-          escalationTarget={escalationTarget}
-          escalateAfterFailures={escalateAfterFailures}
-          activate={activate}
-          setMonthlyBudget={setMonthlyBudget}
-          setConcurrency={setConcurrency}
-          setMinimumEvidenceCount={setMinimumEvidenceCount}
-          setRequireUserApproval={setRequireUserApproval}
-          setEscalationTarget={setEscalationTarget}
-          setEscalateAfterFailures={setEscalateAfterFailures}
-          setActivate={setActivate}
-        />
+        <details className="dws-advanced dws-field-wide">
+          <summary>高级设置</summary>
+          <p>需要特殊规则时再修改；默认值适合大多数任务</p>
+          <div className="dws-form-grid">
+            <label className="dws-field dws-field-wide">
+              <span>自定义职责</span>
+              <textarea
+                value={responsibilities}
+                onChange={(event) => setResponsibilities(event.target.value)}
+                rows={2}
+                placeholder="默认继承岗位职责"
+                maxLength={2000}
+              />
+            </label>
+            <label className="dws-field">
+              <span>水墨岗位形象</span>
+              <select
+                value={watercolorRole}
+                onChange={(event) => setWatercolorRole(event.target.value as WatercolorCharacterRole)}
+                data-dws-watercolor-role
+              >
+                {WATERCOLOR_ROLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="dws-check">
+              <input type="checkbox" checked={activate} onChange={(event) => setActivate(event.target.checked)} />
+              <span>入职后立即启用</span>
+            </label>
+            <PermissionFields permissions={permissions} setPermissions={setPermissions} />
+            <HireWorkerDataScopeFields
+              allowedDataClasses={allowedDataClasses}
+              deniedDataClasses={deniedDataClasses}
+              allowedResourceIds={allowedResourceIds}
+              requireExplicitScope={requireExplicitScope}
+              setAllowedDataClasses={setAllowedDataClasses}
+              setDeniedDataClasses={setDeniedDataClasses}
+              setAllowedResourceIds={setAllowedResourceIds}
+              setRequireExplicitScope={setRequireExplicitScope}
+            />
+            <HireWorkerPolicyFields
+              monthlyBudget={monthlyBudget}
+              concurrency={concurrency}
+              minimumEvidenceCount={minimumEvidenceCount}
+              requireUserApproval={requireUserApproval}
+              escalationTarget={escalationTarget}
+              escalateAfterFailures={escalateAfterFailures}
+              setMonthlyBudget={setMonthlyBudget}
+              setConcurrency={setConcurrency}
+              setMinimumEvidenceCount={setMinimumEvidenceCount}
+              setRequireUserApproval={setRequireUserApproval}
+              setEscalationTarget={setEscalationTarget}
+              setEscalateAfterFailures={setEscalateAfterFailures}
+            />
+          </div>
+        </details>
       </div>
       <div className="dws-editor-actions">
         <button

@@ -119,6 +119,14 @@ export function resolveSessionModelRoute(input: SessionRouteInput): SessionRoute
       projectModelRoleOverride(input, projectDispatch) ??
       modelRoleOverride(input),
     budget,
+    providerHealth: Object.fromEntries(providers.map((provider) => {
+      const health = getHealth(provider.id)
+      return [provider.id, {
+        healthy: health.healthy,
+        circuitState: health.circuitState,
+        latencyEmaMs: health.latencyEmaMs
+      }]
+    })),
     crossValidation: drive.crossValidation,
     riskLevel,
     requiresTools: true
@@ -193,7 +201,8 @@ function buildRoutingDecisionView(
       score: candidate.score,
       reliability: candidate.reliability,
       estimatedCostUsd: candidate.estimatedCostUsd,
-      latencyEmaMs: candidate.latencyEmaMs
+      latencyEmaMs: candidate.latencyEmaMs,
+      scoreBreakdown: candidate.scoreBreakdown
     }))
   return {
     providerId: selected.profile.providerId,
@@ -207,6 +216,8 @@ function buildRoutingDecisionView(
     reliability: selected.reliability,
     estimatedCostUsd: selected.estimatedCostUsd,
     latencyEmaMs: selected.latencyEmaMs,
+    scoreBreakdown: selected.scoreBreakdown,
+    decisionDigest: decision.decisionDigest,
     remainingBudgetUsd,
     manualOverrideApplied: decision.manualOverrideApplied,
     selectionReason:

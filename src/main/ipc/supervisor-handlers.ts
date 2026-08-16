@@ -40,6 +40,14 @@ const HANDLERS: Record<string, SupervisorHandler> = {
       normalizeMutationOptions(payload.options)
     )
   },
+  'control:lease:claim': async (store, payload) => {
+    assertAllowedKeys(payload, ['id', 'expectedRevision'], 'Supervisor control lease claim')
+    return sessionManager.claimSupervisorControlLease(
+      store,
+      requiredId(payload.id, 'run id'),
+      nonNegativeInteger(payload.expectedRevision, 'expectedRevision')
+    )
+  },
   'lease:acquire': manualLeaseAction('acquire a lease for', (store, id, options) => store.acquireLease(id, options)),
   'lease:heartbeat': manualLeaseAction('heartbeat a lease for', (store, id, options) => store.heartbeatLease(id, options)),
   'lease:release': manualLeaseAction('release a lease for', (store, id, options) => store.releaseLease(id, options)),

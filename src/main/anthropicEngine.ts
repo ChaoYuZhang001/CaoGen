@@ -20,46 +20,31 @@ import {
   type AnthropicImageResolver
 } from './anthropic-history'
 import {
-  buildAnthropicMessagesWireBody,
-  streamAnthropicMessage,
   type AnthropicMessagesContentBlock,
   type AnthropicMessagesMessage,
-  type AnthropicMessagesRequest,
   type AnthropicMessagesResult,
   type AnthropicMessagesTool,
   type AnthropicMessagesToolInputSchema,
   type AnthropicMessagesToolUseBlock
 } from './anthropicMessagesAdapter'
-import { anthropicRuntimeRequiresThinkingSignature, applyAnthropicRuntimeToRequest } from './anthropicMessagesRequest'
+import {
+  createAnthropicEngineDependencies,
+  type AnthropicEngineDependencies
+} from './anthropic-engine-dependencies'
 import { anthropicAdditionalContextItems } from './anthropic-outbound-context'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
 import { augmentNativePayloadWithLayeredMemory } from './native-layered-prompt'
 import { OPENAI_CODING_TOOLS } from './openaiTools'
 import { buildProjectContextSystemAppendSync } from './agent/context-loader'
-import {
-  listProviders, markProviderKeyUsed, recordProviderKeySuccess, rotateProviderKey
-} from './providers'
-import { canRotateProviderKey } from './providerKeyRouting'
-import { resolveAnthropicMessagesTarget, type AnthropicMessagesTarget } from './provider/anthropicMessagesTarget'
+import type { AnthropicMessagesTarget } from './provider/anthropicMessagesTarget'
 import { getSettings } from './settings'
 import { assertRoutingExpertTargetAllowed } from './model/routing-expert-policy'
 import { listHistory } from './history'
-import {
-  acquireProviderRequest,
-  classifyFailure,
-  pickFailoverTarget,
-  pickProviderModelFailoverTarget,
-  recordFailure,
-  recordSuccess,
-  releaseProviderRequest
-} from './scheduler'
 import { normalizeStableMessagePayload, type StableMessagePayload } from './stable-message-payload'
-import { AnthropicModelAttemptTracker, type AnthropicModelAttemptInput } from './task/anthropic-model-attempt-runtime'
 import {
   isModelAttemptOperationError, isModelAttemptPersistenceError, unwrapModelAttemptOperationError
 } from './task/model-attempt-runtime'
 import { runHasUnresolvedEffects } from './task/effect-runtime'
-import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { taskStrategySystemAppend, updateTaskStrategyMeta } from './task/task-strategy'
 import { buildWorkflowStageHandoffPrompt } from './task/workflow-stage-handoff'
 import {
@@ -69,6 +54,7 @@ import {
 } from './project-workspace/outbound-context-policy'
 import { effectiveSessionModel } from './provider/engine-provider-utils'
 import { estimateModelAttemptCostUsd } from './provider/modelAttemptCost'
+import { buildProviderNeutralContextDigest } from './task/provider-neutral-context'
 import { redactProviderCredentials } from './providerCredentialRuntime'
 import {
   fetchWithProviderCredentialLease,
@@ -95,14 +81,11 @@ import type {
   AgentEvent,
   CheckpointRestoreMode,
   CheckpointRestoreResult,
-  EngineKind,
   OutboundContextManifest,
   PermissionModeId,
   PermissionRequestInfo,
-  ProviderRuntimeConfig,
   SendMessagePayload,
   SessionMeta,
-  TaskRunRecord,
   TranscriptEntry,
   UserMessageAttachmentView,
   UsageTotals
@@ -115,10 +98,6 @@ export const ANTHROPIC_CODING_TOOLS: AnthropicMessagesTool[] = OPENAI_CODING_TOO
   description: tool.function.description,
   input_schema: tool.function.parameters as AnthropicMessagesToolInputSchema
 }))
-interface AnthropicAttemptExecutor {
-  startTurn(messageId: string): void
-  execute(input: AnthropicModelAttemptInput): Promise<AnthropicMessagesResult>
-}
 interface AnthropicAttemptLineage {
   requestId: string
   failoverFromAttemptId: string
@@ -132,35 +111,6 @@ interface AnthropicMessageResponse {
 interface AnthropicRecoveryTarget {
   target: AnthropicMessagesTarget
   routeReason: string
-}
-
-export interface AnthropicEngineDependencies {
-  resolveTarget(input: { providerId: string; model?: string }): AnthropicMessagesTarget
-  streamMessage: typeof streamAnthropicMessage
-  getRun(sessionId: string): TaskRunRecord | undefined
-  modelAttempts: AnthropicAttemptExecutor
-  listProviders: typeof listProviders
-  getSettings: typeof getSettings
-  classifyFailure: typeof classifyFailure
-  canRotateProviderKey: typeof canRotateProviderKey
-  rotateProviderKey: typeof rotateProviderKey
-  pickFailoverTarget: typeof pickFailoverTarget
-  pickProviderModelFailoverTarget: typeof pickProviderModelFailoverTarget
-  markProviderKeyUsed: typeof markProviderKeyUsed
-  recordProviderKeySuccess: typeof recordProviderKeySuccess
-  acquireProviderRequest: typeof acquireProviderRequest
-  recordFailure: typeof recordFailure
-  releaseProviderRequest: typeof releaseProviderRequest
-  recordSuccess: typeof recordSuccess
-  resolveImageAttachment(reference: UserMessageAttachmentView): AnthropicMessagesContentBlock
-  sessionIdPrefix: string
-  recoveryEngineKind: EngineKind
-  requiresThinkingSignature(target: AnthropicMessagesTarget): boolean
-  applyRuntimeToRequest(
-    request: AnthropicMessagesRequest,
-    runtime: ProviderRuntimeConfig | undefined
-  ): AnthropicMessagesRequest
-  buildWireBody(request: Parameters<typeof buildAnthropicMessagesWireBody>[0]): unknown
 }
 
 /** Native Anthropic Messages engine registered under the distinct `anthropic` kind. */
@@ -205,38 +155,9 @@ export class AnthropicEngine implements Engine {
     }
     this.emitRaw = (event) => {
       const entry = this.transcript.nextEntry(event)
-      emit(event, entry.seq, entry)
+      emit(entry.event, entry.seq, entry)
     }
-    this.dependencies = {
-      resolveTarget: resolveAnthropicMessagesTarget,
-      streamMessage: streamAnthropicMessage,
-      getRun: (sessionId) => taskRuntimeRegistry.get(sessionId),
-      modelAttempts: new AnthropicModelAttemptTracker(),
-      listProviders,
-      getSettings,
-      classifyFailure,
-      canRotateProviderKey,
-      rotateProviderKey,
-      pickFailoverTarget,
-      pickProviderModelFailoverTarget,
-      markProviderKeyUsed,
-      recordProviderKeySuccess,
-      acquireProviderRequest,
-      recordFailure,
-      releaseProviderRequest,
-      recordSuccess,
-      sessionIdPrefix: 'anthropic',
-      recoveryEngineKind: 'anthropic',
-      requiresThinkingSignature: (target) =>
-        anthropicRuntimeRequiresThinkingSignature(target.credentialProvider.advancedConfig?.runtime),
-      applyRuntimeToRequest: applyAnthropicRuntimeToRequest,
-      buildWireBody: buildAnthropicMessagesWireBody,
-      resolveImageAttachment: (reference) => imageAttachmentRefToContentBlock(
-        reference,
-        sessionImageAttachmentsRoot(app.getPath('userData'), meta.id)
-      ) as AnthropicMessagesContentBlock,
-      ...dependencies
-    }
+    this.dependencies = createAnthropicEngineDependencies(meta, dependencies)
     this.nativeToolRuntime = new NativeToolRuntime(this.meta, (event) => this.emit(event))
     const sourceSessionId = meta.conversationForkSourceSdkSessionId
       ? listHistory().find((entry) => entry.sdkSessionId === meta.conversationForkSourceSdkSessionId)?.id
@@ -566,6 +487,10 @@ export class AnthropicEngine implements Engine {
       endpoint: target.endpoint,
       method: 'POST',
       body: this.dependencies.buildWireBody(request),
+      canonicalContextDigest: buildProviderNeutralContextDigest({
+        entries: this.transcript.readAll(),
+        outboundContext: this.activeOutboundContext
+      }),
       signal: controller.signal,
       auth: { keyId: target.keyId, keyLabel: target.keyLabel },
       estimateCost: (usage) => estimateModelAttemptCostUsd({

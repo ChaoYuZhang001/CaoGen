@@ -65,6 +65,7 @@ export interface ProviderProfileImportDecision {
 export interface ProviderProfileBackupView {
   id: string
   createdAt: string
+  expiresAt: string
   providerCount: number
   reason: ProviderProfileBackupReason
   nonPersistentCredentialCount: number
@@ -212,6 +213,7 @@ export interface ProviderProfileApi extends ProviderManagementApi, CcSwitchProvi
   previewProviderProfileBackup(backupId: string): Promise<ProviderProfileBackupPreview>
   applyProviderProfileBackupPreview(previewId: string): Promise<ProviderProfileRollbackResult>
   rollbackProviderProfileBackup(backupId: string): Promise<ProviderProfileRollbackResult>
+  deleteProviderProfileBackup(backupId: string): Promise<{ deletedBackupId: string }>
   getProviderProfileSyncStatus(): Promise<ProviderProfileSyncStatus>
   chooseProviderProfileSyncDirectory(): Promise<ProviderProfileSyncStatus | null>
   disconnectProviderProfileSync(): Promise<ProviderProfileSyncStatus>

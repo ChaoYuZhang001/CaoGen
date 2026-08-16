@@ -42,15 +42,65 @@ export type ConnectorResourceUsage = 'resource' | 'knowledge_source' | 'tool'
 export type ConnectorDataDirection = 'read' | 'write' | 'bidirectional'
 export type ConnectorAuthorizationSubject = 'personal' | 'shared'
 export type ConnectorAuthorizationStatus = 'active' | 'revoked'
+export type ConnectorRefreshStatus = 'idle' | 'requested' | 'running' | 'succeeded' | 'failed'
+export type ConnectorCacheStatus = 'empty' | 'ready' | 'purging' | 'purged' | 'purge_failed'
+export type ConnectorAutoRefreshInterval = 0 | 900_000 | 3_600_000 | 21_600_000 | 86_400_000
+
+export interface ConnectorLatestCitation {
+  projectId?: string
+  resourceId?: string
+  source: string
+  version: string
+  retrievedAt: number
+  contentDigest?: string
+}
+
+export interface ConnectorResourceLifecycle {
+  enabled: boolean
+  refresh: {
+    status: ConnectorRefreshStatus
+    requestedAt?: number
+    startedAt?: number
+    completedAt?: number
+    errorDigest?: string
+    latestCitation?: ConnectorLatestCitation
+  }
+  autoRefresh?: {
+    intervalMs: ConnectorAutoRefreshInterval
+    nextAt?: number
+  }
+  cache?: {
+    status: ConnectorCacheStatus
+    /** Binds cached content to the exact Project authorization contract. */
+    authorizationDigest?: string
+    contentDigest?: string
+    bytes?: number
+    cachedAt?: number
+    purgeRequestedAt?: number
+    purgedAt?: number
+    errorDigest?: string
+  }
+  revocation?: {
+    status: 'blocking' | 'completed' | 'failed'
+    requestedAt: number
+    completedAt?: number
+    pausedSessionIds: string[]
+    pausedRunIds: string[]
+    errorDigest?: string
+  }
+}
 
 export interface ConnectorResourceContract {
   schemaVersion: 1
+  /** Stable catalog identifier; credentials are still resolved outside this contract. */
+  connectorId?: string
   usage: ConnectorResourceUsage[]
   capabilities: string[]
   dataDirection: ConnectorDataDirection
   authorization: {
     subject: ConnectorAuthorizationSubject
     principalId: string
+    credentialRef?: string
     scopes: string[]
     status: ConnectorAuthorizationStatus
     grantedAt?: number
@@ -65,6 +115,32 @@ export interface ConnectorResourceContract {
     effect: 'required'
     reconciliation: 'queryable' | 'manual_only'
   }
+  lifecycle?: ConnectorResourceLifecycle
+}
+
+export type ProjectConnectorMutation =
+  | { kind: 'set_enabled'; enabled: boolean }
+  | { kind: 'set_authorization'; status: ConnectorAuthorizationStatus }
+  | {
+      kind: 'bind_authorization'
+      principalId: string
+      credentialRef: string
+      subject?: ConnectorAuthorizationSubject
+    }
+  | { kind: 'set_auto_refresh'; intervalMs: ConnectorAutoRefreshInterval }
+  | { kind: 'request_refresh' }
+  | { kind: 'purge_cache' }
+
+export interface ProjectConnectorCatalogEntry {
+  id: string
+  label: string
+  defaultUri: string
+  usage: ConnectorResourceUsage[]
+  capabilities: string[]
+  dataDirection: ConnectorDataDirection
+  scopes: string[]
+  version: string
+  reconciliation: 'queryable' | 'manual_only'
 }
 
 export interface ConnectorSourceCitation {
@@ -79,6 +155,74 @@ export interface ConnectorSourceCitation {
 export interface ConnectorReadResult<T = unknown> {
   data: T
   citation: ConnectorSourceCitation
+}
+
+export interface ProjectKnowledgePreviewSource {
+  resourceId: string
+  resourceKind: ProjectResourceKind
+  path: string
+  digest: string
+  bytes: number
+  modifiedAt: number
+  truncated: boolean
+}
+
+export interface ProjectKnowledgePreviewConnector {
+  resourceId: string
+  label: string
+  connectorId?: string
+  available: boolean
+  reason?: string
+  authorization: ConnectorAuthorizationStatus
+  enabled: boolean
+  refresh: ConnectorResourceLifecycle['refresh']
+  autoRefresh?: ConnectorResourceLifecycle['autoRefresh']
+  cache: NonNullable<ConnectorResourceLifecycle['cache']>
+  revocation?: ConnectorResourceLifecycle['revocation']
+}
+
+export interface ProjectKnowledgePreview {
+  projectId: string
+  projectRevision: number
+  policyDigest: string
+  sources: ProjectKnowledgePreviewSource[]
+  connectors: ProjectKnowledgePreviewConnector[]
+}
+
+export interface ProjectKnowledgeSearchInput {
+  projectId: string
+  query: string
+  limit?: number
+}
+
+/** A bounded, citation-bearing match from Project-owned knowledge. */
+export interface ProjectKnowledgeSearchResult {
+  projectId: string
+  projectRevision: number
+  query: string
+  queryDigest: string
+  searchedAt: number
+  results: ProjectKnowledgeSearchCitation[]
+  connectors: ProjectKnowledgePreviewConnector[]
+  connectorErrors: ProjectKnowledgeSearchConnectorError[]
+}
+
+export interface ProjectKnowledgeSearchConnectorError {
+  resourceId: string
+  reason: string
+}
+
+export interface ProjectKnowledgeSearchCitation {
+  resourceId: string
+  resourceKind: ProjectResourceKind
+  path: string
+  source: string
+  version: string
+  retrievedAt: number
+  contentDigest: string
+  snippet: string
+  score: number
+  evidenceId: string
 }
 
 export interface ProjectResource {
@@ -397,6 +541,19 @@ export interface WorkItemTransferResult {
   authorization: WorkItemAuthorizationView
   auditEventIds: string[]
   idempotentReplay: boolean
+  continuation?: WorkItemTransferContinuation
+}
+
+export interface WorkItemTransferContinuation {
+  status: 'not_required' | 'paused_for_human' | 'successor_created' | 'successor_failed'
+  pausedSessionIds: string[]
+  pausedRunIds: string[]
+  releasedWorkerLeaseIds: string[]
+  predecessorSessionId?: string
+  predecessorRunId?: string
+  successorSessionId?: string
+  successorRunId?: string
+  error?: string
 }
 
 export interface WorkItemLease {
@@ -474,6 +631,8 @@ export type ProjectSquadStatus = 'active' | 'archived'
 export interface ProjectSquadMember {
   type: WorkItemOwnerType
   id: string
+  /** Canonical Project member identity. Legacy Squad records may omit this. */
+  memberId?: string
   displayName?: string
   role?: string
   joinedAt: number
@@ -482,6 +641,7 @@ export interface ProjectSquadMember {
 export interface ProjectSquadMemberInput {
   type: WorkItemOwnerType
   id: string
+  memberId?: string
   displayName?: string
   role?: string
   joinedAt?: number
@@ -520,6 +680,156 @@ export interface ProjectSquadPatch {
 
 export type ProjectSquadCreateInput = Omit<ProjectSquadInput, 'createdBy'>
 
+/**
+ * Project members are the durable identities used by collaboration features.
+ * They intentionally reference an existing human principal or DigitalWorker
+ * instead of creating a separate account or credential system.
+ */
+export type ProjectMemberRole = 'owner' | 'admin' | 'editor' | 'reviewer' | 'viewer'
+export type ProjectMemberStatus = 'active' | 'revoked'
+
+export type ProjectAuthorizationCapability =
+  | 'view'
+  | 'edit'
+  | 'execute'
+  | 'comment'
+  | 'approve'
+  | 'transfer'
+  | 'manage_squads'
+  | 'manage_members'
+  | 'manage_invitations'
+
+export interface ProjectAuthorizationView {
+  projectId: string
+  actor: WorkItemActor
+  role: ProjectMemberRole | 'local_admin' | 'owner' | 'unregistered'
+  capabilities: ProjectAuthorizationCapability[]
+  authorizationRevision: number
+}
+
+export interface ProjectMember {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  principal: WorkItemOwner
+  role: ProjectMemberRole
+  status: ProjectMemberStatus
+  joinedAt: number
+  updatedAt: number
+  revokedAt?: number
+  revision: number
+}
+
+export interface ProjectMemberInput {
+  id?: string
+  projectId: string
+  principal: WorkItemOwner
+  role?: ProjectMemberRole
+  joinedAt?: number
+  updatedAt?: number
+}
+
+export interface ProjectMemberPatch {
+  displayName?: string
+  role?: ProjectMemberRole
+}
+
+export type ProjectMemberCreateInput = ProjectMemberInput
+
+export type ProjectInvitationRole = Exclude<ProjectMemberRole, 'owner'>
+export type ProjectInvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired'
+
+export interface ProjectInvitation {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  principal: WorkItemOwner
+  role: ProjectInvitationRole
+  tokenDigest: string
+  status: ProjectInvitationStatus
+  expiresAt: number
+  acceptedMemberId?: string
+  createdAt: number
+  updatedAt: number
+  acceptedAt?: number
+  revokedAt?: number
+  revision: number
+}
+
+export interface ProjectInvitationInput {
+  id?: string
+  projectId: string
+  principal: WorkItemOwner
+  role: ProjectInvitationRole
+  expiresAt?: number
+  createdAt?: number
+}
+
+export interface ProjectInvitationCreateResult {
+  invitation: ProjectInvitation
+  /** Returned once to the caller; only tokenDigest is durable. */
+  token: string
+}
+
+export type WorkItemSharedApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'revoked'
+export type WorkItemSharedApprovalDecisionStatus = 'approved' | 'rejected'
+
+export interface WorkItemSharedApprovalDecision {
+  memberId: string
+  decision: WorkItemSharedApprovalDecisionStatus
+  comment?: string
+  decidedAt: number
+}
+
+/**
+ * A quorum-based collaboration approval. It is scoped to canonical Project
+ * records and preserves each member decision for audit/export/recovery.
+ */
+export interface WorkItemSharedApproval {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  workItemId: string
+  goalId?: string
+  acceptanceId?: string
+  effectId?: string
+  title: string
+  requester: WorkItemActor
+  approverMemberIds: string[]
+  requiredApprovals: number
+  decisions: WorkItemSharedApprovalDecision[]
+  status: WorkItemSharedApprovalStatus
+  expiresAt?: number
+  createdAt: number
+  updatedAt: number
+  resolvedAt?: number
+  revokedAt?: number
+  revision: number
+}
+
+export interface WorkItemSharedApprovalInput {
+  id?: string
+  projectId: string
+  workItemId: string
+  goalId?: string
+  acceptanceId?: string
+  effectId?: string
+  title: string
+  approverMemberIds: string[]
+  requiredApprovals?: number
+  expiresAt?: number
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface WorkItemSharedApprovalDecisionInput {
+  memberId: string
+  decision: WorkItemSharedApprovalDecisionStatus
+  comment?: string
+}
+
+export type ProjectWorkItemSharedApprovalCreateInput = WorkItemSharedApprovalInput
+
 export type WorkItemCommentStatus = 'active' | 'deleted'
 
 export interface WorkItemComment {
@@ -555,13 +865,73 @@ export interface WorkItemCommentPatch {
 
 export type ProjectWorkItemCommentCreateInput = Omit<WorkItemCommentInput, 'author'>
 
+export type ProjectCollaborationInboxSourceKind =
+  | 'work_item_assignment'
+  | 'comment_mention'
+  | 'shared_approval'
+
+export type ProjectCollaborationInboxState = 'unread' | 'read' | 'handled'
+export type ProjectCollaborationInboxPriority = 'urgent' | 'normal'
+export type ProjectCollaborationInboxAction = 'open_work_item' | 'review_comment' | 'decide_approval'
+
+/**
+ * A collaboration Inbox item is derived from canonical WorkItems, comments,
+ * approvals and members. It is never persisted as a second copy of that data.
+ */
+export interface ProjectCollaborationInboxItem {
+  id: string
+  projectId: string
+  memberId: string
+  sourceKind: ProjectCollaborationInboxSourceKind
+  sourceId: string
+  sourceRevision: number
+  workItemId: string
+  title: string
+  detail?: string
+  actor?: WorkItemActor
+  state: ProjectCollaborationInboxState
+  priority: ProjectCollaborationInboxPriority
+  action: ProjectCollaborationInboxAction
+  createdAt: number
+  updatedAt: number
+  receiptRevision?: number
+}
+
+/** Only the user's read/handled acknowledgement is durable. */
+export interface ProjectCollaborationInboxReceipt {
+  schemaVersion: ProjectWorkspaceSchemaVersion
+  id: string
+  projectId: string
+  memberId: string
+  sourceKind: ProjectCollaborationInboxSourceKind
+  sourceId: string
+  sourceRevision: number
+  status: Exclude<ProjectCollaborationInboxState, 'unread'>
+  readAt: number
+  handledAt?: number
+  updatedAt: number
+  revision: number
+}
+
+export interface ProjectCollaborationInboxListOptions {
+  memberId?: string
+  includeHandled?: boolean
+}
+
+export interface ProjectCollaborationInboxMarkInput {
+  projectId: string
+  itemId: string
+  sourceRevision: number
+  status: Exclude<ProjectCollaborationInboxState, 'unread'>
+}
+
 export type WorkItemReorderPlacement = 'before' | 'after'
 
 export interface ProjectWorkspaceEvent {
   schemaVersion: ProjectWorkspaceSchemaVersion
   id: string
   projectId: string
-  entityType: 'workspace' | 'goal' | 'work_item' | 'squad' | 'comment'
+  entityType: 'workspace' | 'goal' | 'work_item' | 'squad' | 'member' | 'invitation' | 'comment' | 'shared_approval' | 'inbox_receipt'
   entityId: string
   kind: string
   revision: number
@@ -576,7 +946,11 @@ export interface ProjectWorkspaceState {
   goals: Goal[]
   workItems: WorkItem[]
   squads: ProjectSquad[]
+  members: ProjectMember[]
+  invitations: ProjectInvitation[]
   comments: WorkItemComment[]
+  sharedApprovals: WorkItemSharedApproval[]
+  inboxReceipts: ProjectCollaborationInboxReceipt[]
   events: ProjectWorkspaceEvent[]
 }
 
@@ -590,7 +964,11 @@ export interface ProjectWorkspaceManifest {
   goals: Goal[]
   workItems: WorkItem[]
   squads: ProjectSquad[]
+  members: ProjectMember[]
+  invitations: ProjectInvitation[]
   comments: WorkItemComment[]
+  sharedApprovals: WorkItemSharedApproval[]
+  inboxReceipts: ProjectCollaborationInboxReceipt[]
   events: ProjectWorkspaceEvent[]
   digest: string
 }
@@ -600,6 +978,8 @@ export interface MutationOptions {
   expectedRevision?: number
   /** Optional global store revision CAS for callers coordinating a batch. */
   expectedStoreRevision?: number
+  /** Principal performing the mutation; omitted desktop calls use the local administrator. */
+  actor?: WorkItemActor
 }
 
 /** Renderer-facing contract for the native ProjectWorkspace domain. */
@@ -703,9 +1083,18 @@ export interface ProjectDeletionResult {
 export interface ProjectWorkspaceApi {
   listProjectWorkspaces(options?: ProjectWorkspaceListOptions): Promise<ProjectWorkspace[]>
   getProjectWorkspace(id: string): Promise<ProjectWorkspace | undefined>
+  getProjectAuthorization(projectId: string): Promise<ProjectAuthorizationView>
+  previewProjectKnowledge(projectId: string): Promise<ProjectKnowledgePreview>
+  searchProjectKnowledge(input: ProjectKnowledgeSearchInput): Promise<ProjectKnowledgeSearchResult>
   createProjectWorkspace(input: ProjectWorkspaceInput, options?: MutationOptions): Promise<ProjectWorkspace>
   applyProjectWorkspaceTemplate(input: ProjectWorkspaceTemplateApplyInput): Promise<ProjectWorkspaceTemplateApplyResult>
   updateProjectWorkspace(id: string, patch: ProjectWorkspacePatch, options?: MutationOptions): Promise<ProjectWorkspace>
+  mutateProjectConnector(
+    projectId: string,
+    resourceId: string,
+    mutation: ProjectConnectorMutation,
+    options?: MutationOptions
+  ): Promise<ProjectWorkspace>
   archiveProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>
   restoreProjectWorkspace(id: string, options?: MutationOptions): Promise<ProjectWorkspace>
   deleteProjectWorkspace(id: string, options?: ProjectWorkspaceDeleteOptions): Promise<ProjectWorkspace | undefined>
@@ -739,11 +1128,34 @@ export interface ProjectWorkspaceApi {
   restoreProjectSquad(id: string, options?: MutationOptions): Promise<ProjectSquad>
   addProjectSquadMember(id: string, member: ProjectSquadMemberInput, options?: MutationOptions): Promise<ProjectSquad>
   removeProjectSquadMember(id: string, memberType: WorkItemOwnerType, memberId: string, options?: MutationOptions): Promise<ProjectSquad>
+  listProjectMembers(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<ProjectMember[]>
+  getProjectMember(id: string): Promise<ProjectMember | undefined>
+  createProjectMember(input: ProjectMemberCreateInput, options?: MutationOptions): Promise<ProjectMember>
+  updateProjectMember(id: string, patch: ProjectMemberPatch, options?: MutationOptions): Promise<ProjectMember>
+  revokeProjectMember(id: string, options?: MutationOptions): Promise<ProjectMember>
+  restoreProjectMember(id: string, options?: MutationOptions): Promise<ProjectMember>
+  listProjectInvitations(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<ProjectInvitation[]>
+  createProjectInvitation(input: ProjectInvitationInput, options?: MutationOptions): Promise<ProjectInvitationCreateResult>
+  acceptProjectInvitation(projectId: string, token: string, options?: MutationOptions): Promise<ProjectMember>
+  revokeProjectInvitation(id: string, options?: MutationOptions): Promise<ProjectInvitation>
   listProjectComments(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<WorkItemComment[]>
   listProjectWorkItemComments(workItemId: string, options?: ProjectWorkspaceListOptions): Promise<WorkItemComment[]>
   createProjectWorkItemComment(input: ProjectWorkItemCommentCreateInput, options?: MutationOptions): Promise<WorkItemComment>
   updateProjectWorkItemComment(id: string, patch: WorkItemCommentPatch, options?: MutationOptions): Promise<WorkItemComment>
   deleteProjectWorkItemComment(id: string, options?: MutationOptions): Promise<WorkItemComment>
+  listProjectSharedApprovals(projectId?: string, options?: ProjectWorkspaceListOptions): Promise<WorkItemSharedApproval[]>
+  getProjectSharedApproval(id: string): Promise<WorkItemSharedApproval | undefined>
+  createProjectSharedApproval(input: ProjectWorkItemSharedApprovalCreateInput, options?: MutationOptions): Promise<WorkItemSharedApproval>
+  decideProjectSharedApproval(id: string, input: WorkItemSharedApprovalDecisionInput, options?: MutationOptions): Promise<WorkItemSharedApproval>
+  revokeProjectSharedApproval(id: string, options?: MutationOptions): Promise<WorkItemSharedApproval>
+  listProjectCollaborationInbox(
+    projectId: string,
+    options?: ProjectCollaborationInboxListOptions
+  ): Promise<ProjectCollaborationInboxItem[]>
+  markProjectCollaborationInbox(
+    input: ProjectCollaborationInboxMarkInput,
+    options?: MutationOptions
+  ): Promise<ProjectCollaborationInboxReceipt>
 }
 
 export function isProjectWorkspaceKind(value: unknown): value is ProjectWorkspaceKind {

@@ -491,248 +491,24 @@ export default function PluginRegistryPanel({
           ) : visibleItems.length === 0 ? (
             <div className="plugin-registry-empty">{labels.empty}</div>
           ) : (
-            visibleItems.map((item) => (
-              <article
-                key={item.id}
-                className={cx(
-                  'plugin-registry-row',
-                  selectedItem?.id === item.id && 'plugin-registry-row-active'
-                )}
-              >
-                <button type="button" className="plugin-registry-row-main" title={item.path} onClick={() => selectItem(item)}>
-                  <span className={cx('plugin-registry-kind', `plugin-registry-kind-${item.kind}`)}>
-                    {itemKindLabel(item.kind, labels)}
-                  </span>
-                  <span className="plugin-registry-row-content">
-                    <span className="plugin-registry-row-name">
-                      {item.name}
-                      {item.kind === 'mcp' && mcpProbeResults[item.id] && (
-                        <span
-                          className={cx(
-                            'plugin-registry-probe',
-                            mcpProbeResults[item.id].ok
-                              ? 'plugin-registry-probe-ok'
-                              : 'plugin-registry-probe-fail'
-                          )}
-                          title={
-                            mcpProbeResults[item.id].ok
-                              ? [
-                                  mcpProbeResults[item.id].serverName &&
-                                    `server: ${mcpProbeResults[item.id].serverName} ${mcpProbeResults[item.id].serverVersion ?? ''}`,
-                                  mcpProbeResults[item.id].latencyMs !== undefined &&
-                                    `${mcpProbeResults[item.id].latencyMs}ms`
-                                ]
-                                  .filter(Boolean)
-                                  .join(' · ')
-                              : mcpProbeResults[item.id].error
-                          }
-                        >
-                          {mcpProbeResults[item.id].ok
-                            ? `✓ ${t('pluginRegistryMcpConnected')}${mcpProbeResults[item.id].latencyMs !== undefined ? ` ${mcpProbeResults[item.id].latencyMs}ms` : ''}`
-                            : `✕ ${t('pluginRegistryMcpFailed')}`}
-                        </span>
-                      )}
-                    </span>
-                    <span className="plugin-registry-row-summary">
-                      <span className={cx('plugin-registry-source', `plugin-registry-source-${item.sourceKind ?? 'other'}`)}>
-                        {sourceLabel(item.sourceKind ?? 'other', labels)}
-                      </span>
-                      {item.summary || shortPath(item.path)}
-                    </span>
-                  </span>
-                  <span
-                    className={cx(
-                      'plugin-registry-status-dot',
-                      item.enabled ? 'plugin-registry-status-enabled' : 'plugin-registry-status-disabled'
-                    )}
-                    aria-label={item.enabled ? labels.enabled : labels.disabled}
-                  />
-                </button>
-                {(onOpenItem || onRevealItem || onUseItem || onDispatchAgent || onToggleItem || onApproveItem) && (
-                  <div className="plugin-registry-row-actions">
-                    {onOpenItem && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => onOpenItem(item)}>
-                        {labels.open}
-                      </button>
-                    )}
-                    {onRevealItem && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => onRevealItem(item)}>
-                        {labels.reveal}
-                      </button>
-                    )}
-                    {onUseItem && (
-                      <button
-                        className="btn btn-primary btn-sm"
-                        disabled={!item.enabled || item.trust.status !== 'approved'}
-                        onClick={() => void onUseItem(item)}
-                      >
-                        {labels.useWithAgent}
-                      </button>
-                    )}
-                    {onDispatchAgent && item.kind === 'agent' && (
-                      <button
-                        className="btn btn-primary btn-sm"
-                        disabled={!item.enabled || item.trust.status !== 'approved'}
-                        onClick={() => void onDispatchAgent(item)}
-                      >
-                        {labels.dispatchAgent}
-                      </button>
-                    )}
-                    {onToggleItem && (
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => void onToggleItem(item, !item.enabled)}
-                      >
-                        {item.enabled ? labels.disable : labels.enable}
-                      </button>
-                    )}
-                    {onApproveItem && item.trust.status !== 'approved' && item.trust.status !== 'invalid' && (
-                      <button className="btn btn-primary btn-sm" onClick={() => void onApproveItem(item)}>
-                        {item.trust.status === 'changed' ? t('pluginRegistryReapprove') : t('pluginRegistryApprove')}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </article>
-            ))
+            visibleItems.map((item) => <PluginRegistryRow
+              key={item.id}
+              item={item}
+              selected={selectedItem?.id === item.id}
+              labels={labels}
+              probe={item.kind === 'mcp' ? mcpProbeResults[item.id] : undefined}
+              onSelect={selectItem}
+              actions={{ onOpenItem, onRevealItem, onUseItem, onDispatchAgent, onToggleItem, onApproveItem }}
+            />)
           )}
         </section>
 
         <aside className="plugin-registry-status-panel">
-          <section className="plugin-registry-card">
-            <h3 className="plugin-registry-card-title">{labels.selected}</h3>
-            {selectedItem ? (
-              <>
-                <div className="plugin-registry-selected-head">
-                  <span className={cx('plugin-registry-kind', `plugin-registry-kind-${selectedItem.kind}`)}>
-                    {itemKindLabel(selectedItem.kind, labels)}
-                  </span>
-                  <strong className="plugin-registry-selected-name">{selectedItem.name}</strong>
-                </div>
-                <MetaRow label={labels.status}>
-                  <span
-                    className={cx(
-                      'plugin-registry-badge',
-                      selectedItem.enabled ? 'plugin-registry-badge-enabled' : 'plugin-registry-badge-disabled'
-                    )}
-                  >
-                    {selectedItem.enabled ? labels.enabled : labels.disabled}
-                  </span>
-                </MetaRow>
-                <MetaRow label={labels.stateSource}>
-                  {selectedItem.enabledSource === 'user' ? t('pluginRegistryUserOverride') : t('pluginRegistryManifest')}
-                </MetaRow>
-                {selectedItem.enabledUpdatedAt && (
-                  <MetaRow label={labels.updatedAt}>{formatScanTime(selectedItem.enabledUpdatedAt)}</MetaRow>
-                )}
-                <MetaRow label={labels.source}>{sourceLabel(selectedItem.sourceKind ?? 'other', labels)}</MetaRow>
-                <MetaRow label={labels.sourceRoot} mono>
-                  {selectedItem.sourceRoot}
-                </MetaRow>
-                <MetaRow label={labels.path} mono>
-                  {selectedItem.path}
-                </MetaRow>
-                <MetaRow label={labels.summary}>{selectedItem.summary || '-'}</MetaRow>
-                <MetaRow label={t('pluginRegistryVersion')}>{selectedItem.version || t('pluginRegistryUndeclared')}</MetaRow>
-                <MetaRow label={t('pluginRegistryProvenance')}>{selectedItem.provenance.origin}</MetaRow>
-                <MetaRow label={t('pluginRegistryContentDigest')} mono>{selectedItem.contentDigest || t('pluginRegistryUnavailable')}</MetaRow>
-                <MetaRow label={t('pluginRegistryTrustStatus')}>
-                  <span className={cx(
-                    'plugin-registry-badge',
-                    selectedItem.trust.status === 'approved' ? 'plugin-registry-badge-enabled' : 'plugin-registry-badge-disabled'
-                  )}>
-                    {selectedItem.trust.status === 'approved'
-                      ? t('pluginRegistryTrustApproved')
-                      : selectedItem.trust.status === 'changed'
-                        ? t('pluginRegistryTrustChanged')
-                        : selectedItem.trust.status === 'invalid'
-                          ? t('pluginRegistryTrustInvalid')
-                          : t('pluginRegistryTrustPending')}
-                  </span>
-                </MetaRow>
-                {selectedItem.capabilityManifest.transport && (
-                  <MetaRow label={t('pluginRegistryTransport')}>{selectedItem.capabilityManifest.transport}</MetaRow>
-                )}
-                {selectedItem.capabilityManifest.environmentVariables?.length ? (
-                  <MetaRow label={t('pluginRegistryEnvironmentVariables')}>{selectedItem.capabilityManifest.environmentVariables.join(', ')}</MetaRow>
-                ) : null}
-                <div className="plugin-registry-perms">
-                  <div className="plugin-registry-perms-label">{t('pluginRegistryCapabilities')}</div>
-                  <div className="plugin-registry-perm-tags">
-                    {selectedItem.capabilityManifest.capabilities.map((capability) => (
-                      <span key={capability} className="plugin-registry-perm-tag">{capability}</span>
-                    ))}
-                  </div>
-                  {(selectedItem.trust.capabilityDiff.added.length > 0 || selectedItem.trust.capabilityDiff.removed.length > 0) && (
-                    <div className="plugin-registry-perms-hint">
-                      {t('pluginRegistryCapabilitiesAdded')} {selectedItem.trust.capabilityDiff.added.join(', ') || '-'};{' '}
-                      {t('pluginRegistryCapabilitiesRemoved')} {selectedItem.trust.capabilityDiff.removed.join(', ') || '-'}
-                    </div>
-                  )}
-                </div>
-                <div className="plugin-registry-perms">
-                  <div className="plugin-registry-perms-label">{t('pluginRegistryPermissions')}</div>
-                  {selectedItem.permissions && selectedItem.permissions.length > 0 ? (
-                    <>
-                      <div className="plugin-registry-perm-tags">
-                        {selectedItem.permissions.map((perm) => (
-                          <span key={perm} className="plugin-registry-perm-tag" title={perm}>
-                            {perm}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsHint')}</div>
-                    </>
-                  ) : (
-                    <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsEmpty')}</div>
-                  )}
-                </div>
-                {onUseItem && (
-                  <button
-                    className="btn btn-primary btn-sm plugin-registry-use-selected"
-                    disabled={!selectedItem.enabled || selectedItem.trust.status !== 'approved'}
-                    onClick={() => void onUseItem(selectedItem)}
-                  >
-                    {labels.useWithAgent}
-                  </button>
-                )}
-                {onDispatchAgent && selectedItem.kind === 'agent' && (
-                  <button
-                    className="btn btn-primary btn-sm plugin-registry-use-selected"
-                    disabled={!selectedItem.enabled || selectedItem.trust.status !== 'approved'}
-                    onClick={() => void onDispatchAgent(selectedItem)}
-                  >
-                    {labels.dispatchAgent}
-                  </button>
-                )}
-                {onApproveItem && selectedItem.trust.status !== 'approved' && selectedItem.trust.status !== 'invalid' && (
-                  <button
-                    className="btn btn-primary btn-sm plugin-registry-use-selected"
-                    onClick={() => void onApproveItem(selectedItem)}
-                  >
-                    {selectedItem.trust.status === 'changed'
-                      ? t('pluginRegistryReapproveCurrent')
-                      : t('pluginRegistryApproveCurrent')}
-                  </button>
-                )}
-                {onUninstall && selectedItem.managed && (
-                  <button
-                    className="btn btn-danger btn-sm plugin-registry-use-selected"
-                    title={t('pluginRegistryUninstallHint')}
-                    onClick={() => {
-                      if (window.confirm(t('pluginRegistryUninstallConfirm', { name: selectedItem.name }))) {
-                        void onUninstall(selectedItem)
-                      }
-                    }}
-                  >
-                    {t('pluginRegistryUninstall')}
-                  </button>
-                )}
-              </>
-            ) : (
-              <div className="plugin-registry-empty plugin-registry-empty-tight">{labels.noSelection}</div>
-            )}
-          </section>
+          <SelectedPluginCard
+            item={selectedItem}
+            labels={labels}
+            actions={{ onUseItem, onDispatchAgent, onApproveItem, onUninstall }}
+          />
 
           <section className="plugin-registry-card">
             <h3 className="plugin-registry-card-title">{labels.status}</h3>
@@ -771,4 +547,152 @@ export default function PluginRegistryPanel({
       </div>
     </div>
   )
+}
+
+type PluginRowActions = Pick<PluginRegistryPanelProps,
+  'onOpenItem' | 'onRevealItem' | 'onUseItem' | 'onDispatchAgent' | 'onToggleItem' | 'onApproveItem'>
+
+function PluginRegistryRow({ item, selected, labels, probe, onSelect, actions }: {
+  item: PluginRegistryPanelItem
+  selected: boolean
+  labels: Required<PluginRegistryPanelLabels>
+  probe?: McpProbeStatus
+  onSelect: (item: PluginRegistryPanelItem) => void
+  actions: PluginRowActions
+}): React.JSX.Element {
+  return <article className={cx('plugin-registry-row', selected && 'plugin-registry-row-active')}>
+    <button type="button" className="plugin-registry-row-main" title={item.path} onClick={() => onSelect(item)}>
+      <span className={cx('plugin-registry-kind', `plugin-registry-kind-${item.kind}`)}>{itemKindLabel(item.kind, labels)}</span>
+      <span className="plugin-registry-row-content">
+        <span className="plugin-registry-row-name">{item.name}<McpProbeBadge status={probe} /></span>
+        <span className="plugin-registry-row-summary">
+          <span className={cx('plugin-registry-source', `plugin-registry-source-${item.sourceKind ?? 'other'}`)}>{sourceLabel(item.sourceKind ?? 'other', labels)}</span>
+          {item.summary || shortPath(item.path)}
+        </span>
+      </span>
+      <span className={cx('plugin-registry-status-dot', item.enabled ? 'plugin-registry-status-enabled' : 'plugin-registry-status-disabled')} aria-label={item.enabled ? labels.enabled : labels.disabled} />
+    </button>
+    <PluginRegistryRowActions item={item} labels={labels} actions={actions} />
+  </article>
+}
+
+function McpProbeBadge({ status }: { status?: McpProbeStatus }): React.JSX.Element | null {
+  const t = useT()
+  if (!status) return null
+  const title = status.ok
+    ? [status.serverName && `server: ${status.serverName} ${status.serverVersion ?? ''}`, status.latencyMs !== undefined && `${status.latencyMs}ms`].filter(Boolean).join(' · ')
+    : status.error
+  return <span className={cx('plugin-registry-probe', status.ok ? 'plugin-registry-probe-ok' : 'plugin-registry-probe-fail')} title={title}>
+    {status.ok ? `✓ ${t('pluginRegistryMcpConnected')}${status.latencyMs !== undefined ? ` ${status.latencyMs}ms` : ''}` : `✕ ${t('pluginRegistryMcpFailed')}`}
+  </span>
+}
+
+function PluginRegistryRowActions({ item, labels, actions }: { item: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels>; actions: PluginRowActions }): React.JSX.Element | null {
+  if (!Object.values(actions).some(Boolean)) return null
+  return <div className="plugin-registry-row-actions">
+    <PluginRegistryPrimaryActions item={item} labels={labels} actions={actions} />
+    <PluginRegistryStateActions item={item} labels={labels} actions={actions} />
+  </div>
+}
+
+function PluginRegistryPrimaryActions({ item, labels, actions }: { item: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels>; actions: PluginRowActions }): React.JSX.Element {
+  const { onOpenItem, onRevealItem, onUseItem, onDispatchAgent } = actions
+  const executable = item.enabled && item.trust.status === 'approved'
+  return <>
+    {onOpenItem && <button className="btn btn-ghost btn-sm" onClick={() => onOpenItem(item)}>{labels.open}</button>}
+    {onRevealItem && <button className="btn btn-ghost btn-sm" onClick={() => onRevealItem(item)}>{labels.reveal}</button>}
+    {onUseItem && <button className="btn btn-primary btn-sm" disabled={!executable} onClick={() => void onUseItem(item)}>{labels.useWithAgent}</button>}
+    {onDispatchAgent && item.kind === 'agent' && <button className="btn btn-primary btn-sm" disabled={!executable} onClick={() => void onDispatchAgent(item)}>{labels.dispatchAgent}</button>}
+  </>
+}
+
+function PluginRegistryStateActions({ item, labels, actions }: { item: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels>; actions: PluginRowActions }): React.JSX.Element {
+  const t = useT()
+  const { onToggleItem, onApproveItem } = actions
+  return <>
+    {onToggleItem && <button className="btn btn-ghost btn-sm" onClick={() => void onToggleItem(item, !item.enabled)}>{item.enabled ? labels.disable : labels.enable}</button>}
+    {onApproveItem && item.trust.status !== 'approved' && item.trust.status !== 'invalid' && <button className="btn btn-primary btn-sm" onClick={() => void onApproveItem(item)}>{item.trust.status === 'changed' ? t('pluginRegistryReapprove') : t('pluginRegistryApprove')}</button>}
+  </>
+}
+
+type SelectedPluginActions = Pick<PluginRegistryPanelProps, 'onUseItem' | 'onDispatchAgent' | 'onApproveItem' | 'onUninstall'>
+
+function SelectedPluginCard({ item, labels, actions }: { item?: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels>; actions: SelectedPluginActions }): React.JSX.Element {
+  return <section className="plugin-registry-card">
+    <h3 className="plugin-registry-card-title">{labels.selected}</h3>
+    {item ? <>
+      <div className="plugin-registry-selected-head">
+        <span className={cx('plugin-registry-kind', `plugin-registry-kind-${item.kind}`)}>{itemKindLabel(item.kind, labels)}</span>
+        <strong className="plugin-registry-selected-name">{item.name}</strong>
+      </div>
+      <SelectedPluginMetadata item={item} labels={labels} />
+      <PluginCapabilityList item={item} />
+      <PluginPermissionList permissions={item.permissions} />
+      <SelectedPluginActionButtons item={item} labels={labels} actions={actions} />
+    </> : <div className="plugin-registry-empty plugin-registry-empty-tight">{labels.noSelection}</div>}
+  </section>
+}
+
+function SelectedPluginMetadata({ item, labels }: { item: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels> }): React.JSX.Element {
+  const t = useT()
+  return <>
+    <MetaRow label={labels.status}><span className={cx('plugin-registry-badge', item.enabled ? 'plugin-registry-badge-enabled' : 'plugin-registry-badge-disabled')}>{item.enabled ? labels.enabled : labels.disabled}</span></MetaRow>
+    <MetaRow label={labels.stateSource}>{item.enabledSource === 'user' ? t('pluginRegistryUserOverride') : t('pluginRegistryManifest')}</MetaRow>
+    {item.enabledUpdatedAt && <MetaRow label={labels.updatedAt}>{formatScanTime(item.enabledUpdatedAt)}</MetaRow>}
+    <MetaRow label={labels.source}>{sourceLabel(item.sourceKind ?? 'other', labels)}</MetaRow>
+    <MetaRow label={labels.sourceRoot} mono>{item.sourceRoot}</MetaRow>
+    <MetaRow label={labels.path} mono>{item.path}</MetaRow>
+    <MetaRow label={labels.summary}>{item.summary || '-'}</MetaRow>
+    <MetaRow label={t('pluginRegistryVersion')}>{item.version || t('pluginRegistryUndeclared')}</MetaRow>
+    <MetaRow label={t('pluginRegistryProvenance')}>{item.provenance.origin}</MetaRow>
+    <MetaRow label={t('pluginRegistryContentDigest')} mono>{item.contentDigest || t('pluginRegistryUnavailable')}</MetaRow>
+    <MetaRow label={t('pluginRegistryTrustStatus')}><span className={cx('plugin-registry-badge', item.trust.status === 'approved' ? 'plugin-registry-badge-enabled' : 'plugin-registry-badge-disabled')}>{trustStatusLabel(item.trust.status, t)}</span></MetaRow>
+    {item.capabilityManifest.transport && <MetaRow label={t('pluginRegistryTransport')}>{item.capabilityManifest.transport}</MetaRow>}
+    {item.capabilityManifest.environmentVariables?.length ? <MetaRow label={t('pluginRegistryEnvironmentVariables')}>{item.capabilityManifest.environmentVariables.join(', ')}</MetaRow> : null}
+  </>
+}
+
+function PluginCapabilityList({ item }: { item: PluginRegistryPanelItem }): React.JSX.Element {
+  const t = useT()
+  const diff = item.trust.capabilityDiff
+  return <div className="plugin-registry-perms">
+    <div className="plugin-registry-perms-label">{t('pluginRegistryCapabilities')}</div>
+    <div className="plugin-registry-perm-tags">{item.capabilityManifest.capabilities.map((capability) => <span key={capability} className="plugin-registry-perm-tag">{capability}</span>)}</div>
+    {(diff.added.length > 0 || diff.removed.length > 0) && <div className="plugin-registry-perms-hint">
+      {t('pluginRegistryCapabilitiesAdded')} {diff.added.join(', ') || '-'}; {t('pluginRegistryCapabilitiesRemoved')} {diff.removed.join(', ') || '-'}
+    </div>}
+  </div>
+}
+
+function PluginPermissionList({ permissions }: { permissions?: string[] }): React.JSX.Element {
+  const t = useT()
+  return <div className="plugin-registry-perms">
+    <div className="plugin-registry-perms-label">{t('pluginRegistryPermissions')}</div>
+    {permissions?.length ? <>
+      <div className="plugin-registry-perm-tags">{permissions.map((permission) => <span key={permission} className="plugin-registry-perm-tag" title={permission}>{permission}</span>)}</div>
+      <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsHint')}</div>
+    </> : <div className="plugin-registry-perms-hint">{t('pluginRegistryPermissionsEmpty')}</div>}
+  </div>
+}
+
+function SelectedPluginActionButtons({ item, labels, actions }: { item: PluginRegistryPanelItem; labels: Required<PluginRegistryPanelLabels>; actions: SelectedPluginActions }): React.JSX.Element {
+  const t = useT()
+  const executable = item.enabled && item.trust.status === 'approved'
+  const { onUseItem, onDispatchAgent, onApproveItem, onUninstall } = actions
+  const uninstall = (): void => {
+    if (onUninstall && window.confirm(t('pluginRegistryUninstallConfirm', { name: item.name }))) void onUninstall(item)
+  }
+  return <>
+    {onUseItem && <button className="btn btn-primary btn-sm plugin-registry-use-selected" disabled={!executable} onClick={() => void onUseItem(item)}>{labels.useWithAgent}</button>}
+    {onDispatchAgent && item.kind === 'agent' && <button className="btn btn-primary btn-sm plugin-registry-use-selected" disabled={!executable} onClick={() => void onDispatchAgent(item)}>{labels.dispatchAgent}</button>}
+    {onApproveItem && item.trust.status !== 'approved' && item.trust.status !== 'invalid' && <button className="btn btn-primary btn-sm plugin-registry-use-selected" onClick={() => void onApproveItem(item)}>{item.trust.status === 'changed' ? t('pluginRegistryReapproveCurrent') : t('pluginRegistryApproveCurrent')}</button>}
+    {onUninstall && item.managed && <button className="btn btn-danger btn-sm plugin-registry-use-selected" title={t('pluginRegistryUninstallHint')} onClick={uninstall}>{t('pluginRegistryUninstall')}</button>}
+  </>
+}
+
+function trustStatusLabel(status: PluginRegistryTrustStatus, t: ReturnType<typeof useT>): string {
+  if (status === 'approved') return t('pluginRegistryTrustApproved')
+  if (status === 'changed') return t('pluginRegistryTrustChanged')
+  if (status === 'invalid') return t('pluginRegistryTrustInvalid')
+  return t('pluginRegistryTrustPending')
 }

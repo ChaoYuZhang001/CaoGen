@@ -10,9 +10,12 @@ const tempRoot = mkdtempSync(path.join(repoRoot, 'test-results', 'caogen-openai-
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
 const memoryRoot = path.join(tempRoot, 'memory')
+const userDataRoot = path.join(tempRoot, 'user-data')
+const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
 
 try {
   process.env.CAOGEN_MEMORY_DIR = memoryRoot
+  process.env.CAOGEN_USER_DATA_DIR = userDataRoot
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'api-review'), { recursive: true })
   writeFileSync(
     path.join(projectRoot, '.caogen', 'skills', 'api-review', 'SKILL.md'),
@@ -37,6 +40,7 @@ try {
   const toolsModule = await import(pathToFileURL(findCompiled(outDir, 'openaiTools.js')).href)
   const permissions = await import(pathToFileURL(findCompiled(outDir, 'tool-permission.js')).href)
   const idempotency = await import(pathToFileURL(findCompiled(outDir, 'tool-idempotency.js')).href)
+  const registry = await import(pathToFileURL(findCompiled(outDir, 'pluginRegistry.js')).href)
   const names = toolsModule.OPENAI_CODING_TOOLS.map((tool) => tool.function.name)
   for (const expected of [
     'task_decompose',
@@ -65,13 +69,38 @@ try {
   assertEqual(browserStatus.ok, true)
   assert(browserStatus.output.includes('puppeteerCoreAvailable'), 'browser_automation_status should report puppeteer-core availability')
 
+  const unapprovedSkills = await toolsModule.executeCodingTool(
+    'list_skills',
+    { query: 'api review', limit: 5 },
+    projectRoot
+  )
+  assertEqual(unapprovedSkills.ok, true)
+  const unapprovedSkillPayload = JSON.parse(unapprovedSkills.output)
+  assert(
+    !unapprovedSkillPayload.skills.some((skill) => skill.name === 'API Review'),
+    'unapproved project skill must remain unavailable'
+  )
+  assert(
+    unapprovedSkillPayload.diagnostics.some((item) => item.code === 'authorization_blocked'),
+    'unapproved project skill should report its trust gate'
+  )
+
+  approveRegistryItems(
+    registry,
+    [path.join(projectRoot, '.caogen', 'skills')],
+    (item) => item.kind === 'skill' && item.name === 'API Review'
+  )
   const skills = await toolsModule.executeCodingTool(
     'list_skills',
     { query: 'api review', limit: 5 },
     projectRoot
   )
   assertEqual(skills.ok, true)
-  assert(skills.output.includes('API Review'), 'list_skills should include project skill')
+  const skillPayload = JSON.parse(skills.output)
+  assert(
+    skillPayload.skills.some((skill) => skill.name === 'API Review'),
+    'list_skills should include approved project skill'
+  )
 
   const unconfirmedSkill = await toolsModule.executeCodingTool(
     'run_skill',
@@ -112,7 +141,7 @@ try {
 
   const mcpMissingConfig = await toolsModule.executeCodingTool('mcp_discover', {}, projectRoot)
   assertEqual(mcpMissingConfig.ok, false)
-  assert(mcpMissingConfig.output.includes('MCP'), 'mcp_discover should report missing config clearly')
+  assert(mcpMissingConfig.output.includes('serverId'), 'mcp_discover should require an approved Registry serverId')
 
   for (const toolName of ['mcp_discover', 'mcp_call_tool']) {
     const tool = toolsModule.OPENAI_CODING_TOOLS.find((item) => item.function.name === toolName)
@@ -176,7 +205,20 @@ try {
 
   console.log('openaiP1Tools smoke ok')
 } finally {
+  if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
+  else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function approveRegistryItems(registry, roots, select) {
+  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const items = view.items.filter(select)
+  assert(items.length > 0, 'expected Plugin Registry fixture items to approve')
+  const state = items.reduce(
+    (current, item) => registry.approvePluginRegistryItem(current, item),
+    registry.emptyPluginRegistryState()
+  )
+  registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
 }
 
 function compile(files, outDir) {

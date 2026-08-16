@@ -1,5 +1,8 @@
 import type { TaskSnapshotRecord } from '../../shared/types'
-import { reconcilePersistedTaskSnapshot } from '../task/effect-runtime'
+import {
+  reconcileExistingPersistedTaskSnapshot,
+  reconcilePersistedTaskSnapshot
+} from '../task/effect-runtime'
 import {
   isInteractiveOperationActive,
   isInteractiveOperationSnapshot,
@@ -13,8 +16,12 @@ export function assertAgentRecoverySnapshot(snapshot: TaskSnapshotRecord): void 
 }
 
 export async function reconcileInteractiveOperationSnapshot(
-  snapshot: TaskSnapshotRecord
+  snapshot: TaskSnapshotRecord,
+  options: { requireStored?: boolean } = {}
 ): Promise<TaskSnapshotRecord | null> {
   if (isInteractiveOperationActive(snapshot)) return null
-  return settleStoppedInteractiveOperationSnapshot(await reconcilePersistedTaskSnapshot(snapshot))
+  const reconciled = options.requireStored
+    ? await reconcileExistingPersistedTaskSnapshot(snapshot)
+    : await reconcilePersistedTaskSnapshot(snapshot)
+  return reconciled ? settleStoppedInteractiveOperationSnapshot(reconciled) : null
 }

@@ -101,6 +101,29 @@ function TaskPlanStepsEditor({ t, form, setForm, canEdit }: EditorSectionProps):
           <textarea aria-label={t('taskPlanStepDescription')} placeholder={t('taskPlanStepDescription')}
             value={step.description} disabled={!canEdit} rows={2}
             onChange={(event) => updatePlanStep(setForm, index, { description: event.target.value })} />
+          <textarea aria-label={t('taskPlanStepArtifacts')} placeholder={t('taskPlanStepArtifacts')}
+            value={step.expectedArtifacts} disabled={!canEdit} rows={2}
+            onChange={(event) => updatePlanStep(setForm, index, { expectedArtifacts: event.target.value })} />
+          <textarea aria-label={t('taskPlanStepDataEgress')} placeholder={t('taskPlanStepDataEgress')}
+            value={step.dataEgress} disabled={!canEdit} rows={2}
+            onChange={(event) => updatePlanStep(setForm, index, { dataEgress: event.target.value })} />
+          <label className="task-plan-step-inline">
+            <span>{t('taskPlanStepRisk')}</span>
+            <select value={step.riskLevel} disabled={!canEdit}
+              onChange={(event) => updatePlanStep(setForm, index, {
+                riskLevel: event.target.value as TaskPlanRiskLevel
+              })}>
+              <option value="low">{t('taskPlanRiskLow')}</option>
+              <option value="medium">{t('taskPlanRiskMedium')}</option>
+              <option value="high">{t('taskPlanRiskHigh')}</option>
+              <option value="critical">{t('taskPlanRiskCritical')}</option>
+            </select>
+          </label>
+          <label className="task-plan-step-inline">
+            <span>{t('taskPlanStepCost')}</span>
+            <input type="number" min="0" step="0.01" value={step.estimatedCostUsd} disabled={!canEdit}
+              onChange={(event) => updatePlanStep(setForm, index, { estimatedCostUsd: event.target.value })} />
+          </label>
         </div>
       ))}
     </div>

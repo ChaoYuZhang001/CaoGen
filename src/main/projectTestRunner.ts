@@ -22,6 +22,7 @@ import type {
   ProjectTestRunResult,
   ProjectTestRunStatus
 } from '../shared/types'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 const DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024
@@ -68,12 +69,13 @@ export function discoverProjectTests(cwd: string): ProjectTestDiscoveryResult {
 export async function runProjectTest(
   cwd: string,
   sessionId: string,
-  commandId: string
+  commandId: string,
+  projectId?: string
 ): Promise<ProjectTestRunResult> {
   if (activeRuns.has(sessionId)) throw new Error('A test command is already running for this session')
   const command = discoverRunnableCommands(cwd).find((candidate) => candidate.id === commandId)
   if (!command) throw new Error('Test command changed after discovery; refresh the test list')
-  return executeCommand(cwd, sessionId, command)
+  return executeCommand(cwd, sessionId, command, projectId)
 }
 
 export function cancelProjectTest(sessionId: string): boolean {
@@ -152,7 +154,12 @@ function runnable(
   return { id, label, source, default: isDefault, executable, args, shell }
 }
 
-function executeCommand(cwd: string, sessionId: string, command: RunnableCommand): Promise<ProjectTestRunResult> {
+function executeCommand(
+  cwd: string,
+  sessionId: string,
+  command: RunnableCommand,
+  projectId?: string
+): Promise<ProjectTestRunResult> {
   const runId = randomUUID()
   const startedAt = new Date()
   let forcedStatus: ProjectTestRunStatus | undefined
@@ -172,7 +179,10 @@ function executeCommand(cwd: string, sessionId: string, command: RunnableCommand
         stdio: ['ignore', 'pipe', 'pipe']
       })
     } catch (error) {
-      resolvePromise(finalResult(command, runId, startedAt, 'launch_failed', null, null, '', errorMessage(error), false, false, cwd))
+      resolvePromise(finalResult(
+        command, runId, startedAt, 'launch_failed', null, null, '', errorMessage(error), false, false,
+        cwd, sessionId, projectId
+      ))
       return
     }
     const cancel = (reason: ProjectTestRunStatus): void => {
@@ -204,7 +214,7 @@ function executeCommand(cwd: string, sessionId: string, command: RunnableCommand
       const normalizedStderr = normalizeOutput(`${stderr.toString('utf8')}${launchError ? `\n${launchError}` : ''}`, cwd)
       resolvePromise(finalResult(
         command, runId, startedAt, status, exitCode, signal,
-        normalizedStdout, normalizedStderr, stdoutTruncated, stderrTruncated, cwd
+        normalizedStdout, normalizedStderr, stdoutTruncated, stderrTruncated, cwd, sessionId, projectId
       ))
     }
   })
@@ -221,7 +231,9 @@ function finalResult(
   stderr: string,
   stdoutTruncated: boolean,
   stderrTruncated: boolean,
-  cwd: string
+  cwd: string,
+  sessionId: string,
+  projectId?: string
 ): ProjectTestRunResult {
   const finishedAt = new Date()
   const result: ProjectTestRunResult = {
@@ -242,7 +254,7 @@ function finalResult(
     evidenceId: runId
   }
   try {
-    writeEvidence(cwd, result)
+    writeEvidence(cwd, sessionId, projectId, result)
   } catch (error) {
     result.evidenceId = ''
     result.evidenceError = `Failed to persist test evidence: ${errorMessage(error)}`
@@ -250,7 +262,14 @@ function finalResult(
   return result
 }
 
-function writeEvidence(cwd: string, result: ProjectTestRunResult): void {
+function writeEvidence(
+  cwd: string,
+  sessionId: string,
+  projectId: string | undefined,
+  result: ProjectTestRunResult
+): void {
+  const ownerSessionId = evidenceOwnerId(sessionId, 'session')
+  const ownerProjectId = projectId === undefined ? undefined : evidenceOwnerId(projectId, 'project')
   const workspaceDigest = createHash('sha256').update(resolve(cwd)).digest('hex')
   const directory = join(app.getPath('userData'), 'project-test-evidence', workspaceDigest.slice(0, 24))
   const filePath = join(directory, `${result.runId}.json`)
@@ -258,9 +277,11 @@ function writeEvidence(cwd: string, result: ProjectTestRunResult): void {
   const output = `${result.stdout}\n${result.stderr}`
   const record = {
     kind: 'caogen-project-test-evidence',
-    schemaVersion: 1,
+    schemaVersion: 2,
     evidenceId: result.evidenceId,
     workspaceDigest,
+    sessionId: ownerSessionId,
+    ...(ownerProjectId ? { projectId: ownerProjectId } : {}),
     commandId: result.commandId,
     label: result.label,
     source: result.source,
@@ -291,6 +312,14 @@ function writeEvidence(cwd: string, result: ProjectTestRunResult): void {
   }
 }
 
+function evidenceOwnerId(value: string, label: string): string {
+  const normalized = value.trim()
+  if (!normalized || normalized.length > 512 || /[\0-\x1f\x7f]/.test(normalized)) {
+    throw new Error(`Project test evidence ${label} identity is invalid`)
+  }
+  return normalized
+}
+
 function appendBounded(
   current: Buffer<ArrayBufferLike>,
   chunk: Buffer<ArrayBufferLike>,
@@ -307,7 +336,11 @@ function appendBounded(
 function terminateChild(child: TestChild): void {
   if (!child.pid || child.killed) return
   if (process.platform === 'win32') {
-    spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' })
+    spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+      env: buildMinimalSubprocessEnv(),
+      windowsHide: true,
+      stdio: 'ignore'
+    })
   } else {
     child.kill('SIGTERM')
   }
@@ -358,7 +391,7 @@ function fileIdentity(path: string): string {
 }
 
 function testEnvironment(): NodeJS.ProcessEnv {
-  return { ...process.env, CI: process.env.CI ?? '1', NO_COLOR: '1', FORCE_COLOR: '0' }
+  return buildMinimalSubprocessEnv({ CI: process.env.CI ?? '1', NO_COLOR: '1', FORCE_COLOR: '0' })
 }
 
 function normalizeOutput(value: string, cwd: string): string {

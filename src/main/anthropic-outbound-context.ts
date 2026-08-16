@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import type { OutboundContextItemView } from '../shared/types'
 
-export function anthropicAdditionalContextItems(
+export function nativeAdditionalContextItems(
   handoff: string,
   hasConversationContext: boolean,
   hasMemoryContext = false
@@ -13,7 +14,9 @@ export function anthropicAdditionalContextItems(
       label: 'Workflow handoff',
       dataClass: 'S4',
       egressPolicy: 'allow',
-      decision: 'included'
+      decision: 'included',
+      bytes: Buffer.byteLength(handoff, 'utf8'),
+      digest: `sha256:${createHash('sha256').update(handoff).digest('hex')}`
     })
   }
   if (hasMemoryContext) {
@@ -38,3 +41,5 @@ export function anthropicAdditionalContextItems(
   }
   return items
 }
+
+export const anthropicAdditionalContextItems = nativeAdditionalContextItems

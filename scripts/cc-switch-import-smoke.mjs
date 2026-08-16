@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -128,6 +129,7 @@ try {
 }
 
 function compile() {
+  symlinkSync(path.join(repoRoot, 'node_modules'), path.join(tempRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   execFileSync(process.execPath, [
     path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
     'src/main/provider/ccSwitchProviderImport.ts',

@@ -410,10 +410,22 @@ export class NativeRuntimeGuard {
       case 'checkpoint-restore': requiredString(event.messageId, 'checkpoint-restore.messageId'); return
       case 'routing': requiredString(event.providerId, 'routing.providerId'); requiredString(event.model, 'routing.model'); return
       case 'failover': requiredString(event.fromProviderId, 'failover.fromProviderId'); requiredString(event.toProviderId, 'failover.toProviderId'); return
+      default: return this.assertProviderContextEvent(event)
+    }
+  }
+
+  private assertProviderContextEvent(event: AgentEvent): void {
+    switch (event.kind) {
       case 'provider-key-failover': requiredString(event.fromKeyId, 'provider-key-failover.fromKeyId'); requiredString(event.toKeyId, 'provider-key-failover.toKeyId'); return
       case 'provider-model-failover': requiredString(event.providerId, 'provider-model-failover.providerId'); requiredString(event.providerName, 'provider-model-failover.providerName'); requiredString(event.fromModel, 'provider-model-failover.fromModel'); requiredString(event.toModel, 'provider-model-failover.toModel'); requiredString(event.reason, 'provider-model-failover.reason'); return
       case 'provider-protocol-failover': requiredString(event.providerId, 'provider-protocol-failover.providerId'); requiredString(event.providerName, 'provider-protocol-failover.providerName'); requiredString(event.model, 'provider-protocol-failover.model'); if (event.fromProtocol !== 'responses' || event.toProtocol !== 'chat') fail('event_schema', 'provider-protocol-failover protocols are invalid'); requiredString(event.reason, 'provider-protocol-failover.reason'); return
       case 'provider-recovery-exhausted': requiredString(event.providerId, 'provider-recovery-exhausted.providerId'); requiredString(event.providerName, 'provider-recovery-exhausted.providerName'); requiredString(event.model, 'provider-recovery-exhausted.model'); if (event.engine !== 'openai' && event.engine !== 'anthropic' && event.engine !== 'gemini') fail('event_schema', 'provider-recovery-exhausted.engine is invalid'); requiredString(event.reason, 'provider-recovery-exhausted.reason'); return
+      default: return this.assertMessageContextEvent(event)
+    }
+  }
+
+  private assertMessageContextEvent(event: AgentEvent): void {
+    switch (event.kind) {
       case 'text-delta':
       case 'thinking-delta': if (typeof event.text !== 'string') fail('event_schema', `${event.kind}.text is required`); return
       case 'assistant-message': if (!Array.isArray(event.blocks)) fail('event_schema', 'assistant-message.blocks is required'); return

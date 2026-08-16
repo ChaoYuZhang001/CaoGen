@@ -8,6 +8,9 @@ const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-skill-manager-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
+const userDataRoot = path.join(tempRoot, 'user-data')
+const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
+process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
 try {
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'react-component'), { recursive: true })
@@ -35,7 +38,24 @@ try {
   compile(['src/main/skill/skill-manager.ts', 'src/main/skill/skill-loader.ts'], outDir)
   const modulePath = findCompiled(outDir, 'skill-manager.js')
   const { SkillManager } = await import(pathToFileURL(modulePath).href)
+  const registry = await import(pathToFileURL(findCompiled(outDir, 'pluginRegistry.js')).href)
   const manager = new SkillManager({ projectRoot })
+
+  const blocked = manager.reload()
+  assert(
+    !blocked.skills.some((skill) => skill.name === 'React Component Builder'),
+    'unapproved project Skill must remain unavailable'
+  )
+  assert(
+    blocked.diagnostics.some((item) => item.code === 'authorization_blocked'),
+    'unapproved project Skill should emit an authorization diagnostic'
+  )
+
+  approveRegistryItems(
+    registry,
+    [path.join(projectRoot, '.caogen', 'skills')],
+    (item) => item.kind === 'skill' && item.name === 'React Component Builder'
+  )
   const result = manager.reload()
 
   assert(result.skills.length >= 21, 'built-in skill catalog should cover 20+ common workflows')
@@ -51,7 +71,20 @@ try {
   assert(exported?.includes('React Component Builder'), 'exportSkill should serialize skill details')
   console.log('skillManager smoke ok')
 } finally {
+  if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
+  else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function approveRegistryItems(registry, roots, select) {
+  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const items = view.items.filter(select)
+  assert(items.length > 0, 'expected Plugin Registry fixture items to approve')
+  const state = items.reduce(
+    (current, item) => registry.approvePluginRegistryItem(current, item),
+    registry.emptyPluginRegistryState()
+  )
+  registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
 }
 
 function compile(files, outDir) {

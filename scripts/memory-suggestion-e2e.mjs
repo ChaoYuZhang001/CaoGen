@@ -121,7 +121,7 @@ try {
   })
 
   await check('memory keyword message renders suggestion bar through real IPC', async () => {
-    await sendMessage(page, session.id, triggerText)
+    assert(await sendMessage(page, session.id, triggerText), 'first memory suggestion message was rejected')
     const bar = await waitForValue(
       () => readMemorySuggestionUi(page),
       (value) => value.visible && value.text.includes(triggerText),
@@ -134,6 +134,8 @@ try {
     report.firstSuggestion = { bar, events }
   })
   await screenshot(page, '01-memory-suggestion-bar')
+  await waitForSessionIdle(page, session.id, 'waiting for first memory suggestion turn completion')
+  assert(mock.requests.length === 1, `first memory suggestion should reach Provider once, got ${mock.requests.length}`)
 
   await check('same-session duplicate memory suggestion is throttled after dismiss', async () => {
     await page.click('[data-memory-suggestion-action="dismiss"]')
@@ -144,17 +146,18 @@ try {
       'waiting for dismissed memory suggestion bar'
     )
     const before = await readMemorySuggestionEvents(page)
-    await sendMessage(page, session.id, triggerText)
-    await sleep(900)
+    assert(await sendMessage(page, session.id, triggerText), 'duplicate memory suggestion message was rejected')
+    await waitForSessionIdle(page, session.id, 'waiting for duplicate memory suggestion turn completion')
     const after = await readMemorySuggestionEvents(page)
     const ui = await readMemorySuggestionUi(page)
     assert(after.length === before.length, `duplicate text emitted another event: ${before.length} -> ${after.length}`)
     assert(!ui.visible, `duplicate text rendered suggestion again: ${JSON.stringify(ui)}`)
-    report.duplicateThrottle = { before: before.length, after: after.length }
+    assert(mock.requests.length === 2, `duplicate message should still reach Provider, got ${mock.requests.length} requests`)
+    report.duplicateThrottle = { before: before.length, after: after.length, providerRequests: mock.requests.length }
   })
 
   await check('accepting a distinct suggestion opens a prefilled form without duplicating or activating auto drafts', async () => {
-    await sendMessage(page, session.id, acceptText)
+    assert(await sendMessage(page, session.id, acceptText), 'distinct memory suggestion message was rejected')
     await waitForValue(
       () => readMemorySuggestionUi(page),
       (value) => value.visible && value.text.includes(acceptText),
@@ -256,7 +259,19 @@ async function check(name, fn) {
 }
 
 async function sendMessage(page, sessionId, text) {
-  await page.evaluate((id, body) => window.agentDesk.sendMessage(id, { text: body }), sessionId, text)
+  return page.evaluate((id, body) => window.agentDesk.sendMessage(id, { text: body }), sessionId, text)
+}
+
+async function waitForSessionIdle(page, sessionId, label) {
+  return waitForValue(
+    () => page.evaluate(
+      (id) => window.agentDesk.listSessions().then((items) => items.find((item) => item.id === id)),
+      sessionId
+    ),
+    (meta) => meta?.status === 'idle',
+    15_000,
+    label
+  )
 }
 
 async function readMemorySuggestionUi(page) {

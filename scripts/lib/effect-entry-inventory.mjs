@@ -15,6 +15,7 @@ const ACTION_MAP_SPECS = [
     channel: 'digitalWorker:invoke',
     file: 'src/main/ipc/digital-worker-handlers.ts',
     variable: 'DIGITAL_WORKER_ACTION_HANDLERS',
+    additionalReadOnly: ['exportDigitalWorkerHistory'],
     mutationSet: {
       file: 'src/main/ipc/digital-worker-project-mutation.ts',
       variable: 'PROJECT_OWNED_ACTIONS'
@@ -40,6 +41,12 @@ const ACTION_MAP_SPECS = [
 
 const APP_FEATURE_ACTION_SPECS = [
   {
+    feature: 'session-query',
+    file: 'src/main/ipc/session-query-handlers.ts',
+    typeAlias: 'SessionQueryAction',
+    readOnlyActions: ['query']
+  },
+  {
     feature: 'task-plan',
     file: 'src/main/ipc/task-plan-handlers.ts',
     typeAlias: 'TaskPlanAction',
@@ -59,8 +66,31 @@ const APP_FEATURE_ACTION_SPECS = [
       'preview', 'backups',
       'cc-switch-preview', 'cc-switch-backups',
       'native-codex-preview', 'native-backups',
-      'native-config-preview', 'native-config-backups'
+      'native-config-preview', 'native-config-backups', 'backup-preview'
     ]
+  },
+  {
+    feature: 'provider-profile-sync',
+    file: 'src/main/ipc/provider-profile-sync-handlers.ts',
+    typeAlias: 'ProviderProfileSyncAction',
+    readOnlyActions: [
+      'status', 'preview',
+      'webdav-config', 'webdav-preview', 'webdav-history-list', 'webdav-history-preview',
+      's3-config', 's3-preview', 's3-history-list', 's3-history-preview'
+    ]
+  },
+  {
+    feature: 'media',
+    staticActions: [
+      'get', 'provider:list', 'provider:upsert', 'provider:delete', 'ffmpeg:get',
+      'production:create', 'production:revise', 'shot:create', 'shot:update',
+      'dialogue:upsert', 'dialogue:delete', 'timeline:update', 'budget:update',
+      'storage:update', 'bible:upsert', 'bible:delete', 'continuity-lock:upsert',
+      'continuity-lock:delete', 'continuity:check', 'asset:import', 'asset:bind',
+      'asset:adopt', 'asset:retention', 'asset:purge', 'asset:egress',
+      'asset:voice-clone', 'compose', 'job:submit', 'job:advance', 'job:reconcile', 'job:cancel'
+    ],
+    readOnlyActions: ['get', 'provider:list', 'ffmpeg:get', 'continuity:check', 'job:reconcile']
   }
 ]
 
@@ -172,7 +202,7 @@ function validateEntryShape(entry, failures) {
   if (!['read_only', 'mutation'].includes(entry.access)) {
     failures.push(`${entry.id}: access must be read_only or mutation`)
   }
-  if (!['none', 'queryable', 'opaque', 'durable_local'].includes(entry.effectPolicy)) {
+  if (!['none', 'queryable', 'opaque', 'durable_local', 'delegated', 'direct_user'].includes(entry.effectPolicy)) {
     failures.push(`${entry.id}: invalid effectPolicy`)
   }
   if (typeof entry.owner !== 'string' || !entry.owner.trim()) failures.push(`${entry.id}: owner is required`)
@@ -221,6 +251,13 @@ function validateReplayPolicy(entry, failures) {
   }
   if (entry.effectPolicy === 'durable_local' && entry.replayPolicy !== 'idempotent_resume') {
     failures.push(`${entry.id}: durable_local entry requires idempotent_resume`)
+  }
+  if (entry.effectPolicy === 'delegated' &&
+      (entry.replayPolicy !== 'downstream_barrier' || typeof entry.evidence !== 'string' || !entry.evidence.trim())) {
+    failures.push(`${entry.id}: delegated entry requires downstream boundary evidence`)
+  }
+  if (entry.effectPolicy === 'direct_user' && entry.replayPolicy !== 'never') {
+    failures.push(`${entry.id}: direct_user entry must never be replayed`)
   }
   if (entry.effectPolicy === 'none' && entry.replayPolicy !== 'not_applicable') {
     failures.push(`${entry.id}: effectPolicy=none requires replayPolicy=not_applicable`)
@@ -274,16 +311,19 @@ function discoverActions(resolver) {
       : new Set(actions.filter((action) => !spec.readOnlyActions.includes(action)))
     for (const action of spec.additionalMutations ?? []) mutations.add(action)
     for (const action of actions) {
+      const explicitlyReadOnly = spec.readOnlyActions?.includes(action) || spec.additionalReadOnly?.includes(action)
       entries.push({
         id: `ipc-action:${spec.channel}#${action}`,
         surface: 'ipc_action',
         locator: `${spec.file}:${spec.variable}`,
-        expectedAccess: mutations.has(action) || looksMutating(action) ? 'mutation' : 'read_only'
+        expectedAccess: explicitlyReadOnly
+          ? 'read_only'
+          : mutations.has(action) || looksMutating(action) ? 'mutation' : 'read_only'
       })
     }
   }
   for (const spec of APP_FEATURE_ACTION_SPECS) {
-    const actions = resolver.typeUnionStrings(spec.file, spec.typeAlias)
+    const actions = spec.staticActions ?? resolver.typeUnionStrings(spec.file, spec.typeAlias)
     for (const action of actions) {
       entries.push({
         id: `ipc-action:appFeatures:invoke#${spec.feature}/${action}`,
@@ -473,24 +513,41 @@ function createResolver(repoRoot) {
     objectKeys(relativePath, name) {
       const context = resolver.context(relativePath)
       const initializer = unwrap(resolver.variable(context, name).initializer)
-      if (!ts.isObjectLiteralExpression(initializer)) throw new Error(`${relativePath}:${name} must be a static object`)
-      return initializer.properties.map((property) => {
-        if (ts.isSpreadAssignment(property)) throw new Error(`${relativePath}:${name} cannot contain spreads`)
-        const key = propertyName(property.name)
-        if (!key) throw new Error(`${relativePath}:${name} contains a dynamic key`)
-        return key
-      })
+      return staticObjectKeys(initializer, context, resolver, new Set([`${relativePath}:${name}`]))
     },
     typeUnionStrings(relativePath, name) {
       const context = resolver.context(relativePath)
       const alias = findTypeAlias(context.sourceFile, name)
       const result = new Set()
-      collectLiteralTypeStrings(alias.type, result)
+      collectTypeAliasLiteralStrings(alias.type, context.sourceFile, result, new Set([name]))
       if (result.size === 0) throw new Error(`${relativePath}:${name} has no static string members`)
       return [...result]
     }
   }
   return resolver
+}
+
+function staticObjectKeys(expression, context, resolver, seen) {
+  const value = unwrap(expression)
+  if (ts.isIdentifier(value)) {
+    const binding = resolveBinding(value.text, context, resolver)
+    if (!binding) throw new Error(`${context.relativePath}: unresolved object spread ${value.text}`)
+    const key = `${binding.context.relativePath}:${value.text}`
+    if (seen.has(key)) throw new Error(`cyclic static object binding: ${key}`)
+    return staticObjectKeys(binding.expression, binding.context, resolver, new Set([...seen, key]))
+  }
+  if (!ts.isObjectLiteralExpression(value)) throw new Error(`${context.relativePath}: expected a static object`)
+  const keys = []
+  for (const property of value.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      keys.push(...staticObjectKeys(property.expression, context, resolver, seen))
+      continue
+    }
+    const key = propertyName(property.name)
+    if (!key) throw new Error(`${context.relativePath}: static object contains a dynamic key`)
+    keys.push(key)
+  }
+  return keys
 }
 
 function indexContext(context) {
@@ -564,6 +621,27 @@ function collectLiteralTypeStrings(typeNode, result) {
   } else if (ts.isLiteralTypeNode(typeNode) && ts.isStringLiteral(typeNode.literal)) {
     result.add(typeNode.literal.text)
   }
+}
+
+function collectTypeAliasLiteralStrings(typeNode, sourceFile, result, seen) {
+  if (ts.isUnionTypeNode(typeNode)) {
+    for (const member of typeNode.types) collectTypeAliasLiteralStrings(member, sourceFile, result, seen)
+    return
+  }
+  if (ts.isLiteralTypeNode(typeNode) && ts.isStringLiteral(typeNode.literal)) {
+    result.add(typeNode.literal.text)
+    return
+  }
+  if (ts.isTypeReferenceNode(typeNode) && ts.isIdentifier(typeNode.typeName)) {
+    const name = typeNode.typeName.text
+    if (seen.has(name)) throw new Error(`${sourceFile.fileName}: cyclic type alias ${name}`)
+    const alias = sourceFile.statements.find((statement) =>
+      ts.isTypeAliasDeclaration(statement) && statement.name.text === name)
+    if (!alias) throw new Error(`${sourceFile.fileName}: type alias ${name} is not local and static`)
+    collectTypeAliasLiteralStrings(alias.type, sourceFile, result, new Set([...seen, name]))
+    return
+  }
+  throw new Error(`${sourceFile.fileName}: type union contains a non-static member`)
 }
 
 function collectKindComparison(propertySide, literalSide, result) {

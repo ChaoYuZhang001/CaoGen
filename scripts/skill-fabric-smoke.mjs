@@ -9,6 +9,9 @@ const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-skill-fabric-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
 const mcpServerPath = path.join(tempRoot, 'fake-fabric-mcp.cjs')
+const userDataRoot = path.join(tempRoot, 'user-data')
+const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
+process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
 try {
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'react-review'), { recursive: true })
@@ -36,15 +39,36 @@ try {
     'utf8'
   )
   writeFileSync(mcpServerPath, fakeMcpServer(), 'utf8')
+  writeFileSync(
+    path.join(projectRoot, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        workspace: {
+          command: process.execPath,
+          args: [mcpServerPath]
+        }
+      }
+    }, null, 2),
+    'utf8'
+  )
 
   compile(['src/main/skill/skill-fabric.ts'], outDir)
   const fabricModule = await import(pathToFileURL(findCompiled(outDir, 'skill-fabric.js')).href)
+  const registry = await import(pathToFileURL(findCompiled(outDir, 'pluginRegistry.js')).href)
   const {
     SkillFabric,
     evaluateMcpPermission,
     mcpToolCapabilityId,
     skillCapabilityId
   } = fabricModule
+
+  approveRegistryItems(
+    registry,
+    [path.join(projectRoot, '.caogen', 'skills'), path.join(projectRoot, '.claude')],
+    (item) =>
+      (item.kind === 'skill' && item.name === 'React Review Workflow') ||
+      (item.kind === 'mcp' && item.name === 'workspace')
+  )
 
   const deniedFabric = new SkillFabric({
     projectRoot,
@@ -157,7 +181,20 @@ try {
 
   console.log('skillFabric smoke ok')
 } finally {
+  if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
+  else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function approveRegistryItems(registry, roots, select) {
+  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const items = view.items.filter(select)
+  assertEqual(items.length, 2)
+  const state = items.reduce(
+    (current, item) => registry.approvePluginRegistryItem(current, item),
+    registry.emptyPluginRegistryState()
+  )
+  registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
 }
 
 function fakeMcpServer() {

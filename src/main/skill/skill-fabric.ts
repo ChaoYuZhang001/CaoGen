@@ -18,6 +18,10 @@ import {
   type McpToolDefinition
 } from '../mcp/mcp-client'
 import { mcpToolName } from '../mcp/mcp-tool-adapter'
+import {
+  authorizeMcpRuntimeConfig,
+  authorizeSkillRuntime
+} from '../plugin/plugin-runtime-authorization'
 
 export type SkillFabricCapabilityKind = 'skill' | 'mcpTool'
 export type SkillFabricLifecycleStatus = 'available' | 'configured' | 'disabled' | 'invalid' | 'unavailable' | 'blocked'
@@ -233,7 +237,12 @@ export class SkillFabric {
           continue
         }
         try {
-          const discovery = await discoverMcpServer(config, this.mcpDiscoveryTimeoutMs)
+          const authorized = authorizeMcpRuntimeConfig({
+            projectRoot: this.projectRoot,
+            serverId,
+            requestedConfig: config
+          })
+          const discovery = await discoverMcpServer(authorized.config, this.mcpDiscoveryTimeoutMs)
           this.mcpDiscoveries.set(serverId, discovery)
           lifecycle.push({
             id: mcpServerLifecycleId(serverId),
@@ -256,8 +265,8 @@ export class SkillFabric {
               toolName: tool.name
             })
             capabilities.push(capability)
-            this.mcpToolIndex.set(capability.id, { capability, config, rawTool: tool })
-            this.mcpToolIndex.set(mcpToolLookupKey(serverId, tool.name), { capability, config, rawTool: tool })
+            this.mcpToolIndex.set(capability.id, { capability, config: authorized.config, rawTool: tool })
+            this.mcpToolIndex.set(mcpToolLookupKey(serverId, tool.name), { capability, config: authorized.config, rawTool: tool })
           }
         } catch (error) {
           lifecycle.push({
@@ -367,7 +376,12 @@ export class SkillFabric {
       }
     }
     try {
-      const discovery = await discoverMcpServer(config, this.mcpDiscoveryTimeoutMs)
+      const authorized = authorizeMcpRuntimeConfig({
+        projectRoot: this.projectRoot,
+        serverId,
+        requestedConfig: config
+      })
+      const discovery = await discoverMcpServer(authorized.config, this.mcpDiscoveryTimeoutMs)
       return {
         id: mcpServerLifecycleId(serverId),
         kind: 'mcpServer',
@@ -417,6 +431,18 @@ export class SkillFabric {
         error: capability.reason ?? `Skill is ${capability.status}.`
       }
     }
+    try {
+      authorizeSkillRuntime(this.projectRoot, skill)
+    } catch (error) {
+      return {
+        ok: false,
+        capabilityId: capability.id,
+        kind: capability.kind,
+        execution: 'blocked',
+        output: '',
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
     const query = 'query' in input && typeof input.query === 'string' ? input.query : undefined
     return {
       ok: true,
@@ -452,7 +478,12 @@ export class SkillFabric {
     }
     const args = 'arguments' in input && isRecord(input.arguments) ? input.arguments : {}
     try {
-      const result = await callMcpTool(indexed.config, indexed.rawTool.name, args, this.mcpDiscoveryTimeoutMs)
+      const authorized = authorizeMcpRuntimeConfig({
+        projectRoot: this.projectRoot,
+        serverId: descriptor.serverId,
+        requestedConfig: indexed.config
+      })
+      const result = await callMcpTool(authorized.config, indexed.rawTool.name, args, this.mcpDiscoveryTimeoutMs)
       return {
         ok: result.isError !== true,
         capabilityId: capability.id,
@@ -717,7 +748,7 @@ export async function createSkillFabricView(options: SkillFabricOptions, refresh
 }
 
 export function loadSkillFabricSkills(projectRoot?: string): { skills: SkillDefinition[]; diagnostics: SkillLoadDiagnostic[] } {
-  const result = loadSkills(projectRoot)
+  const result = new SkillManager({ projectRoot }).reload()
   return { skills: result.skills, diagnostics: result.diagnostics }
 }
 

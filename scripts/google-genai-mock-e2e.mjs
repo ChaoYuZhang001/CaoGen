@@ -2,19 +2,21 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
-const electronBin = path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+const require = createRequire(import.meta.url)
+const electronBin = require('electron')
 const mainEntry = path.join(repoRoot, 'out', 'main', 'index.js')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const runDir = path.join(repoRoot, 'test-results', 'google-genai-mock-e2e', runId)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-google-genai-e2e-'))
 const userDataDir = path.join(tempRoot, 'user-data')
 const isolatedOut = path.join(runDir, 'app', 'out')
-const report = { runId, checks: [], screenshots: [], requests: [], warnings: [] }
+const report = { runId, checks: [], screenshots: [], requests: [], warnings: [], launches: [], diagnostics: [] }
 
 if (!existsSync(electronBin) || !existsSync(mainEntry)) {
   throw new Error('Built Electron app is required. Run npm.cmd run build first.')
@@ -99,6 +101,8 @@ try {
     await clearViewport()
   })
 
+  report.preRestartState = await recoveryState()
+
   await stopApp(app, cdp)
   app = undefined
   cdp = undefined
@@ -111,7 +115,10 @@ try {
       return sessions.some((item) => item.id === session.id && item.engine === 'gemini')
     }, 20_000).catch((error) => {
       const restored = sessions.map((item) => ({ id: item.id, engine: item.engine, status: item.status }))
-      throw new Error(`${error instanceof Error ? error.message : String(error)}; restored=${JSON.stringify(restored)}`)
+      return recoveryState().then((state) => {
+        report.postRestartState = state
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; restored=${JSON.stringify(restored)}`)
+      })
     })
     const transcript = await evaluate(`window.agentDesk.getTranscript(${JSON.stringify(session.id)})`)
     assert(transcript.some((entry) => entry.event?.kind === 'assistant-message'), 'assistant history did not restore')
@@ -130,6 +137,7 @@ try {
 } catch (error) {
   report.requests = mock.requests.map(({ body, ...request }) => ({ ...request, hasBody: Boolean(body) }))
   report.error = error instanceof Error ? error.message : String(error)
+  captureUserDataDiagnostics()
   writeFileSync(path.join(runDir, 'report.json'), `${JSON.stringify({ ...report, ok: false }, null, 2)}\n`)
   throw error
 } finally {
@@ -219,9 +227,20 @@ async function readJson(req) {
 
 async function launch() {
   const port = await findFreePort(9970)
+  const launchLog = { stdout: '', stderr: '' }
+  report.launches.push(launchLog)
   const app = spawn(electronBin, [`--remote-debugging-port=${port}`, path.join(isolatedOut, 'main', 'index.js')], {
-    cwd: repoRoot, env: { ...process.env, CAOGEN_USER_DATA_DIR: userDataDir, OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '' }, stdio: 'ignore'
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CAOGEN_USER_DATA_DIR: userDataDir,
+      OPENAI_API_KEY: '',
+      ANTHROPIC_API_KEY: ''
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
   })
+  app.stdout?.on('data', (chunk) => { launchLog.stdout = boundedLog(launchLog.stdout, chunk) })
+  app.stderr?.on('data', (chunk) => { launchLog.stderr = boundedLog(launchLog.stderr, chunk) })
   const target = await waitForTarget(port, 25_000)
   const cdp = await connectCdp(target.webSocketDebuggerUrl)
   await cdp.send('Runtime.enable')
@@ -247,6 +266,24 @@ async function waitForTranscript(sessionId, predicate) {
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}; transcript=${JSON.stringify(latest)}`)
   }
+}
+
+function recoveryState() {
+  return evaluate(`Promise.all([
+    window.agentDesk.listSessions(),
+    window.agentDesk.listHistory(),
+    window.agentDesk.listTaskSnapshots()
+  ]).then(([sessions, history, snapshots]) => ({
+    sessions: sessions.map(({ id, engine, status, sdkSessionId }) => ({ id, engine, status, sdkSessionId })),
+    history: history.map(({ id, engine, sdkSessionId }) => ({ id, engine, sdkSessionId })),
+    snapshots: snapshots.map(({ id, sessionId, run, execution }) => ({
+      id,
+      sessionId,
+      runStatus: run?.status,
+      runId: run?.id,
+      sdkSessionId: execution?.sdkSessionId
+    }))
+  }))`)
 }
 
 async function waitFor(predicate, timeout) {
@@ -338,10 +375,13 @@ function connectCdp(url) {
 async function stopApp(child, connection) {
   connection.close()
   if (child.exitCode !== null) return
+  const exited = new Promise((resolve) => child.once('exit', resolve))
   if (process.platform === 'win32' && child.pid) {
     try { spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' }) } catch {}
   } else child.kill('SIGTERM')
-  await new Promise((resolve) => child.once('exit', resolve))
+  await Promise.race([exited, sleep(3_000)])
+  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  await Promise.race([exited, sleep(3_000)])
 }
 
 function closeServer(server) { return new Promise((resolve) => server.close(resolve)) }
@@ -352,6 +392,20 @@ function copyBuiltApp(target) {
   for (const name of ['main', 'preload', 'renderer']) cpSync(path.join(repoRoot, 'out', name), path.join(target, name), { recursive: true })
   const index = path.join(target, 'renderer', 'index.html')
   if (!existsSync(index) || !readFileSync(index, 'utf8').includes('<div id="root">')) throw new Error('isolated renderer is incomplete')
+}
+
+function captureUserDataDiagnostics() {
+  for (const name of ['sessions.json', 'active-sessions.json', 'session-creation-journal.json']) {
+    const source = path.join(userDataDir, name)
+    if (!existsSync(source)) continue
+    const target = path.join(runDir, `diagnostic-${name}`)
+    cpSync(source, target)
+    report.diagnostics.push(target)
+  }
+}
+
+function boundedLog(previous, chunk) {
+  return `${previous}${String(chunk)}`.slice(-20_000)
 }
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }

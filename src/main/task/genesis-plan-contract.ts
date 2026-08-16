@@ -11,7 +11,7 @@ export async function buildGenesisPlanContract(
 ): Promise<Record<string, unknown>> {
   const report = await buildGenesisOrchestration(input)
   const manager = await loadSessionManager()
-  const plan = manager.createAgentTaskPlanVersion(parentSessionId, planDraft(report))
+  const plan = await manager.createAgentTaskPlanVersion(parentSessionId, planDraft(report))
   return {
     report,
     planContract: {
@@ -25,7 +25,7 @@ export async function buildGenesisPlanContract(
 async function loadSessionManager() {
   const specifier = '../sessionManager.js'
   return (await import(specifier) as { sessionManager: {
-    createAgentTaskPlanVersion(parentSessionId: string, input: TaskPlanDraftInput): TaskPlanStateView
+    createAgentTaskPlanVersion(parentSessionId: string, input: TaskPlanDraftInput): Promise<TaskPlanStateView>
   } }).sessionManager
 }
 

@@ -167,6 +167,8 @@ export interface SupervisorStateApi {
   getSupervisorRun(id: string): Promise<SupervisorRunRecord | undefined>
   listSupervisorEvents(runId?: string): Promise<SupervisorEvent[]>
   createSupervisorRun(input: SupervisorRunCreateInput, options?: SupervisorMutationOptions): Promise<SupervisorRunRecord>
+  /** Claims a short-lived local operator lease for a TaskRun-backed control action. */
+  claimSupervisorControlLease(id: string, expectedRevision: number): Promise<SupervisorRunRecord>
   acquireSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>
   heartbeatSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>
   releaseSupervisorLease(id: string, options: SupervisorLeaseOptions): Promise<SupervisorRunRecord>

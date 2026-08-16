@@ -29,6 +29,8 @@ export interface RoutineExecutionOptions {
   nextRunAt?: number | null
   sendDelayMs?: number
   workspaceRoot?: string
+  /** Stable external trigger identity used to suppress duplicate Routine Runs. */
+  runId?: string
 }
 
 interface RoutinePromptTarget {
@@ -131,7 +133,8 @@ export async function executeRoutine(
             pending: true
           }
         },
-        nextRunAt
+        nextRunAt,
+        options.runId
       )
 
       let latestRecord = record

@@ -1,7 +1,7 @@
 export const SIDEBAR_TRANSLATIONS = {
   primaryNavigation: { zh: '主要导航', en: 'Primary navigation' },
   newSession: { zh: '新建会话', en: 'New Session' },
-  office3d: { zh: 'Agent 控制室', en: 'Agent Control Room' },
+  office3d: { zh: 'CaoGen 控制室', en: 'CaoGen Control Room' },
   recoveryCenter: { zh: '恢复中心', en: 'Recovery Center' },
   settings: { zh: '设置', en: 'Settings' },
   listView: { zh: '列表视图', en: 'List View' },

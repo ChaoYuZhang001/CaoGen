@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { getModelStat, reliabilityScore } from '../modelStats'
 import type { ProviderView, SchedulerStrategy } from '../../shared/types'
+import { getAcceptanceQualitySignal } from './acceptance-quality-signal'
 import {
   buildModelProfiles,
   estimateCostUsd,
@@ -25,6 +27,24 @@ export interface ModelRouterBudget {
   hardLimit?: boolean
 }
 
+export interface ModelRouteHealthInput {
+  healthy: boolean
+  circuitState?: 'closed' | 'open' | 'half_open'
+  latencyEmaMs?: number
+}
+
+/** Component scores are bounded 0..100 and contain no Provider credentials or response data. */
+export interface ModelRouteScoreBreakdown {
+  capability: number
+  quality: number
+  acceptanceQuality: number
+  acceptanceSamples: number
+  speed: number
+  cost: number
+  health: number
+  composite: number
+}
+
 export interface ModelRouteRequest extends TaskProfileInput {
   providers: ProviderView[]
   strategy?: SchedulerStrategy
@@ -32,6 +52,7 @@ export interface ModelRouteRequest extends TaskProfileInput {
   budget?: ModelRouterBudget
   excludedModels?: string[]
   crossValidation?: CrossValidationRequest
+  providerHealth?: Record<string, ModelRouteHealthInput>
 }
 
 export interface CrossValidationRequest {
@@ -47,6 +68,7 @@ export interface ModelRouteCandidate {
   reliability: number
   estimatedCostUsd: number
   latencyEmaMs?: number
+  scoreBreakdown: ModelRouteScoreBreakdown
   reasons: string[]
 }
 
@@ -66,6 +88,7 @@ export interface ModelRouteDecision {
   manualOverrideReason?: string
   budgetDowngraded: boolean
   crossValidationPlan: CrossValidationPlan
+  decisionDigest: string
   warnings: string[]
 }
 
@@ -81,7 +104,7 @@ export function routeModel(request: ModelRouteRequest): ModelRouteDecision {
   )
   const viable = profiles.filter((profile) => isProfileViable(profile, task) && !excluded.has(profile.model))
   const sourceProfiles = viable.length > 0 ? viable : profiles.filter((profile) => !excluded.has(profile.model))
-  const candidates = sourceProfiles.map((profile) => scoreCandidate(profile, task))
+  const candidates = sourceProfiles.map((profile) => scoreCandidate(profile, task, request.providerHealth?.[profile.providerId]))
   if (candidates.length === 0) throw new Error('没有可路由的模型候选')
   const rankedCandidates = rankCandidates(candidates, task.strategy)
 
@@ -164,24 +187,59 @@ export function planCrossValidation(
   }
 }
 
-function scoreCandidate(profile: ModelProfile, task: TaskProfile): ModelRouteCandidate {
+function scoreCandidate(
+  profile: ModelProfile,
+  task: TaskProfile,
+  providerHealth?: ModelRouteHealthInput
+): ModelRouteCandidate {
   const reliability = reliabilityScore(profile.model)
   const stat = getModelStat(profile.model)
+  const acceptanceQuality = getAcceptanceQualitySignal(profile.providerId, profile.model)
+  const acceptanceConfidence = Math.min(1, (acceptanceQuality?.samples ?? 0) / 5)
   const estimatedCostUsd = estimateCostUsd(profile, task.expectedInputTokens, task.expectedOutputTokens)
-  const score = Math.round(scoreProfileForTask(profile, task) + reliability * 20 - estimatedCostUsd * 10)
+  const capability = boundedScore(scoreProfileForTask(profile, { ...task, strategy: 'balanced' }), 0, 100)
+  const acceptanceAdjustment = ((acceptanceQuality?.score ?? 0.5) - 0.5) * 40 * acceptanceConfidence
+  const quality = boundedScore(
+    reliability * 70 + strengthScore(profile, task) * 30 + acceptanceAdjustment,
+    0,
+    100
+  )
+  const latencyEmaMs = stat?.latencyEmaMs ?? providerHealth?.latencyEmaMs
+  const speed = speedScore(profile.latency, latencyEmaMs)
+  const cost = costScore(profile.cost.tier, estimatedCostUsd)
+  const health = healthScore(providerHealth)
+  const composite = weightedComposite(task.strategy, { capability, quality, speed, cost, health })
+  // Keep the historic score scale for compatibility while making the new
+  // component score the canonical explanation and tie-break signal.
+  const score = Math.round(
+    scoreProfileForTask(profile, task) + reliability * 20 - estimatedCostUsd * 10 +
+    composite / 20 + acceptanceAdjustment / 2
+  )
   const reasons = [
-    `能力匹配 ${scoreProfileForTask(profile, task).toFixed(1)}`,
-    `可靠性 ${reliability.toFixed(2)}`,
-    `估算成本 $${estimatedCostUsd.toFixed(4)}`,
-    `延迟档 ${profile.latency}`
+    `能力 ${capability.toFixed(1)}`,
+    `质量 ${quality.toFixed(1)}（可靠性 ${reliability.toFixed(2)}）`,
+    `验收质量 ${(acceptanceQuality?.score ?? 0.5).toFixed(2)}（${acceptanceQuality?.samples ?? 0} 个终态样本）`,
+    `速度 ${speed.toFixed(1)}（延迟档 ${profile.latency}）`,
+    `成本 ${cost.toFixed(1)}（估算 $${estimatedCostUsd.toFixed(4)}）`,
+    `健康 ${health.toFixed(1)}`
   ]
-  if (stat?.latencyEmaMs) reasons.push(`历史延迟 EMA ${stat.latencyEmaMs}ms`)
+  if (latencyEmaMs) reasons.push(`历史延迟 EMA ${latencyEmaMs}ms`)
   return {
     profile,
     score,
     reliability,
     estimatedCostUsd,
-    latencyEmaMs: stat?.latencyEmaMs,
+    latencyEmaMs,
+    scoreBreakdown: {
+      capability,
+      quality,
+      acceptanceQuality: Math.round((acceptanceQuality?.score ?? 0.5) * 1000) / 10,
+      acceptanceSamples: acceptanceQuality?.samples ?? 0,
+      speed,
+      cost,
+      health,
+      composite
+    },
     reasons
   }
 }
@@ -303,8 +361,103 @@ function buildDecision(input: {
     manualOverrideReason: input.manualOverrideReason,
     budgetDowngraded: input.budgetDowngraded,
     crossValidationPlan: planCrossValidation(input.selected, input.candidates, input.task, input.crossValidation),
+    decisionDigest: routeDecisionDigest(input),
     warnings: input.warnings
   }
+}
+
+function routeDecisionDigest(input: {
+  selected: ModelRouteCandidate
+  candidates: ModelRouteCandidate[]
+  task: TaskProfile
+  manualOverrideApplied: boolean
+  manualOverrideReason?: string
+  budgetDowngraded: boolean
+}): string {
+  const canonical = {
+    task: input.task,
+    selected: candidateDigestValue(input.selected),
+    candidates: input.candidates.map(candidateDigestValue).sort((left, right) =>
+      `${left.providerId}\0${left.model}`.localeCompare(`${right.providerId}\0${right.model}`)),
+    manualOverrideApplied: input.manualOverrideApplied,
+    manualOverrideReason: input.manualOverrideReason ?? '',
+    budgetDowngraded: input.budgetDowngraded
+  }
+  return `sha256:${createHash('sha256').update(stableJson(canonical)).digest('hex')}`
+}
+
+function candidateDigestValue(candidate: ModelRouteCandidate): Record<string, unknown> {
+  return {
+    providerId: candidate.profile.providerId,
+    model: candidate.profile.model,
+    score: candidate.score,
+    estimatedCostUsd: candidate.estimatedCostUsd,
+    latencyEmaMs: candidate.latencyEmaMs ?? null,
+    scoreBreakdown: candidate.scoreBreakdown
+  }
+}
+
+function boundedScore(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  return Math.max(min, Math.min(max, value))
+}
+
+function strengthScore(profile: ModelProfile, task: TaskProfile): number {
+  const strengths = task.taskKinds.map((kind) => {
+    if (kind === 'coding') return profile.capabilities.coding
+    if (kind === 'reasoning' || kind === 'planning' || kind === 'review') return profile.capabilities.reasoning
+    if (kind === 'toolUse' || kind === 'testing') return profile.capabilities.toolUse
+    if (kind === 'vision') return profile.capabilities.vision
+    if (kind === 'longContext' || kind === 'research') return profile.capabilities.longContext
+    return profile.capabilities.summarization
+  })
+  if (strengths.length === 0) return 0.5
+  const values = strengths.map((value) => value === 'high' ? 1 : value === 'medium' ? 0.65 : 0.3)
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function speedScore(latency: ModelProfile['latency'], latencyEmaMs?: number): number {
+  const classScore = latency === 'fast' ? 90 : latency === 'balanced' ? 65 : 40
+  if (latencyEmaMs === undefined || latencyEmaMs <= 0) return classScore
+  const measured = boundedScore(100 - latencyEmaMs / 40, 0, 100)
+  return Math.round((classScore * 0.4 + measured * 0.6) * 10) / 10
+}
+
+function costScore(tier: ModelRouteCandidate['profile']['cost']['tier'], estimatedCostUsd: number): number {
+  const tierScore = tier === 'low' ? 90 : tier === 'medium' ? 65 : 40
+  return Math.round(boundedScore(tierScore - Math.min(30, Math.max(0, estimatedCostUsd) * 100), 0, 100) * 10) / 10
+}
+
+function healthScore(input?: ModelRouteHealthInput): number {
+  if (!input) return 50
+  if (!input.healthy || input.circuitState === 'open') return 0
+  if (input.circuitState === 'half_open') return 50
+  return 100
+}
+
+function weightedComposite(
+  strategy: SchedulerStrategy,
+  scores: Pick<ModelRouteScoreBreakdown, 'capability' | 'quality' | 'speed' | 'cost' | 'health'>
+): number {
+  const weights = strategy === 'cost'
+    ? [0.25, 0.15, 0.15, 0.35, 0.1]
+    : strategy === 'quality'
+      ? [0.3, 0.35, 0.1, 0.1, 0.15]
+      : strategy === 'speed'
+        ? [0.25, 0.1, 0.4, 0.15, 0.1]
+        : [0.3, 0.25, 0.2, 0.15, 0.1]
+  return Math.round((scores.capability * weights[0] + scores.quality * weights[1] + scores.speed * weights[2] + scores.cost * weights[3] + scores.health * weights[4]) * 10) / 10
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
 }
 
 function toPlanModel(profile: ModelProfile): Pick<ModelProfile, 'providerId' | 'providerName' | 'model'> {

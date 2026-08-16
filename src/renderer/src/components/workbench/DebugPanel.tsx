@@ -13,7 +13,6 @@ export default function DebugPanel(): React.JSX.Element {
   const [breakpointPath, setBreakpointPath] = useState('')
   const [breakpointLine, setBreakpointLine] = useState('1')
   const active = isActive(debug.state.status)
-  const paused = debug.state.status === 'paused'
 
   const addBreakpoint = (): void => {
     const line = Number(breakpointLine)
@@ -37,102 +36,139 @@ export default function DebugPanel(): React.JSX.Element {
 
       {debug.error && <div className="notice notice-error debug-panel-notice" role="alert">{debug.error}</div>}
       <div className="debug-panel-body">
-        <section className="debug-setup" aria-label={t('projectDebugTargets')}>
-          <div className="debug-setup-column">
-            <div className="test-section-label">{t('projectDebugTargets')}</div>
-            {!debug.activeId && <DebugEmpty text={t('projectDebugNoSession')} />}
-            {debug.activeId && debug.loading && <DebugEmpty text={t('projectDebugLoading')} />}
-            {debug.activeId && !debug.loading && debug.targets.length === 0 && <DebugEmpty text={t('projectDebugNoTargets')} />}
-            <div className="debug-target-list">
-              {debug.targets.map((target) => (
-                <div className="debug-target-row" key={target.id} data-project-debug-target={target.runtime}>
-                  <button type="button" className="debug-target-copy" disabled={active}
-                    onClick={() => { setBreakpointPath(target.relativePath); void debug.launch(target) }}>
-                    <strong>{target.label}</strong>
-                    <span>{target.relativePath} · {target.runtime}</span>
-                  </button>
-                  <button type="button" className="btn btn-ghost btn-icon-sm"
-                    aria-label={`${t('projectDebugStart')}: ${target.label}`} title={t('projectDebugStart')}
-                    disabled={active || debug.pending} onClick={() => void debug.launch(target)}>
-                    <Play size={14} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="debug-setup-column debug-breakpoints">
-            <div className="test-section-label">{t('projectDebugBreakpoints')}</div>
-            <div className="debug-breakpoint-form">
-              <input aria-label={t('projectDebugBreakpointPath')} placeholder={t('projectDebugBreakpointPath')}
-                value={breakpointPath} disabled={active} onChange={(event) => setBreakpointPath(event.target.value)} />
-              <input className="debug-line-input" aria-label={t('projectDebugBreakpointLine')} type="number" min="1"
-                value={breakpointLine} disabled={active} onChange={(event) => setBreakpointLine(event.target.value)} />
-              <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugAddBreakpoint')}
-                title={t('projectDebugAddBreakpoint')} disabled={active || !breakpointPath.trim()}
-                onClick={addBreakpoint}>
-                <Plus size={14} aria-hidden="true" />
-              </button>
-            </div>
-            {debug.breakpoints.length === 0 && <DebugEmpty text={t('projectDebugNoBreakpoints')} />}
-            <div className="debug-breakpoint-list">
-              {debug.breakpoints.map((breakpoint, index) => (
-                <div className="debug-breakpoint-row" key={`${breakpoint.path}:${breakpoint.line}`}>
-                  <span><strong>{breakpoint.path}</strong>:{breakpoint.line}</span>
-                  <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugRemoveBreakpoint')}
-                    title={t('projectDebugRemoveBreakpoint')} disabled={active}
-                    onClick={() => debug.removeBreakpoint(index)}>
-                    <Trash2 size={13} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="debug-runtime" aria-label={t('projectDebugSession')}>
-          <DebugControls state={debug.state} pending={debug.pending} onControl={(action) => void debug.control(action)} />
-          {debug.state.status === 'idle' && <DebugEmpty icon text={t('projectDebugIdle')} />}
-          {debug.state.status !== 'idle' && (
-            <div className="debug-runtime-content">
-              <div className="debug-inspector">
-                <div className="debug-stack">
-                  <div className="test-section-label">{t('projectDebugCallStack')}</div>
-                  {debug.state.frames.length === 0 && <DebugEmpty text={paused ? t('projectDebugNoFrames') : t('projectDebugRunning')} />}
-                  <div className="debug-stack-list">
-                    {debug.state.frames.map((frame) => (
-                      <button type="button" key={frame.id} className={frame.id === debug.state.selectedFrameId ? 'debug-frame-selected' : ''}
-                        onClick={() => void debug.selectFrame(frame.id)}>
-                        <strong>{frame.name}</strong>
-                        <span>{frame.location ? `${frame.location.path}:${frame.location.line}` : t('projectDebugRuntimeFrame')}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="debug-variables">
-                  <div className="test-section-label">{t('projectDebugVariables')}</div>
-                  {debug.state.scopes.length === 0 && <DebugEmpty text={paused ? t('projectDebugNoVariables') : t('projectDebugPauseForVariables')} />}
-                  <div className="debug-scope-list">
-                    {debug.state.scopes.map((scope, index) => (
-                      <details open={index < 2} key={`${scope.name}:${index}`}>
-                        <summary>{scope.name}</summary>
-                        {scope.variables.map((variable) => (
-                          <DebugVariableRow key={`${variable.name}:${variable.id ?? variable.value}`} variable={variable} sessionId={debug.activeId ?? ''} />
-                        ))}
-                      </details>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="debug-output-section">
-                <div className="test-section-label">{t('projectDebugOutput')}</div>
-                <pre className="debug-output">{combinedOutput(debug.state) || t('projectDebugNoOutput')}</pre>
-              </div>
-            </div>
-          )}
-        </section>
+        <DebugSetup
+          active={active}
+          breakpointLine={breakpointLine}
+          breakpointPath={breakpointPath}
+          debug={debug}
+          onAddBreakpoint={addBreakpoint}
+          onBreakpointLineChange={setBreakpointLine}
+          onBreakpointPathChange={setBreakpointPath}
+        />
+        <DebugRuntime debug={debug} />
       </div>
     </div>
+  )
+}
+
+type ProjectDebuggerView = ReturnType<typeof useProjectDebugger>
+
+function DebugSetup({
+  active,
+  breakpointLine,
+  breakpointPath,
+  debug,
+  onAddBreakpoint,
+  onBreakpointLineChange,
+  onBreakpointPathChange
+}: {
+  active: boolean
+  breakpointLine: string
+  breakpointPath: string
+  debug: ProjectDebuggerView
+  onAddBreakpoint: () => void
+  onBreakpointLineChange: (value: string) => void
+  onBreakpointPathChange: (value: string) => void
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <section className="debug-setup" aria-label={t('projectDebugTargets')}>
+      <div className="debug-setup-column">
+        <div className="test-section-label">{t('projectDebugTargets')}</div>
+        {!debug.activeId && <DebugEmpty text={t('projectDebugNoSession')} />}
+        {debug.activeId && debug.loading && <DebugEmpty text={t('projectDebugLoading')} />}
+        {debug.activeId && !debug.loading && debug.targets.length === 0 && <DebugEmpty text={t('projectDebugNoTargets')} />}
+        <div className="debug-target-list">
+          {debug.targets.map((target) => (
+            <div className="debug-target-row" key={target.id} data-project-debug-target={target.runtime}>
+              <button type="button" className="debug-target-copy" disabled={active}
+                onClick={() => { onBreakpointPathChange(target.relativePath); void debug.launch(target) }}>
+                <strong>{target.label}</strong>
+                <span>{target.relativePath} · {target.runtime}</span>
+              </button>
+              <button type="button" className="btn btn-ghost btn-icon-sm"
+                aria-label={`${t('projectDebugStart')}: ${target.label}`} title={t('projectDebugStart')}
+                disabled={active || debug.pending} onClick={() => void debug.launch(target)}>
+                <Play size={14} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="debug-setup-column debug-breakpoints">
+        <div className="test-section-label">{t('projectDebugBreakpoints')}</div>
+        <div className="debug-breakpoint-form">
+          <input aria-label={t('projectDebugBreakpointPath')} placeholder={t('projectDebugBreakpointPath')}
+            value={breakpointPath} disabled={active} onChange={(event) => onBreakpointPathChange(event.target.value)} />
+          <input className="debug-line-input" aria-label={t('projectDebugBreakpointLine')} type="number" min="1"
+            value={breakpointLine} disabled={active} onChange={(event) => onBreakpointLineChange(event.target.value)} />
+          <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugAddBreakpoint')}
+            title={t('projectDebugAddBreakpoint')} disabled={active || !breakpointPath.trim()} onClick={onAddBreakpoint}>
+            <Plus size={14} aria-hidden="true" />
+          </button>
+        </div>
+        {debug.breakpoints.length === 0 && <DebugEmpty text={t('projectDebugNoBreakpoints')} />}
+        <div className="debug-breakpoint-list">
+          {debug.breakpoints.map((breakpoint, index) => (
+            <div className="debug-breakpoint-row" key={`${breakpoint.path}:${breakpoint.line}`}>
+              <span><strong>{breakpoint.path}</strong>:{breakpoint.line}</span>
+              <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugRemoveBreakpoint')}
+                title={t('projectDebugRemoveBreakpoint')} disabled={active} onClick={() => debug.removeBreakpoint(index)}>
+                <Trash2 size={13} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function DebugRuntime({ debug }: { debug: ProjectDebuggerView }): React.JSX.Element {
+  const t = useT()
+  const paused = debug.state.status === 'paused'
+  return (
+    <section className="debug-runtime" aria-label={t('projectDebugSession')}>
+      <DebugControls state={debug.state} pending={debug.pending} onControl={(action) => void debug.control(action)} />
+      {debug.state.status === 'idle' && <DebugEmpty icon text={t('projectDebugIdle')} />}
+      {debug.state.status !== 'idle' && (
+        <div className="debug-runtime-content">
+          <div className="debug-inspector">
+            <div className="debug-stack">
+              <div className="test-section-label">{t('projectDebugCallStack')}</div>
+              {debug.state.frames.length === 0 && <DebugEmpty text={paused ? t('projectDebugNoFrames') : t('projectDebugRunning')} />}
+              <div className="debug-stack-list">
+                {debug.state.frames.map((frame) => (
+                  <button type="button" key={frame.id} className={frame.id === debug.state.selectedFrameId ? 'debug-frame-selected' : ''}
+                    onClick={() => void debug.selectFrame(frame.id)}>
+                    <strong>{frame.name}</strong>
+                    <span>{frame.location ? `${frame.location.path}:${frame.location.line}` : t('projectDebugRuntimeFrame')}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="debug-variables">
+              <div className="test-section-label">{t('projectDebugVariables')}</div>
+              {debug.state.scopes.length === 0 && <DebugEmpty text={paused ? t('projectDebugNoVariables') : t('projectDebugPauseForVariables')} />}
+              <div className="debug-scope-list">
+                {debug.state.scopes.map((scope, index) => (
+                  <details open={index < 2} key={`${scope.name}:${index}`}>
+                    <summary>{scope.name}</summary>
+                    {scope.variables.map((variable) => (
+                      <DebugVariableRow key={`${variable.name}:${variable.id ?? variable.value}`} variable={variable} sessionId={debug.activeId ?? ''} />
+                    ))}
+                  </details>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="debug-output-section">
+            <div className="test-section-label">{t('projectDebugOutput')}</div>
+            <pre className="debug-output">{combinedOutput(debug.state) || t('projectDebugNoOutput')}</pre>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }
 

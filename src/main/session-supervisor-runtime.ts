@@ -16,6 +16,7 @@ import {
 } from './task/supervisor-taskrun-bridge'
 import { SupervisorStateError, SupervisorStateStore } from './task/supervisor-state'
 import { buildTaskSnapshotReplayPrompts, canEnforceGoalCostBudget } from './session-manager-support'
+import type { SupervisorRunRecord } from '../shared/supervisor-types'
 import type {
   AgentEvent,
   TaskRunRecord,
@@ -203,6 +204,61 @@ export class SessionSupervisorRuntime {
     return { ...expired, orphanedRunIds }
   }
 
+  async freezeForWorkItemTransfer(sessionId: string): Promise<TaskRunRecord | undefined> {
+    return this.freezeForExternalBoundary(sessionId, 'WorkItem transfer', 'work-item-transfer')
+  }
+
+  async freezeForSourceRevocation(sessionId: string): Promise<TaskRunRecord | undefined> {
+    return this.freezeForExternalBoundary(sessionId, 'connector source revocation', 'connector-source-revocation')
+  }
+
+  blockForSourceRevocation(sessionId: string): void {
+    this.sessionSendGates.add(sessionId)
+    const run = this.taskRuns.get(sessionId)
+    if (run) this.runSendGates.add(run.id)
+  }
+
+  private async freezeForExternalBoundary(
+    sessionId: string,
+    boundary: string,
+    actorId: string
+  ): Promise<TaskRunRecord | undefined> {
+    await this.observationTasks.get(sessionId)
+    const session = this.sessions.get(sessionId)
+    if (!session) return undefined
+    const run = this.taskRuns.get(sessionId)
+    this.sessionSendGates.add(sessionId)
+    if (!run || isTaskRunTerminal(run.status)) return run
+    if (runHasUnresolvedEffects(run) || run.status === 'waiting_reconciliation') {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${run.id} has unresolved outcomes; reconcile before ${boundary}`
+      )
+    }
+    this.runSendGates.add(run.id)
+    await this.pauseExecution({ session, taskRun: run })
+    await this.observationTasks.get(sessionId)
+    const frozen = this.taskRuns.get(sessionId)
+    if (!frozen || frozen.id !== run.id || frozen.status !== 'recovering') {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${run.id} did not reach a recoverable checkpoint for ${boundary}`
+      )
+    }
+    const store = this.getStateStore()
+    const supervisor = await store.getRun(frozen.id)
+    // A freshly assigned successor has a durable TaskRun before its first send
+    // reserves a Supervisor projection. The TaskRun checkpoint is sufficient.
+    if (!supervisor) return frozen
+    if (supervisor.status !== 'paused') {
+      await store.pauseRunForWorkItemTransfer(supervisor.id, {
+        actorId,
+        expectedRevision: supervisor.revision
+      })
+    }
+    return frozen
+  }
+
   control(
     store: SupervisorStateStore,
     request: SupervisorSessionControlRequest
@@ -229,6 +285,61 @@ export class SessionSupervisorRuntime {
       failed: (failedRequest, binding) => {
         if (failedRequest.action === 'resume') this.setSendGate(binding, true)
       }
+    })
+  }
+
+  /**
+   * The renderer cannot name an arbitrary worker or take a TaskRun lease
+   * directly. It can only claim a local operator lease after the active
+   * canonical Session/TaskRun binding has been rechecked in main.
+   */
+  async claimControlLease(
+    store: SupervisorStateStore,
+    runId: string,
+    expectedRevision: number
+  ): Promise<SupervisorRunRecord> {
+    const supervisor = await store.getRun(runId)
+    if (!supervisor) {
+      throw new SupervisorStateError('not_found', `run ${runId} was not found`)
+    }
+    if (supervisor.origin !== 'task_run') {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${supervisor.id} is not TaskRun-owned; use the coordination lease API`
+      )
+    }
+    if (supervisor.revision !== expectedRevision) {
+      throw new SupervisorStateError(
+        'stale_revision',
+        `run ${supervisor.id} revision is ${supervisor.revision}, expected ${expectedRevision}`
+      )
+    }
+    const binding = await this.resolveControlBinding(supervisor.id)
+    if (!binding) {
+      throw new SupervisorStateError(
+        'invalid_transition',
+        `run ${supervisor.id} is TaskRun-owned but has no active canonical session runtime`
+      )
+    }
+    assertControlBindingIdentity(supervisor, binding)
+    const ownerId = 'local-operator'
+    const lease = supervisor.lease
+    const now = Date.now()
+    if (lease && lease.expiresAt > now && lease.ownerId === ownerId) {
+      return store.heartbeatLease(supervisor.id, {
+        actorId: ownerId,
+        expectedRevision,
+        fencingToken: lease.fencingToken,
+        leaseId: lease.id,
+        ownerId,
+        ttlMs: 30_000
+      })
+    }
+    return store.acquireLease(supervisor.id, {
+      actorId: ownerId,
+      expectedRevision,
+      ownerId,
+      ttlMs: 30_000
     })
   }
 
@@ -402,6 +513,26 @@ export class SessionSupervisorRuntime {
       )
     }
     return snapshot
+  }
+}
+
+function assertControlBindingIdentity(
+  supervisor: SupervisorRunRecord,
+  binding: SupervisorSessionControlBinding
+): void {
+  const { meta } = binding.session
+  const { taskRun } = binding
+  if (
+    taskRun.id !== supervisor.id ||
+    taskRun.sessionId !== meta.id ||
+    meta.workspaceId !== supervisor.projectId ||
+    meta.goalId !== supervisor.goalId ||
+    meta.workItemId !== supervisor.workItemId
+  ) {
+    throw new SupervisorStateError(
+      'invalid_input',
+      `run ${supervisor.id} canonical identity does not match the active session`
+    )
   }
 }
 

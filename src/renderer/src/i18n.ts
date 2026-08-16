@@ -12,6 +12,8 @@ import { ROUTING_RECOVERY_TRANSLATIONS } from './i18n/routingRecoveryTranslation
 import { WORKBENCH_TRANSLATIONS } from './i18n/workbenchTranslations'
 import { PROVIDER_GATEWAY_TRANSLATIONS } from './i18n/providerGatewayTranslations'
 import { PLUGIN_REGISTRY_TRANSLATIONS } from './i18n/pluginRegistryTranslations'
+import { CHAT_TRANSLATIONS } from './i18n/chatTranslations'
+import { DATA_RETENTION_TRANSLATIONS } from './i18n/dataRetentionTranslations'
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
  * 支持 {name} 占位符插值:t('key', { name: 'x' })。
@@ -23,6 +25,7 @@ const DICT: Dict = {
   ...WORKBENCH_TRANSLATIONS,
   ...PROVIDER_GATEWAY_TRANSLATIONS,
   ...PLUGIN_REGISTRY_TRANSLATIONS,
+  ...DATA_RETENTION_TRANSLATIONS,
   contentSearchSection: { zh: '消息内容', en: 'Message content' },
   contentSearchEmpty: { zh: '消息内容无匹配', en: 'No matches in message content' },
   recoverableTasks: { zh: '可恢复任务', en: 'Recoverable tasks' },
@@ -70,51 +73,12 @@ const DICT: Dict = {
   forkConversation: { zh: '切换 Provider / 模型继续', en: 'Continue with another provider / model' },
   conversationForkSource: { zh: '对话分叉 · {title}', en: 'Conversation fork · {title}' },
   conversation: { zh: '原对话', en: 'Source conversation' },
-  taskExperienceMode: { zh: '本任务界面模式', en: 'Task interface mode' },
   taskExperienceAssistant: { zh: '助手', en: 'Assistant' },
   taskExperienceStudio: { zh: '工作台', en: 'Studio' },
   taskExperienceAssistantHint: { zh: '仅本任务使用简洁助手界面，不修改默认模式', en: 'Use the concise Assistant interface for this task only' },
   taskExperienceStudioHint: { zh: '仅本任务使用完整工作台界面，不修改默认模式', en: 'Use the full Studio interface for this task only' },
-  // 会话状态
-  statusStarting: { zh: '启动中', en: 'Starting' },
-  statusRunning: { zh: '运行中', en: 'Running' },
-  statusIdle: { zh: '空闲', en: 'Idle' },
-  statusError: { zh: '错误', en: 'Error' },
-  statusClosed: { zh: '已关闭', en: 'Closed' },
-  // 聊天视图
-  switchModel: { zh: '切换模型', en: 'Switch model' },
-  permissionMode: { zh: '权限模式', en: 'Permission mode' },
+  ...CHAT_TRANSLATIONS,
   ...TASK_PLAN_TRANSLATIONS,
-  stop: { zh: '⏹ 停止', en: '⏹ Stop' },
-  closeSession: { zh: '关闭会话', en: 'Close session' },
-  chatLayoutControls: { zh: '聊天布局控制', en: 'Chat layout controls' },
-  zoomOutChat: { zh: '缩小聊天内容', en: 'Zoom chat out' },
-  zoomInChat: { zh: '放大聊天内容', en: 'Zoom chat in' },
-  resetChatZoom: { zh: '重置聊天缩放', en: 'Reset chat zoom' },
-  toggleCompactChat: { zh: '切换紧凑聊天密度', en: 'Toggle compact chat density' },
-  compactChatDensity: { zh: '紧凑消息密度', en: 'Compact message density' },
-  comfortableChatDensity: { zh: '舒适', en: 'Comfortable' },
-  compactChatDensityValue: { zh: '紧凑', en: 'Compact' },
-  resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
-  collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
-  deskRailLabel: { zh: '工作区控制条', en: 'Workspace controls' },
-  toggleDeskSummary: { zh: '切换结果', en: 'Toggle results' },
-  openDeskTools: { zh: '打开工具抽屉', en: 'Open tool drawer' },
-  deskToolDrawer: { zh: '工作区工具', en: 'Workspace tools' },
-  showDeskPanel: { zh: '显示工具区', en: 'Show tool panel' },
-  hideDeskPanel: { zh: '隐藏工具区', en: 'Hide tool panel' },
-  deskReview: { zh: '审查', en: 'Review' },
-  deskTerminal: { zh: '终端', en: 'Terminal' },
-  deskBrowser: { zh: '浏览器', en: 'Browser' },
-  deskFiles: { zh: '文件', en: 'Files' },
-  deskSideChat: { zh: '侧边聊天', en: 'Side chat' },
-  providerOfficial: { zh: '未选择 Provider', en: 'No Provider selected' },
-  unknownProvider: { zh: '未知 Provider', en: 'Unknown provider' },
-  provider: { zh: '厂商', en: 'Provider' },
-  model: { zh: '模型', en: 'Model' },
-  statusContext: { zh: '上下文', en: 'Context' },
-  thinkingLive: { zh: '思考中…', en: 'Thinking…' },
-  agentWorking: { zh: 'Agent 工作中…', en: 'Agent working…' },
   // 消息项
   you: { zh: '你', en: 'You' },
   thinkingProcess: { zh: '思考过程', en: 'Thinking' },
@@ -316,17 +280,23 @@ const DICT: Dict = {
   errNeedProjectDir: { zh: '请选择项目目录', en: 'Please pick a project directory' },
   creating: { zh: '创建中…', en: 'Creating…' },
   create: { zh: '创建', en: 'Create' },
-  // Agent 控制室
-  officeTitle: { zh: 'Agent 控制室', en: 'Agent Control Room' },
+  // CaoGen 控制室
+  officeTitle: { zh: 'CaoGen 控制室', en: 'CaoGen Control Room' },
   officeHint: {
-    zh: '单击选中 · 双击进入 · 预设镜头',
-    en: 'Select · open · camera presets'
+    zh: '助手 · 项目 · 视频统一运行状态',
+    en: 'Assistant, project and video operations'
   },
+  officeReturnWorkspace: { zh: '返回工作区', en: 'Back to workspace' },
   newShort: { zh: '新建', en: 'New' },
   officeEmpty: {
-    zh: '还没有控制台。新建会话后,这里会显示 Agent 状态。',
-    en: 'No consoles yet. Start a session to see agent status here.'
+    zh: '还没有运行中的会话、项目任务或视频任务。',
+    en: 'No sessions, project tasks or video jobs yet.'
   },
+  officeBusinessViews: { zh: '控制室业务视角', en: 'Control room business views' },
+  officeBusinessAll: { zh: '全部', en: 'All' },
+  officeBusinessAssistant: { zh: '助手', en: 'Assistant' },
+  officeBusinessProject: { zh: '项目', en: 'Projects' },
+  officeBusinessVideo: { zh: '视频', en: 'Video' },
   officeMetricSessions: { zh: '会话', en: 'Sessions' },
   officeMetricWorking: { zh: '运行', en: 'Running' },
   officeMetricAwaiting: { zh: '待授权', en: 'Approvals' },
@@ -339,9 +309,16 @@ const DICT: Dict = {
   officeMetricWorkspace: { zh: '文件', en: 'Files' },
   officeMetricGit: { zh: 'Git', en: 'Git' },
   officeMetricIsolated: { zh: '隔离', en: 'Isolated' },
+  officeMetricProjects: { zh: '项目', en: 'Projects' },
+  officeMetricWorkItems: { zh: '工作项', en: 'Work items' },
+  officeMetricBlocked: { zh: '阻塞', en: 'Blocked' },
+  officeMetricProductions: { zh: '制作', en: 'Productions' },
+  officeMetricMediaJobs: { zh: '媒体任务', en: 'Media jobs' },
+  officeMetricReconciliation: { zh: '待对账', en: 'Reconcile' },
+  officeMetricMediaCost: { zh: '实际 / 估算', en: 'Actual / est.' },
   officePresetOverview: { zh: '总览', en: 'Overview' },
   officePresetAgent: { zh: 'Agent', en: 'Agent' },
-  officePresetFacilities: { zh: '设施', en: 'Facilities' },
+  officePresetFacilities: { zh: '业务区', en: 'Zones' },
   officePresetIncidents: { zh: '异常', en: 'Incidents' },
   officeSelectedAgent: { zh: '当前 Agent', en: 'Selected Agent' },
   officeOpenSession: { zh: '进入会话', en: 'Open Session' },
@@ -352,11 +329,11 @@ const DICT: Dict = {
   officeDuration: { zh: '耗时', en: 'Duration' },
   officeWorkspace: { zh: '工作区', en: 'Workspace' },
   officeFiles: { zh: '文件', en: 'Files' },
-  officeSelectedFacility: { zh: '当前设施', en: 'Selected Facility' },
-  officeFacilityHydration: { zh: '茶水间', en: 'Hydration' },
-  officeFacilityRestroom: { zh: '卫生间', en: 'Restroom' },
-  officeFacilityDining: { zh: '餐厅', en: 'Dining' },
-  officeFacilityReady: { zh: '可用', en: 'Ready' },
+  officeSelectedFacility: { zh: '当前业务区', en: 'Selected zone' },
+  officeZoneAssistant: { zh: '助手办公区', en: 'Assistant operations' },
+  officeZoneProject: { zh: '项目任务区', en: 'Project operations' },
+  officeZoneVideo: { zh: '视频制作区', en: 'Video production' },
+  officeZoneLive: { zh: '实时投影', en: 'Live projection' },
   officeStatusIdle: { zh: '待机', en: 'Idle' },
   officeStatusCompleted: { zh: '完成', en: 'Done' },
   activityWorking: { zh: '工作中', en: 'Working' },
@@ -639,8 +616,8 @@ const DICT: Dict = {
   notificationChannelWeCom: { zh: '企业微信', en: 'WeCom' },
   migrateTitle: { zh: '导入历史工具资产', en: 'Import existing tool assets' },
   migrateHint: {
-    zh: '扫描本机已有的规则与 MCP 配置。规则注入项目规则文件(带来源标注,原文件不动,已有规则文件先备份);MCP 合并进 .mcp.json(同名跳过)。',
-    en: 'Scan existing local rules and MCP configs. Rules are injected into the project rules file (source-tagged, originals untouched, existing rule files backed up); MCP merges into .mcp.json (name conflicts skipped).'
+    zh: '扫描 Codex、OpenClaw、Hermes Agent、CC Switch 等本机资产。记忆仅进入待确认草稿，自动化强制禁用、计划模式且零预算，频道仅保留脱敏统计；Provider、凭据和发送权限不会自动复制。',
+    en: 'Scan local assets from Codex, OpenClaw, Hermes Agent, CC Switch, and others. Memories remain approval drafts, automations are disabled with plan-only permission and zero budget, and channels become sanitized indexes; providers, credentials, and send authority are never copied.'
   },
   migrateScan: { zh: '扫描', en: 'Scan' },
   migrateScanning: { zh: '扫描中…', en: 'Scanning…' },
@@ -654,11 +631,14 @@ const DICT: Dict = {
     en: 'Claude native assets are already available'
   },
   migrateNothing: {
-    zh: '未检测到可导入的历史配置资产。',
-    en: 'No importable existing config assets detected.'
+    zh: '未检测到可导入的规则、Skill、MCP、记忆草稿、自动化草稿或频道索引。',
+    en: 'No importable rules, Skills, MCP entries, memory drafts, automation drafts, or channel indexes detected.'
   },
   migrateKindRules: { zh: '规则', en: 'rules' },
   migrateKindConfig: { zh: '配置', en: 'config' },
+  migrateKindMemory: { zh: '记忆草稿', en: 'Memory draft' },
+  migrateKindRoutine: { zh: '自动化草稿', en: 'Automation draft' },
+  migrateKindChannel: { zh: '频道索引', en: 'Channel index' },
   migrateRiskLow: { zh: '低风险', en: 'Low risk' },
   migrateRiskReview: { zh: '需确认', en: 'Review' },
   migrateRiskBlocked: { zh: '不导入', en: 'Not imported' },

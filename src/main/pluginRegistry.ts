@@ -16,7 +16,6 @@ import {
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import type {
-  PluginCapabilityDiff,
   PluginRegistryDiagnostic,
   PluginRegistryItem,
   PluginRegistryKind,
@@ -24,7 +23,7 @@ import type {
   PluginRegistrySourceKind,
   PluginRegistryView
 } from '../shared/types'
-import { inspectPluginRegistryItemTrust, pluginRegistryProvenance } from './plugin/plugin-trust'
+import { projectPluginRegistryItemTrust } from './plugin/plugin-trust'
 
 export type {
   PluginRegistryDiagnostic,
@@ -76,7 +75,7 @@ const DEFAULT_MAX_FILES = 1000
 const DEFAULT_MAX_DEPTH = 6
 const DEFAULT_MAX_READ_BYTES = 256 * 1024
 const IGNORED_DIRS = new Set(['.git', 'node_modules'])
-const MCP_CONFIG_NAMES = new Set(['.mcp.json', 'mcp.json', 'settings.json'])
+const MCP_CONFIG_NAMES = new Set(['.mcp.json', 'mcp.json', 'settings.json', 'claude_desktop_config.json'])
 const SUMMARY_CHARS = 180
 
 export function scanPluginRegistry(
@@ -97,6 +96,9 @@ export function scanPluginRegistry(
   for (const sourceRoot of sourceRoots) {
     if (!isDirectory(sourceRoot)) {
       addDiagnostic(ctx, 'root_missing', sourceRoot, 'Plugin registry root does not exist or is not a directory.')
+      if (limits.includeSiblingProjectMcp && basename(sourceRoot) === '.claude') {
+        scanMcpConfigFile(sourceRoot, join(dirname(sourceRoot), '.mcp.json'), items, ctx, new Set())
+      }
       continue
     }
 
@@ -244,57 +246,10 @@ function applyPluginRegistryState(
   return items.map((item) => {
     const override = normalized.items[pluginRegistryItemKey(item)]
     const sourceKind = sourceKindForRoot(item.sourceRoot)
-    const inspection = inspectPluginRegistryItemTrust(item)
-    const approval = override?.approval
-    const capabilityDiff = diffCapabilities(approval?.capabilities, inspection.capabilityManifest.capabilities)
-    const invalid = !inspection.contentDigest || Boolean(inspection.error)
-    const changed = Boolean(approval) && (
-      approval?.contentDigest !== inspection.contentDigest ||
-      approval?.capabilityDigest !== inspection.capabilityManifest.digest
-    )
-    const status = invalid
-      ? 'invalid' as const
-      : !approval
-        ? 'approval_required' as const
-        : changed
-          ? 'changed' as const
-          : 'approved' as const
-    if (inspection.error) addDiagnostic(ctx, 'digest_failed', item.path, inspection.error)
-    return {
-      ...item,
-      sourceKind,
-      enabled: status === 'approved' ? (override?.enabled ?? item.enabled) : false,
-      enabledSource: override ? 'user' : 'manifest',
-      ...(override ? { enabledUpdatedAt: override.updatedAt } : {}),
-      ...(inspection.contentDigest ? { contentDigest: inspection.contentDigest } : {}),
-      provenance: pluginRegistryProvenance(sourceKind, item.managed === true),
-      capabilityManifest: inspection.capabilityManifest,
-      trust: {
-        status,
-        capabilityDiff,
-        ...(approval ? {
-          approvedAt: approval.approvedAt,
-          approvedContentDigest: approval.contentDigest,
-          approvedCapabilityDigest: approval.capabilityDigest
-        } : {}),
-        ...(invalid
-          ? { reason: inspection.error || 'Plugin content digest is unavailable' }
-          : status === 'changed'
-            ? { reason: capabilityDiff.expanded ? 'Content or capabilities expanded after approval' : 'Content changed after approval' }
-            : status === 'approval_required'
-              ? { reason: 'Current content and capabilities have not been approved' }
-              : {})
-      }
-    }
+    const projected = projectPluginRegistryItemTrust(item, sourceKind, override)
+    if (projected.error) addDiagnostic(ctx, 'digest_failed', item.path, projected.error)
+    return projected.item
   })
-}
-
-function diffCapabilities(previous: string[] | undefined, current: string[]): PluginCapabilityDiff {
-  const before = new Set(previous ?? [])
-  const after = new Set(current)
-  const added = [...after].filter((capability) => !before.has(capability)).sort()
-  const removed = [...before].filter((capability) => !after.has(capability)).sort()
-  return { added, removed, expanded: added.length > 0 }
 }
 
 function sourceKindForRoot(sourceRoot: string): PluginRegistrySourceKind {
@@ -350,6 +305,25 @@ function isSha256(value: unknown): value is string {
 function scanStandaloneSkillRoot(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {
   if (basename(sourceRoot) !== 'skills' && !existsSync(join(sourceRoot, 'SKILL.md'))) return
   visitSkillDir(sourceRoot, sourceRoot, 0, items, ctx)
+  if (basename(sourceRoot) !== 'skills') return
+  for (const entry of readDir(sourceRoot, ctx)) {
+    if (!entry.isFile() || extname(entry.name).toLowerCase() !== '.md' || entry.name === 'SKILL.md') continue
+    const path = join(sourceRoot, entry.name)
+    const text = readTextFile(path, ctx)
+    if (text === null) continue
+    const meta = extractTextMetadata(text)
+    const name = meta.name ?? basename(entry.name, extname(entry.name))
+    items.push({
+      id: makeId('skill', sourceRoot, path, name),
+      name,
+      kind: 'skill',
+      sourceRoot,
+      path,
+      enabled: true,
+      summary: meta.summary,
+      version: meta.version
+    })
+  }
 }
 
 function scanPluginManifest(sourceRoot: string, items: DiscoveredPluginRegistryItem[], ctx: ScanContext): void {

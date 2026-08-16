@@ -22,6 +22,7 @@ import {
 } from './safe-git'
 import type { FileSystemIdentity } from '../../shared/types'
 import { hasMeaningfulWorktreeChanges } from './git-worktree-state'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_BUFFER = 16 * 1024 * 1024
@@ -1221,9 +1222,7 @@ function runCommand(
   const allowed = options.allowExitCodes ?? [0]
   const env = options.replaceEnv
     ? { ...(extraEnv ?? {}) }
-    : extraEnv
-      ? { ...process.env, ...extraEnv }
-      : process.env
+    : buildMinimalSubprocessEnv(extraEnv ?? {})
   const result = spawnSync(command, args, {
     cwd,
     input: options.input,
@@ -1414,7 +1413,11 @@ function prToolForProvider(provider: PullRequestProvider): PullRequestTool | nul
 
 function commandExists(command: string): boolean {
   const probe = process.platform === 'win32' ? 'where' : 'which'
-  const result = spawnSync(probe, [command], { stdio: 'ignore', timeout: GIT_TIMEOUT_MS })
+  const result = spawnSync(probe, [command], {
+    env: buildMinimalSubprocessEnv(),
+    stdio: 'ignore',
+    timeout: GIT_TIMEOUT_MS
+  })
   return result.status === 0
 }
 

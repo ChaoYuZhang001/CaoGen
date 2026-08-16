@@ -1,5 +1,5 @@
 import { useId, useRef } from 'react'
-import { Check, Download, Sparkles, Trash2, UserPlus, X } from 'lucide-react'
+import { Check, Download, PackagePlus, Sparkles, Trash2, UserPlus, X } from 'lucide-react'
 import type { DigitalWorker, DigitalWorkerAssignment, DigitalWorkerRoleRecommendation, DigitalWorkerStatus, LearningRecord } from '../../../../shared/types'
 import { RoleLibrary, WorkerRoster } from './DigitalWorkerCards'
 import { AssignmentForm, HireWorkerForm, RoleTemplateForm, WorkerMemoryForm } from './DigitalWorkerForms'
@@ -11,6 +11,7 @@ import type {
 import { WORKER_STATUS_LABELS } from './digital-worker-studio-model'
 import { recommendationBudgetLabel, recommendationDataLabels, toolPolicyLabels } from './digital-worker-studio-model'
 import type { DigitalWorkerStudioState } from './useDigitalWorkerStudio'
+import { TEAM_TEMPLATE_MARKET } from './team-template-market'
 
 const STATUS_FILTERS: Array<{ value: '' | DigitalWorkerStatus; label: string }> = [
   { value: '', label: '全部状态' },
@@ -262,7 +263,8 @@ function WorkerHistoryPanel(props: DigitalWorkerStudioViewProps): React.JSX.Elem
     ['Run', snapshot.summary.runs],
     ['Artifact', snapshot.summary.artifacts],
     ['Evidence', snapshot.summary.evidence],
-    ['Acceptance', snapshot.summary.acceptances]
+    ['Acceptance', snapshot.summary.acceptances],
+    ['Audit', snapshot.summary.audit]
   ] as const
   return (
     <section className="dws-memory dws-history" aria-labelledby="dws-history-title" data-dws-worker-history={snapshot.worker.id}>
@@ -490,6 +492,7 @@ function StudioPanel(props: DigitalWorkerStudioViewProps & { baseId: string; tea
           onMemory={(worker) => void studio.openWorkerMemory(worker.id)}
           onHistory={(worker) => void studio.openWorkerHistory(worker.id)}
           onAssign={props.onOpenAssignment}
+          onReleaseAssignment={(assignment) => void studio.releaseAssignment(assignment)}
           onHire={() => props.onOpenHire()}
         />
       </div>
@@ -504,6 +507,29 @@ function StudioPanel(props: DigitalWorkerStudioViewProps & { baseId: string; tea
       {props.roleEditorOpen && (
         <RoleTemplateForm busy={studio.busyKey === 'role:create'} onCancel={() => props.onRoleEditor(false)} onSubmit={studio.createRole} />
       )}
+      <section className="dws-template-market" aria-label="团队模板市场">
+        <div className="dws-panel-heading">
+          <div><h3>团队模板市场</h3><span>本地版本化模板，安装后可继续编辑岗位策略</span></div>
+        </div>
+        <div className="dws-template-market-grid">
+          {TEAM_TEMPLATE_MARKET.map((pack) => {
+            const installed = pack.roles.every((role) => role.id && studio.roles.some((item) => item.id === role.id))
+            const busy = studio.busyKey === `team-template:${pack.id}`
+            return (
+              <article key={pack.id} className="dws-role-card" data-team-template-pack={pack.id}>
+                <header><div><h3>{pack.name}</h3><span>{pack.roles.length} 个岗位</span></div><span className="dws-role-source">组织策略</span></header>
+                <p>{pack.summary}</p>
+                <div className="dws-muted">{pack.policy}</div>
+                <footer>
+                  <button type="button" className="dws-button dws-button-primary" disabled={busy || studio.busyKey !== null || installed} onClick={() => void studio.installTeamTemplatePack(pack)}>
+                    <PackagePlus aria-hidden="true" />{busy ? '安装中...' : installed ? '已安装' : '安装模板'}
+                  </button>
+                </footer>
+              </article>
+            )
+          })}
+        </div>
+      </section>
       <RoleLibrary
         roles={studio.roles}
         canHire={Boolean(props.selectedProjectId)}

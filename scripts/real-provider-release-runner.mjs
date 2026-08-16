@@ -42,9 +42,10 @@ const privateIpv4Ranges = [
 ]
 
 class SafeFailure extends Error {
-  constructor(code) {
+  constructor(code, diagnostic) {
     super(code)
     this.code = code
+    this.diagnostic = diagnostic
   }
 }
 
@@ -58,7 +59,8 @@ try {
     status: 'failed',
     functionalPassed: false,
     formalBinding: false,
-    errorCode: safeErrorCode(error)
+    errorCode: safeErrorCode(error),
+    ...(safeFailureDiagnostic(error) ? { diagnostic: safeFailureDiagnostic(error) } : {})
   })}\n`)
   process.exitCode = 1
 } finally {
@@ -115,6 +117,8 @@ async function runEvidence() {
       expectedBytes,
       projectRoot,
       timeoutMs,
+      providerProtocol: provider.apiFormat === 'openai-responses' ? 'responses' : 'chat',
+      restoreNetwork: lifecycle.restoreNetwork,
       marks
     })
     const verifiedArtifact = await registerAndVerifyArtifact({
@@ -255,7 +259,19 @@ async function prepareEvidenceHarness(input) {
 }
 
 async function verifyCompletedTurn(input) {
-  const { manager, meta, workspace, ids, artifactFileName, expectedBytes, projectRoot, timeoutMs, marks } = input
+  const {
+    manager,
+    meta,
+    workspace,
+    ids,
+    artifactFileName,
+    expectedBytes,
+    projectRoot,
+    timeoutMs,
+    providerProtocol,
+    restoreNetwork,
+    marks
+  } = input
   await waitFor(
     () => successfulWriteTool(manager.getTranscript(meta.id), artifactFileName),
     timeoutMs * 2,
@@ -263,7 +279,12 @@ async function verifyCompletedTurn(input) {
   )
   const toolCompletedAt = marks.next()
   assertExactRegularFile(path.join(projectRoot, artifactFileName), expectedBytes)
-  await waitFor(() => successfulTurn(manager.getTranscript(meta.id)), timeoutMs * 2, 'turn_completion_timeout')
+  await waitFor(
+    () => successfulTurn(manager.getTranscript(meta.id)),
+    timeoutMs * 2,
+    'turn_completion_timeout',
+    () => turnCompletionDiagnostic(manager, meta.id, providerProtocol, restoreNetwork)
+  )
   const transcript = manager.getTranscript(meta.id)
   const toolCalls = durableToolCalls(transcript)
   if (toolCalls.length !== 1 || toolCalls[0].name !== 'write_file') fail('unexpected_tool_sequence')
@@ -570,6 +591,10 @@ function installBoundedFetch(baseUrl, maxRequests, timeoutMs) {
   if (typeof originalFetch !== 'function') fail('fetch_unavailable')
   const origin = new URL(baseUrl).origin
   let requests = 0
+  let responses = 0
+  let rejected = 0
+  let active = 0
+  let lastOutcome = 'not_started'
   globalThis.fetch = async (input, init = {}) => {
     const target = new URL(typeof input === 'string' || input instanceof URL ? input : input.url)
     if (target.origin !== origin) fail('unexpected_network_target')
@@ -577,9 +602,26 @@ function installBoundedFetch(baseUrl, maxRequests, timeoutMs) {
     if (requests > maxRequests) fail('request_cap_exceeded')
     const timeoutSignal = AbortSignal.timeout(timeoutMs)
     const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal
-    return originalFetch(input, { ...init, signal })
+    active += 1
+    lastOutcome = 'pending'
+    try {
+      const response = await originalFetch(input, { ...init, signal })
+      responses += 1
+      lastOutcome = response.ok ? 'response_success' : 'response_error'
+      return response
+    } catch (error) {
+      rejected += 1
+      lastOutcome = error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'aborted' : 'rejected'
+      throw error
+    } finally {
+      active -= 1
+    }
   }
-  return { requestCount: () => requests, restore: () => { globalThis.fetch = originalFetch } }
+  return {
+    requestCount: () => requests,
+    diagnostic: () => ({ requests, responses, rejected, active, lastOutcome }),
+    restore: () => { globalThis.fetch = originalFetch }
+  }
 }
 
 function installRuntimeEnvironment(outDir, userData) {
@@ -739,6 +781,31 @@ function successfulTurn(transcript) {
   return result?.kind === 'turn-result' && result.isError === false
 }
 
+function turnCompletionDiagnostic(manager, sessionId, protocol, restoreNetwork) {
+  const transcript = manager.getTranscript(sessionId)
+  const sessionStatus = manager.get(sessionId)?.meta.status ?? 'missing'
+  const runStatus = manager.taskRuns.get(sessionId)?.status ?? 'missing'
+  const lastEventKind = transcript.at(-1)?.event.kind ?? 'none'
+  const counts = { toolStart: 0, assistantMessage: 0, toolResult: 0, textDelta: 0, turnResult: 0, status: 0 }
+  for (const entry of transcript) {
+    if (entry.event.kind === 'tool-start') counts.toolStart += 1
+    else if (entry.event.kind === 'assistant-message') counts.assistantMessage += 1
+    else if (entry.event.kind === 'tool-result') counts.toolResult += 1
+    else if (entry.event.kind === 'text-delta') counts.textDelta += 1
+    else if (entry.event.kind === 'turn-result') counts.turnResult += 1
+    else if (entry.event.kind === 'status') counts.status += 1
+  }
+  return {
+    protocol,
+    sessionStatus,
+    runStatus,
+    transcriptEntries: transcript.length,
+    lastEventKind,
+    eventCounts: counts,
+    network: restoreNetwork.diagnostic()
+  }
+}
+
 function redactedTranscriptShape(transcript) {
   return transcript.map((entry) => {
     const event = entry.event
@@ -848,13 +915,13 @@ function monotonicMarks() {
   }
 }
 
-async function waitFor(producer, timeoutMs, code) {
+async function waitFor(producer, timeoutMs, code, diagnostic) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
     if (await producer()) return
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  fail(code)
+  fail(code, diagnostic?.())
 }
 
 function findCompiled(root, suffix) {
@@ -954,10 +1021,16 @@ function argValue(name) {
   return inline ? inline.slice(prefix.length) : undefined
 }
 
-function fail(code) {
-  throw new SafeFailure(code)
+function fail(code, diagnostic) {
+  throw new SafeFailure(code, diagnostic)
 }
 
 function safeErrorCode(error) {
   return error instanceof SafeFailure ? error.code : 'internal_error'
+}
+
+function safeFailureDiagnostic(error) {
+  return error instanceof SafeFailure && error.diagnostic && typeof error.diagnostic === 'object'
+    ? error.diagnostic
+    : undefined
 }

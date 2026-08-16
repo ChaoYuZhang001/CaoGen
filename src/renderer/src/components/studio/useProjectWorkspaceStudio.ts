@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Goal,
   GoalInput,
+  ProjectMember,
+  ProjectInvitation,
+  ProjectCollaborationInboxItem,
+  ProjectAuthorizationView,
   ProjectSquad,
   ProjectWorkspace,
   ProjectWorkspaceInput,
   WorkItem,
   WorkItemComment,
+  WorkItemSharedApproval,
   WorkItemInput
 } from '../../../../shared/types'
 import { AUTO_MODEL, AUTO_PROVIDER_ID } from '../../../../shared/types'
@@ -80,7 +85,12 @@ export function useProjectContents(active: boolean, projectId: string): {
   goals: Goal[]
   workItems: WorkItem[]
   squads: ProjectSquad[]
+  members: ProjectMember[]
+  invitations: ProjectInvitation[]
   comments: WorkItemComment[]
+  sharedApprovals: WorkItemSharedApproval[]
+  collaborationInbox: ProjectCollaborationInboxItem[]
+  authorization: ProjectAuthorizationView | null
   loading: boolean
   error: string
   refreshContents: () => Promise<void>
@@ -88,7 +98,12 @@ export function useProjectContents(active: boolean, projectId: string): {
   const [goals, setGoals] = useState<Goal[]>([])
   const [workItems, setWorkItems] = useState<WorkItem[]>([])
   const [squads, setSquads] = useState<ProjectSquad[]>([])
+  const [members, setMembers] = useState<ProjectMember[]>([])
+  const [invitations, setInvitations] = useState<ProjectInvitation[]>([])
   const [comments, setComments] = useState<WorkItemComment[]>([])
+  const [sharedApprovals, setSharedApprovals] = useState<WorkItemSharedApproval[]>([])
+  const [collaborationInbox, setCollaborationInbox] = useState<ProjectCollaborationInboxItem[]>([])
+  const [authorization, setAuthorization] = useState<ProjectAuthorizationView | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const request = useRef(0)
@@ -100,17 +115,27 @@ export function useProjectContents(active: boolean, projectId: string): {
     setLoading(true)
     setError('')
     try {
-      const [nextGoals, nextWorkItems, nextSquads, nextComments] = await Promise.all([
+      const [nextGoals, nextWorkItems, nextSquads, nextMembers, nextInvitations, nextComments, nextApprovals, nextInbox, nextAuthorization] = await Promise.all([
         window.agentDesk.listProjectGoals(projectId, { includeArchived: true }),
         window.agentDesk.listProjectWorkItems(projectId),
         window.agentDesk.listProjectSquads(projectId, { includeArchived: true }),
-        window.agentDesk.listProjectComments(projectId)
+        window.agentDesk.listProjectMembers(projectId, { includeArchived: true }),
+        window.agentDesk.listProjectInvitations(projectId, { includeArchived: true }),
+        window.agentDesk.listProjectComments(projectId),
+        window.agentDesk.listProjectSharedApprovals(projectId),
+        window.agentDesk.listProjectCollaborationInbox(projectId, { includeHandled: true }),
+        window.agentDesk.getProjectAuthorization(projectId)
       ])
       if (requestId !== request.current) return
       setGoals(nextGoals.sort((left, right) => right.updatedAt - left.updatedAt))
       setWorkItems(nextWorkItems.sort(compareWorkItemsByBoardOrder))
       setSquads(nextSquads.sort((left, right) => left.name.localeCompare(right.name)))
+      setMembers(nextMembers.sort((left, right) => (left.principal.displayName || left.principal.id).localeCompare(right.principal.displayName || right.principal.id)))
+      setInvitations(nextInvitations.sort((left, right) => right.createdAt - left.createdAt))
       setComments(nextComments.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)))
+      setSharedApprovals(nextApprovals.sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id)))
+      setCollaborationInbox(nextInbox)
+      setAuthorization(nextAuthorization)
       loadedProjectId.current = projectId
     } catch (cause) {
       if (requestId === request.current) setError(errorText(cause))
@@ -131,20 +156,29 @@ export function useProjectContents(active: boolean, projectId: string): {
       setGoals([])
       setWorkItems([])
       setSquads([])
+      setMembers([])
+      setInvitations([])
       setComments([])
+      setSharedApprovals([])
+      setCollaborationInbox([])
+      setAuthorization(null)
       return
     }
     if (loadedProjectId.current !== projectId) {
       setGoals([])
       setWorkItems([])
       setSquads([])
+      setMembers([])
       setComments([])
+      setSharedApprovals([])
+      setCollaborationInbox([])
+      setAuthorization(null)
       void refreshContents()
     }
   }, [active, projectId, refreshContents])
   useEffect(() => () => { request.current += 1 }, [])
 
-  return { goals, workItems, squads, comments, loading, error, refreshContents }
+  return { goals, workItems, squads, members, invitations, comments, sharedApprovals, collaborationInbox, authorization, loading, error, refreshContents }
 }
 
 export function useStudioCreateActions({
@@ -244,7 +278,7 @@ export function useProjectGoalTaskStart(refreshContents: () => Promise<void>): {
   const [error, setError] = useState('')
   const [announcement, setAnnouncement] = useState('')
   const locked = useRef(false)
-  const retry = useRef<{ key: string; requestId: string } | null>(null)
+  const retry = useRef<{ key: string; requestId: string; sessionId?: string } | null>(null)
 
   const start = useCallback(async (projectId: string, rawObjective: string): Promise<boolean> => {
     const objective = rawObjective.trim()
@@ -262,18 +296,22 @@ export function useProjectGoalTaskStart(refreshContents: () => Promise<void>): {
         objective
       })
       await refreshContents()
-      await useStore.getState().startSessionWithPrompt({
-        cwd: '',
-        workspaceId: projectId,
-        goalId: result.goal.id,
-        workItemId: result.workItem.id,
-        model: AUTO_MODEL,
-        providerId: AUTO_PROVIDER_ID,
-        routingScope: 'global',
-        initialPrompt: objective,
-        taskStrategy: 'execute',
-        title: result.workItem.title
-      }, objective)
+      const sessionId = retry.current.sessionId ?? await useStore.getState().createSession({
+          cwd: '',
+          workspaceId: projectId,
+          goalId: result.goal.id,
+          workItemId: result.workItem.id,
+          model: AUTO_MODEL,
+          providerId: AUTO_PROVIDER_ID,
+          routingScope: 'global',
+          initialPrompt: objective,
+          taskStrategy: 'plan',
+          title: result.workItem.title
+        })
+      retry.current.sessionId = sessionId
+      useStore.getState().selectSession(sessionId)
+      const plan = await useStore.getState().generateTaskPlan(sessionId, { objective })
+      if (!plan?.currentVersion) throw new Error('工作流草案未生成，任务与会话已保留，可重试')
       retry.current = null
       setAnnouncement(TEXT.goalTaskStarted)
       return true

@@ -41,7 +41,7 @@ try {
 
   enginesModule.registerBuiltinEngines()
   verifyFactoryBindings(engineModule, boundModule)
-  checks.push('two-production-factories-bind-protocol-adapters')
+  checks.push('three-production-factories-bind-protocol-adapters')
   checks.push('production-request-and-event-boundaries-fail-closed')
   verifyResumeSequenceBootstrap(engineModule)
   checks.push('production-resume-sequence-bootstraps-from-transcript')
@@ -56,16 +56,16 @@ try {
   verifyOpenAIAdapter(openaiModule.OPENAI_COMPATIBLE_PROTOCOL_ADAPTER)
   checks.push('openai-adapter-regression-boundaries')
 
-  const remainingOwners = verifyPartialIsolation()
-  checks.push('remaining-engine-protocol-ownership-recorded')
+  const remainingOwners = verifyProtocolIsolation()
+  checks.push('provider-stream-parsing-isolated-from-engines')
   result = {
     status: 'PASS',
     boundaryStatus: 'passed',
-    isolationStatus: 'partial',
+    isolationStatus: 'passed',
     checks,
     adapters: engineModule.listProtocolAdapters().map(adapterIdentity),
     remainingEngineProtocolOwners: remainingOwners,
-    limitation: 'Raw provider stream parsing and fragmented tool-call assembly still live inside the two engines.'
+    limitation: null
   }
   console.log(JSON.stringify(result, null, 2))
 } catch (error) {
@@ -215,15 +215,23 @@ function verifyOpenAIAdapter(openai) {
   }), [{ kind: 'text', text: 'answer' }])
 }
 
-function verifyPartialIsolation() {
-  const ownership = [
-    ['src/main/anthropicEngine.ts', 'streamAnthropicMessage'],
-    ['src/main/openaiEngine.ts', 'res.body.getReader()']
-  ]
-  for (const [file, marker] of ownership) {
-    assert(readFileSync(path.join(repoRoot, file), 'utf8').includes(marker), `${file} ownership marker missing`)
-  }
-  return ownership.map(([file]) => file)
+function verifyProtocolIsolation() {
+  const openaiEngine = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
+  const openaiStream = readFileSync(
+    path.join(repoRoot, 'src/main/protocol-adapters/openai-compatible-stream.ts'),
+    'utf8'
+  )
+  assert(openaiEngine.includes('consumeOpenAIChatResponse'), 'OpenAI Chat stream adapter binding missing')
+  assert(openaiEngine.includes('consumeOpenAIResponsesResponse'), 'OpenAI Responses stream adapter binding missing')
+  assert(!openaiEngine.includes('res.body.getReader()'), 'OpenAI Engine still owns raw stream parsing')
+  assert(openaiStream.includes('body.getReader()'), 'OpenAI stream adapter does not own raw stream parsing')
+  const anthropicEngine = readFileSync(path.join(repoRoot, 'src/main/anthropicEngine.ts'), 'utf8')
+  const anthropicAdapter = readFileSync(path.join(repoRoot, 'src/main/anthropicMessagesAdapter.ts'), 'utf8')
+  const dependencyFactory = readFileSync(path.join(repoRoot, 'src/main/anthropic-engine-dependencies.ts'), 'utf8')
+  assert(dependencyFactory.includes('streamMessage: streamAnthropicMessage'), 'Anthropic stream adapter binding missing')
+  assert(!anthropicEngine.includes('body.getReader()'), 'Anthropic Engine still owns raw stream parsing')
+  assert(anthropicAdapter.includes('body.getReader()'), 'Anthropic Messages adapter does not own raw stream parsing')
+  return []
 }
 
 function sessionMeta(engine) {

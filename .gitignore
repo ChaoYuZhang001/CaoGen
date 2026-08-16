@@ -50,8 +50,11 @@ electron.vite.config.*.mjs
 /cc-switch/
 /deliverables/
 /output/
+/outputs/
 /tmp/
 /nul
+/.workbuddy-ai/
+.claude/launch.json
 
 # 运行时数据(测试/使用副产物,不入库)
 model-stats.json

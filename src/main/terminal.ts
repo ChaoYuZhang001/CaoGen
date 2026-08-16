@@ -5,6 +5,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { basename, dirname, join, resolve } from 'node:path'
 import { chmodSync, existsSync, realpathSync, statSync } from 'node:fs'
 import type { IDisposable, IPty } from 'node-pty'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 type NodePtyModule = typeof import('node-pty')
 
@@ -149,13 +150,12 @@ function clampDimension(value: number | undefined, fallback: number, max: number
 }
 
 function terminalEnv(cwd: string, extra: Record<string, string | undefined> | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env = buildMinimalSubprocessEnv({
     ...extra,
     TERM: extra?.TERM ?? process.env.TERM ?? 'xterm-256color',
     COLORTERM: extra?.COLORTERM ?? process.env.COLORTERM ?? 'truecolor',
     TERM_PROGRAM: 'CaoGen'
-  }
+  })
   if (process.platform !== 'win32') env.PWD = cwd
   return env
 }

@@ -10,6 +10,7 @@ import type {
   ProviderView
 } from '../../shared/types'
 import { createProvider, listProviders, updateProvider } from '../providers'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 interface LocalComputeCandidate {
   service: LocalComputeService
@@ -220,7 +221,7 @@ function startRuntime(command: LocalRuntimeCommand): Promise<boolean> {
     try {
       const child = spawn(command.executable, command.args, {
         detached: true,
-        env: { ...process.env },
+        env: buildMinimalSubprocessEnv(),
         stdio: 'ignore',
         windowsHide: true
       })

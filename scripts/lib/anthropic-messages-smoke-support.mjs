@@ -446,6 +446,12 @@ export function loadRuntime() {
   try {
     Module._load = function patchedLoad(request, parent, isMain) {
       if (request === 'electron') return electronStub()
+      // The Anthropic smoke compiles the shared engine module graph, but does
+      // not exercise Gemini registration. Avoid loading the unrelated CJS
+      // subclass while AnthropicEngine itself is still initializing.
+      if (request === './googleGenAiRuntime' || request.endsWith('/googleGenAiRuntime')) {
+        return { GoogleGenAiRuntime: class GoogleGenAiRuntimeFixture {} }
+      }
       return originalLoad.call(this, request, parent, isMain)
     }
     return {

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
-import { withSafeLocalGitConfig } from './git/safe-git'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
 import { inspectPullRequestCapability } from './git/pull-request-effect'
 import type {
   ManagedWorktreeView,
@@ -24,6 +24,7 @@ import {
   getConflictFiles,
   inspectMerge,
   listMergeReceipts,
+  purgeMergeReceiptsForSession,
   patchSha256
 } from './worktreeMerge'
 import {
@@ -113,8 +114,8 @@ function patchesRoot(): string {
 }
 
 // 合并回执文件:验收"上次到底合了什么"(sessionId/分支/统计/patch sha256/时间)。
-function mergeReceiptsFile(): string {
-  return join(app.getPath('userData'), 'worktree-merges.json')
+function mergeReceiptsFile(userDataRoot?: string): string {
+  return join(userDataRoot ?? app.getPath('userData'), 'worktree-merges.json')
 }
 
 function git(cwd: string, args: string[]): string {
@@ -122,6 +123,7 @@ function git(cwd: string, args: string[]): string {
     return execFileSync('git', withSafeLocalGitConfig(args), {
       cwd,
       encoding: 'utf8',
+      env: isolatedLocalGitEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: GIT_TIMEOUT_MS
     }).trim()
@@ -143,6 +145,7 @@ function gitOutputAllowDiffExit(cwd: string, args: string[]): string {
     return execFileSync('git', withSafeLocalGitConfig(args), {
       cwd,
       encoding: 'utf8',
+      env: isolatedLocalGitEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: GIT_TIMEOUT_MS
     })
@@ -218,6 +221,7 @@ function untrackedFiles(worktreePath: string): string[] {
     {
       cwd: worktreePath,
       encoding: 'buffer',
+      env: isolatedLocalGitEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: GIT_TIMEOUT_MS
     }
@@ -515,6 +519,15 @@ export function listWorktreeMergeReceipts(): WorktreeMergeReceipt[] {
   } catch {
     return []
   }
+}
+
+/** Removes only local display receipts after the owning Session is permanently deleted. */
+export function purgeWorktreeMergeReceipts(sessionId: string, userDataRoot?: string): number {
+  return purgeMergeReceiptsForSession(mergeReceiptsFile(userDataRoot), sessionId)
+}
+
+export function countWorktreeMergeReceiptsForSession(sessionId: string, userDataRoot?: string): number {
+  return listMergeReceipts(mergeReceiptsFile(userDataRoot)).filter((receipt) => receipt.sessionId === sessionId).length
 }
 
 export function createManagedWorktreePullRequest(sessionId: string): WorktreePullRequestResult {

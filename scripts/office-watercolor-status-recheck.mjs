@@ -26,7 +26,7 @@ for (const state of states) assert(shared.includes(`'${state}'`), `shared waterc
 for (const filename of expectedAssets) assert(registry.includes(`'${filename}'`), `runtime asset is not registered: ${filename}`)
 
 assert(office.includes("import WatercolorCharacterRig from './kit/WatercolorCharacterRig'"), 'Office boot scene must use the watercolor rig')
-assert(office.includes('data-office-watercolor-characters={ids.length}'), 'Office must expose the watercolor character count')
+assert(office.includes('data-office-watercolor-characters={visibleIds.length}'), 'Office must expose the filtered watercolor character count')
 assert(office.includes('data-office-one-watercolor-character-per-agent='), 'Office must expose one-character-per-agent evidence')
 assert(office.includes('data-office-visible-robots={0}'), 'Office must report zero visible robots')
 assert(office.includes('data-office-industrial-robots={0}'), 'Office must report zero industrial robots')

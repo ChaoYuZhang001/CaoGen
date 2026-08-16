@@ -20,6 +20,8 @@ export const supervisorApi: SupervisorBridgeApi = {
   listSupervisorEvents: (runId) => invoke('events', { runId }),
   createSupervisorRun: (input: SupervisorRunCreateInput, options?: SupervisorMutationOptions) =>
     invoke('create', { input, options }),
+  claimSupervisorControlLease: (id: string, expectedRevision: number) =>
+    invoke('control:lease:claim', { id, expectedRevision }),
   acquireSupervisorLease: (id: string, options: SupervisorLeaseOptions) =>
     invoke('lease:acquire', { id, options }),
   heartbeatSupervisorLease: (id: string, options: SupervisorLeaseOptions) =>

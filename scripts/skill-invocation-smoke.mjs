@@ -8,6 +8,9 @@ const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-skill-invocation-'))
 const outDir = path.join(tempRoot, 'compiled')
 const projectRoot = path.join(tempRoot, 'project')
+const userDataRoot = path.join(tempRoot, 'user-data')
+const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
+process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
 try {
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'tailwind-config'), { recursive: true })
@@ -39,6 +42,7 @@ try {
   const modulePath = findCompiled(outDir, 'skill-invocation.js')
   const { buildSkillInvocationPrompt } = await import(pathToFileURL(modulePath).href)
   const loader = await import(pathToFileURL(findCompiled(outDir, 'skill-loader.js')).href)
+  const registry = await import(pathToFileURL(findCompiled(outDir, 'pluginRegistry.js')).href)
   const serialized = loader.serializeSkill({
     name: 'Serialized Skill',
     description: 'Verify frontmatter body split.',
@@ -55,6 +59,19 @@ try {
     query: 'Please add Tailwind config to this TypeScript frontend.'
   })
   assert(disabled === '', 'disabled skill invocation should not inject prompt')
+
+  const unapproved = buildSkillInvocationPrompt({
+    enabled: true,
+    projectRoot,
+    query: 'Please add Tailwind config to this TypeScript frontend.'
+  })
+  assert(unapproved === '', 'unapproved project Skill must not be injected')
+
+  approveRegistryItems(
+    registry,
+    [path.join(projectRoot, '.caogen', 'skills')],
+    (item) => item.kind === 'skill' && item.name === 'Tailwind Config Builder'
+  )
 
   const prompt = buildSkillInvocationPrompt({
     enabled: true,
@@ -74,7 +91,20 @@ try {
 
   console.log('skillInvocation smoke ok')
 } finally {
+  if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
+  else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function approveRegistryItems(registry, roots, select) {
+  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const items = view.items.filter(select)
+  assert(items.length > 0, 'expected Plugin Registry fixture items to approve')
+  const state = items.reduce(
+    (current, item) => registry.approvePluginRegistryItem(current, item),
+    registry.emptyPluginRegistryState()
+  )
+  registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
 }
 
 function compile(files, outDir) {

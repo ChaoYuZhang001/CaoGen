@@ -11,6 +11,7 @@ import {
   resolveMcpSseEndpoint,
   type AuthorizedMcpNetworkTarget
 } from './mcp-network-policy'
+import { buildAuthorizedSubprocessEnv } from '../security/subprocess-environment'
 
 declare const __CAOGEN_APP_VERSION__: string
 
@@ -112,24 +113,6 @@ const PROTOCOL_VERSION = '2024-11-05'
 const DEFAULT_TIMEOUT_MS = 10_000
 const MAX_MCP_HTTP_RESPONSE_BYTES = 1024 * 1024
 const MAX_MCP_SSE_EVENT_CHARS = 256 * 1024
-const MCP_BASE_ENV_KEYS = [
-  'PATH',
-  'Path',
-  'HOME',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'SystemRoot',
-  'WINDIR',
-  'COMSPEC',
-  'PATHEXT',
-  'USERPROFILE',
-  'APPDATA',
-  'LOCALAPPDATA'
-] as const
 const CLIENT_VERSION =
   typeof __CAOGEN_APP_VERSION__ === 'string'
     ? __CAOGEN_APP_VERSION__
@@ -456,15 +439,7 @@ function mcpTransport(config: McpServerConfig): McpTransport {
 }
 
 export function buildMcpProcessEnv(configEnv: Record<string, string> | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {}
-  for (const key of MCP_BASE_ENV_KEYS) {
-    const value = process.env[key]
-    if (typeof value === 'string') env[key] = value
-  }
-  for (const [key, value] of Object.entries(configEnv ?? {})) {
-    if (typeof value === 'string') env[key] = value
-  }
-  return env
+  return buildAuthorizedSubprocessEnv(configEnv ?? {})
 }
 
 interface PendingRequest {
@@ -685,7 +660,7 @@ function isMcpPrompt(value: unknown): value is McpPromptDefinition {
   return isRecord(value) && typeof value.name === 'string'
 }
 
-function normalizeMcpServerConfig(value: unknown): McpServerConfig | null {
+export function normalizeMcpServerConfig(value: unknown): McpServerConfig | null {
   if (!isRecord(value)) return null
   const command = typeof value.command === 'string' && value.command.trim() ? value.command.trim() : undefined
   const url = typeof value.url === 'string' && value.url.trim() ? value.url.trim() : undefined

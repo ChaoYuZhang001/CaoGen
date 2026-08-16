@@ -217,15 +217,34 @@ function verifyCollaborationRelations(
   workItems: Map<string, ProjectAggregateSnapshot['workItems'][number]>
 ): void {
   const squads = uniqueMap(aggregate.squads, 'Squad', projectId)
+  const members = uniqueMap(aggregate.members, 'Member', projectId)
+  const invitations = uniqueMap(aggregate.invitations, 'Invitation', projectId)
   const comments = uniqueMap(aggregate.comments, 'Comment', projectId)
+  const approvals = uniqueMap(aggregate.sharedApprovals, 'SharedApproval', projectId)
+  const inboxReceipts = uniqueMap(aggregate.inboxReceipts ?? [], 'CollaborationInboxReceipt', projectId)
   const workers = uniqueMap(aggregate.digitalWorkers, 'DigitalWorker', projectId)
+  for (const member of members.values()) {
+    assertProject(member.projectId, projectId, `Member ${member.id}`)
+    if (member.principal.type === 'digital_worker' && !workers.has(member.principal.id)) {
+      fail(`Member ${member.id} references missing DigitalWorker ${member.principal.id}`, projectId)
+    }
+  }
+  for (const invitation of invitations.values()) {
+    assertProject(invitation.projectId, projectId, `Invitation ${invitation.id}`)
+    if (invitation.principal.type === 'digital_worker' && !workers.has(invitation.principal.id)) {
+      fail(`Invitation ${invitation.id} references missing DigitalWorker ${invitation.principal.id}`, projectId)
+    }
+  }
   for (const squad of squads.values()) {
     assertProject(squad.projectId, projectId, `Squad ${squad.id}`)
-    const members = new Set<string>()
+    const squadMemberKeys = new Set<string>()
     for (const member of squad.members) {
       const key = `${member.type}:${member.id}`
-      if (members.has(key)) fail(`Squad ${squad.id} contains duplicate member ${key}`, projectId)
-      members.add(key)
+      if (squadMemberKeys.has(key)) fail(`Squad ${squad.id} contains duplicate member ${key}`, projectId)
+      squadMemberKeys.add(key)
+      if (member.memberId && !members.has(member.memberId)) {
+        fail(`Squad ${squad.id} references missing Member ${member.memberId}`, projectId)
+      }
       if (member.type === 'digital_worker' && !workers.has(member.id)) {
         fail(`Squad ${squad.id} references missing DigitalWorker ${member.id}`, projectId)
       }
@@ -237,6 +256,43 @@ function verifyCollaborationRelations(
     if (!item) fail(`Comment ${comment.id} references missing WorkItem ${comment.workItemId}`, projectId)
     if (comment.status === 'deleted' && (comment.body !== '' || comment.mentions.length !== 0)) {
       fail(`Deleted Comment ${comment.id} retains message content`, projectId)
+    }
+  }
+  for (const approval of approvals.values()) {
+    assertProject(approval.projectId, projectId, `SharedApproval ${approval.id}`)
+    if (!workItems.has(approval.workItemId)) {
+      fail(`SharedApproval ${approval.id} references missing WorkItem ${approval.workItemId}`, projectId)
+    }
+    const approverIds = new Set(approval.approverMemberIds)
+    if (approverIds.size !== approval.approverMemberIds.length || approval.requiredApprovals < 1 ||
+        approval.requiredApprovals > approval.approverMemberIds.length) {
+      fail(`SharedApproval ${approval.id} has invalid quorum`, projectId)
+    }
+    for (const memberId of approverIds) {
+      const member = members.get(memberId)
+      if (!member) fail(`SharedApproval ${approval.id} references missing Member ${memberId}`, projectId)
+    }
+    const decided = new Set<string>()
+    for (const decision of approval.decisions) {
+      if (!approverIds.has(decision.memberId) || decided.has(decision.memberId)) {
+        fail(`SharedApproval ${approval.id} has invalid decision identity`, projectId)
+      }
+      decided.add(decision.memberId)
+    }
+  }
+  for (const receipt of inboxReceipts.values()) {
+    assertProject(receipt.projectId, projectId, `CollaborationInboxReceipt ${receipt.id}`)
+    if (!members.has(receipt.memberId)) {
+      fail(`CollaborationInboxReceipt ${receipt.id} references missing Member ${receipt.memberId}`, projectId)
+    }
+    if (receipt.sourceKind === 'work_item_assignment' && !workItems.has(receipt.sourceId)) {
+      fail(`CollaborationInboxReceipt ${receipt.id} references missing WorkItem ${receipt.sourceId}`, projectId)
+    }
+    if (receipt.sourceKind === 'comment_mention' && !comments.has(receipt.sourceId)) {
+      fail(`CollaborationInboxReceipt ${receipt.id} references missing Comment ${receipt.sourceId}`, projectId)
+    }
+    if (receipt.sourceKind === 'shared_approval' && !approvals.has(receipt.sourceId)) {
+      fail(`CollaborationInboxReceipt ${receipt.id} references missing SharedApproval ${receipt.sourceId}`, projectId)
     }
   }
 }
@@ -504,7 +560,10 @@ function objectEntries(
     goal: aggregate.goals.map((record) => [record.id, record]),
     work_item: aggregate.workItems.map((record) => [record.id, record]),
     squad: aggregate.squads.map((record) => [record.id, record]),
+    member: aggregate.members.map((record) => [record.id, record]),
+    invitation: aggregate.invitations.map((record) => [record.id, record]),
     comment: aggregate.comments.map((record) => [record.id, record]),
+    shared_approval: aggregate.sharedApprovals.map((record) => [record.id, record]),
     digital_worker: aggregate.digitalWorkers.map((record) => [record.id, record]),
     assignment: aggregate.assignments.map((record) => [record.id, record]),
     lease: aggregate.leases.map((record) => [record.id, record]),

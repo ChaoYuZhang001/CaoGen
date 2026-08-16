@@ -33,6 +33,11 @@ export interface OfficePerformanceSnapshot {
     meshes: number
     lights: number
   }
+  watercolor: {
+    characters: number
+    roles: string[]
+    states: string[]
+  }
   lod: {
     fullRobots: number
     lowRobots: number
@@ -140,6 +145,9 @@ export default function OfficePerformanceProbe(): null {
         const fullWorkstationRootIds = new Set<string>()
         const compactWorkstationRootIds = new Set<string>()
         const robots: OfficeRobotLodRoot[] = []
+        const watercolorRoles = new Set<string>()
+        const watercolorStates = new Set<string>()
+        let watercolorCharacters = 0
         scene.traverse((object) => {
           const item = object as SceneObject
           objects += 1
@@ -148,6 +156,11 @@ export default function OfficePerformanceProbe(): null {
         })
         scene.traverseVisible((object) => {
           const item = object as SceneObject
+          if (item.userData.officeWatercolorCharacter === true) {
+            watercolorCharacters += 1
+            watercolorRoles.add(String(item.userData.officeWatercolorRole ?? ''))
+            watercolorStates.add(String(item.userData.officeWatercolorState ?? ''))
+          }
           const robotLod = item.userData.officeRobotLod
           if (robotLod === 'full' || robotLod === 'low') {
             if (robotLod === 'full') fullRobotRootIds.add(item.uuid)
@@ -182,6 +195,11 @@ export default function OfficePerformanceProbe(): null {
             programs: gl.info.programs?.length ?? 0
           },
           scene: { objects, meshes, lights },
+          watercolor: {
+            characters: watercolorCharacters,
+            roles: [...watercolorRoles].filter(Boolean).sort(),
+            states: [...watercolorStates].filter(Boolean).sort()
+          },
           lod: {
             fullRobots: fullRobotRootIds.size,
             lowRobots: lowRobotRootIds.size,

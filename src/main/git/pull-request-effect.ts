@@ -11,6 +11,7 @@ import {
   withSafeLocalGitConfig,
   withSafeRemoteGitConfig
 } from './safe-git'
+import { buildMinimalSubprocessEnv } from '../security/subprocess-environment'
 
 const LOCAL_TIMEOUT_MS = 15_000
 const REMOTE_TIMEOUT_MS = 30_000
@@ -855,7 +856,7 @@ function cliRun(
     override?.executable ?? command,
     override ? [...override.argsPrefix, ...args] : args,
     cwd,
-    { ...process.env, ...envPatch },
+    buildMinimalSubprocessEnv(envPatch),
     timeoutMs,
     [0]
   )

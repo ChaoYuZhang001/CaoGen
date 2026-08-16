@@ -2,10 +2,12 @@
 import { execFileSync, spawn } from 'node:child_process'
 import {
   chmodSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -33,9 +35,7 @@ const sentinelLog = path.join(tempRoot, 'agent-cli-invocations.log')
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
-const electronBin = process.platform === 'win32'
-  ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
-  : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+const electronBin = require('electron')
 const externalAgentNames = ['claude', 'codex', 'aider', 'cursor', 'goose']
 const externalAgentCommand = /(^|[\\/\s])(claude|codex|aider|cursor|goose)(?:\.exe|\.cmd)?(?=\s|$)/i
 
@@ -51,6 +51,7 @@ const state = {
   workerId: '',
   primaryWorkItemId: '',
   secondaryWorkItemId: '',
+  expectedWorkItems: [],
   assignmentId: '',
   engineRegistry: null
 }
@@ -81,13 +82,13 @@ const report = {
   },
   coverage: {
     verified: [
-      'directory-free Project and two WorkItems created through real Studio UI clicks',
+      'directory-free Project template WorkItems and two explicit WorkItems created through real Studio UI clicks',
       'role creation and role-selected native DigitalWorker recruitment through real UI clicks',
       'explicit watercolor role selection and restart-safe avatar profile persistence',
       'responsibility, tool, data, budget, concurrency, acceptance, and escalation policy presentation',
       'WorkItem assignment through the native renderer to main-process IPC gateway',
       'same-userData recovery without duplicate project, role, worker, or assignment records',
-      'retirement through UI, fail-closed new assignment, and durable assignment history',
+      'Assignment release and retirement through UI, fail-closed new assignment, and durable assignment history',
       'no external Agent CLI install, launch, Provider/session creation, or engine registry mutation'
     ],
     explicitlyNotVerified: [
@@ -103,16 +104,17 @@ assertNativeRecruitmentBoundary()
 copyBuiltApp()
 
 let activeRuntime
+let signalCleanupStarted = false
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    void cleanupAfterSignal(signal)
+  })
+}
+
 try {
   await runPhase('recruit-and-assign', async (page) => {
     await check('directory-free Project and WorkItems are created through Studio clicks', async () => {
-      await createDirectoryFreeProject(page)
-      const first = await createWorkItem(page, state.primaryWorkItemTitle)
-      const second = await createWorkItem(page, state.secondaryWorkItemTitle)
-      state.primaryWorkItemId = first.id
-      state.secondaryWorkItemId = second.id
-      const project = await page.evaluate((id) => window.agentDesk.getProjectWorkspace(id), state.projectId)
-      assert(project?.resources?.length === 0, `directory-free Project gained resources: ${JSON.stringify(project?.resources)}`)
+      await setupProjectWorkItems(page)
     })
 
     await check('role is created and selected through the Digital Team UI', async () => {
@@ -120,9 +122,19 @@ try {
       await clickButtonByText(page, '岗位库', '[data-studio-surface="digital-workers"]', false)
       await page.click('[data-dws-action="create-role"]')
       await page.waitForSelector('[data-dws-form="role-template"]', { visible: true, timeout: 5_000 })
+      const defaultRoleForm = await page.$eval('[data-dws-form="role-template"]', (form) => ({
+        advancedOpen: Boolean(form.querySelector('details.dws-advanced')?.open),
+        visibleInputs: [...form.querySelectorAll('input, select, textarea')].filter((element) => {
+          const rect = element.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        }).length
+      }))
+      assert(!defaultRoleForm.advancedOpen, `role advanced settings opened by default: ${JSON.stringify(defaultRoleForm)}`)
+      assert(defaultRoleForm.visibleInputs === 2, `default role form should expose 2 inputs: ${JSON.stringify(defaultRoleForm)}`)
       await replaceLabeledValue(page, '[data-dws-form="role-template"]', '岗位名称', state.roleName)
-      await replaceLabeledValue(page, '[data-dws-form="role-template"]', '岗位目标', 'Review release evidence under explicit project policy')
-      await replaceLabeledValue(page, '[data-dws-form="role-template"]', '岗位职责说明', 'Verify evidence, record gaps, and escalate blocked release decisions.')
+      await replaceLabeledValue(page, '[data-dws-form="role-template"]', '主要职责', 'Review release evidence under explicit project policy')
+      await page.click('[data-dws-form="role-template"] details.dws-advanced > summary')
+      await replaceLabeledValue(page, '[data-dws-form="role-template"]', '详细执行说明', 'Verify evidence, record gaps, and escalate blocked release decisions.')
       await replaceLabeledValue(page, '[data-dws-form="role-template"]', '能力标签', 'release-review, evidence-audit')
       await replaceLabeledValue(page, '[data-dws-form="role-template"]', '技能标签', 'artifact-review, risk-triage')
       await page.click('[data-dws-form="role-template"] button[type="submit"]')
@@ -143,13 +155,32 @@ try {
     await check('native DigitalWorker recruitment persists and presents the complete policy', async () => {
       await page.click(`[data-role-template-id="${state.roleId}"] [data-dws-action="hire-from-role"]`)
       await page.waitForSelector('[data-dws-form="hire-worker"]', { visible: true, timeout: 5_000 })
+      const defaultForm = await page.$eval('[data-dws-form="hire-worker"]', (form) => ({
+        advancedOpen: Boolean(form.querySelector('details.dws-advanced')?.open),
+        visibleInputs: [...form.querySelectorAll('input, select, textarea')].filter((element) => {
+          const rect = element.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        }).length
+      }))
+      assert(!defaultForm.advancedOpen, `advanced settings opened by default: ${JSON.stringify(defaultForm)}`)
+      assert(defaultForm.visibleInputs === 2, `default recruitment form should expose 2 inputs: ${JSON.stringify(defaultForm)}`)
       assert(
-        await readLabeledValue(page, '[data-dws-form="hire-worker"]', '岗位模板') === state.roleId,
+        await readLabeledValue(page, '[data-dws-form="hire-worker"]', '岗位') === state.roleId,
         'role-selected recruitment did not retain the chosen RoleTemplate'
       )
+      assert(
+        await readLabeledValue(page, '[data-dws-form="hire-worker"]', '员工名称') === `${state.roleName} 01`,
+        'recruitment did not generate a worker name from the selected role'
+      )
       await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '员工名称', state.workerName)
+      await page.click('[data-dws-form="hire-worker"] details.dws-advanced > summary')
+      assert(
+        await readLabeledValue(page, '[data-dws-form="hire-worker"]', '自定义职责') === 'Verify evidence, record gaps, and escalate blocked release decisions.',
+        'recruitment did not inherit responsibilities from the selected role'
+      )
+      await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '自定义职责', 'Review release evidence\nReport acceptance gaps')
+      await page.waitForSelector('[data-dws-form="hire-worker"] [data-dws-watercolor-role]', { visible: true, timeout: 5_000 })
       await page.select('[data-dws-form="hire-worker"] [data-dws-watercolor-role]', state.watercolorRole)
-      await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '职责范围', 'Review release evidence\nReport acceptance gaps')
       await setLabeledCheckbox(page, '[data-dws-form="hire-worker"]', '修改工作区', true)
       await setLabeledCheckbox(page, '[data-dws-form="hire-worker"]', '终端操作', true)
       await replaceLabeledValue(page, '[data-dws-form="hire-worker"]', '允许的数据类', 'project-internal')
@@ -226,7 +257,19 @@ try {
     })
 
     await check('retirement is clicked in UI and blocks a new Assignment while preserving history', async () => {
-      await page.click(`${workerCardSelector()} [data-dws-action="retire"]`)
+      await page.click(`${workerCardSelector()} [data-dws-action="release-assignment"][data-assignment-id="${state.assignmentId}"]`)
+      await page.waitForFunction(
+        ({ projectId, workerId }) => window.agentDesk.listDigitalWorkerAssignments({
+          projectId,
+          assigneeId: workerId,
+          status: 'active'
+        }).then((items) => items.length === 0),
+        { timeout: 10_000 },
+        { projectId: state.projectId, workerId: state.workerId }
+      )
+      const retireSelector = `${workerCardSelector()} [data-dws-action="retire"]:not([disabled])`
+      await page.waitForSelector(retireSelector, { visible: true, timeout: 10_000 })
+      await page.click(retireSelector)
       await page.waitForSelector(`${workerCardSelector()} [data-dws-action="confirm-retire"]`, { visible: true, timeout: 5_000 })
       await page.click(`${workerCardSelector()} [data-dws-action="confirm-retire"]`)
       await page.waitForFunction(
@@ -248,9 +291,9 @@ try {
         { projectId: state.projectId, workerId: state.workerId }
       )
       assert(history.length === 1 && history[0].id === state.assignmentId, `retirement changed history: ${JSON.stringify(history)}`)
-      assert(history[0].status === 'active', 'retirement should preserve the in-flight historical Assignment')
-      const cardText = await page.$eval(workerCardSelector(), (element) => element.textContent || '')
-      assert(cardText.includes(state.primaryWorkItemTitle), `retired worker card lost Assignment history: ${cardText}`)
+      assert(history[0].status === 'released', 'retirement should preserve the released historical Assignment')
+      await page.click(`${workerCardSelector()} [data-dws-action="worker-history"]`)
+      await assertHistoryPanel(page)
       await screenshot(page, '02-retired-with-history')
     })
   })
@@ -261,14 +304,14 @@ try {
       await enterDigitalTeam(page)
       await page.waitForSelector(workerCardSelector(), { visible: true, timeout: 10_000 })
       const snapshot = await readTeamSnapshot(page)
-      assertTeamSnapshot(snapshot, 'retired restart')
+      assertTeamSnapshot(snapshot, 'retired restart', 'released')
       assert(snapshot.workers[0].status === 'retired', `worker status regressed after restart: ${snapshot.workers[0].status}`)
       assert(await page.$(`${workerCardSelector()} [data-dws-action="assign"]`) === null, 'retired worker regained assignment action after restart')
       const rejection = await tryAssignRetiredWorker(page)
       assert(!rejection.ok, 'retired worker accepted an Assignment after restart')
       await assertWorkerCardPresentation(page, 'retired')
-      const cardText = await page.$eval(workerCardSelector(), (element) => element.textContent || '')
-      assert(cardText.includes(state.primaryWorkItemTitle), 'Assignment history disappeared from retired worker UI after restart')
+      await page.click(`${workerCardSelector()} [data-dws-action="worker-history"]`)
+      await assertHistoryPanel(page)
       await screenshot(page, '03-retired-history-after-restart')
     })
   })
@@ -318,11 +361,14 @@ try {
     nodeVersion: report.nodeVersion,
     electronVersion: report.electronVersion
   }
+  report.cleanup = await cleanupTempRoot()
+  if (!report.cleanup.removed && !report.error) {
+    report.error = `test Electron cleanup incomplete: ${JSON.stringify(report.cleanup.remainingProcesses)}`
+  }
   report.status = report.checks.every((item) => item.status === 'pass') && !report.error ? 'pass' : 'fail'
   const body = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(path.join(runDir, 'report.json'), body)
   writeFileSync(path.join(outputRoot, 'latest.json'), body)
-  cleanupTempRoot()
 }
 
 if (report.status === 'pass') {
@@ -382,7 +428,13 @@ async function runPhase(name, execute) {
 
 async function launchRuntime(phase) {
   const port = await findFreePort(9960)
+  const phaseSlug = phase.replace(/[^a-z0-9_-]+/gi, '-')
+  const stdoutPath = path.join(runDir, `${phaseSlug}.stdout.log`)
+  const stderrPath = path.join(runDir, `${phaseSlug}.stderr.log`)
+  const stdoutFd = openSync(stdoutPath, 'a')
+  const stderrFd = openSync(stderrPath, 'a')
   const child = spawn(electronBin, [
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
     `--remote-debugging-port=${port}`,
     '--disable-background-timer-throttling',
     '--disable-renderer-backgrounding',
@@ -407,11 +459,11 @@ async function launchRuntime(phase) {
       CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '',
       CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH: ''
     },
-    stdio: ['ignore', 'pipe', 'pipe']
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', stdoutFd, stderrFd]
   })
-  const output = { stdout: '', stderr: '' }
-  child.stdout.on('data', (chunk) => { output.stdout += chunk.toString() })
-  child.stderr.on('data', (chunk) => { output.stderr += chunk.toString() })
+  closeSync(stdoutFd)
+  closeSync(stderrFd)
   try {
     await waitForDebugPort(port, 20_000)
     const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${port}`, defaultViewport: null })
@@ -424,7 +476,16 @@ async function launchRuntime(phase) {
     page.on('pageerror', (error) => report.warnings.push(`${phase} pageerror: ${error.message}`))
     await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 })
     await page.bringToFront()
-    return { browser, child, output, page, phase }
+    return {
+      browser,
+      child,
+      page,
+      phase,
+      port,
+      rootPid: child.pid,
+      stdoutPath,
+      stderrPath
+    }
   } catch (error) {
     await terminate(child)
     throw error
@@ -432,15 +493,25 @@ async function launchRuntime(phase) {
 }
 
 async function stopRuntime(runtime) {
-  const browserClosed = runtime.browser
-    ? await Promise.race([
-        runtime.browser.close().then(() => true).catch(() => false),
-        sleep(3000).then(() => false)
-      ])
-    : false
-  const cleanExit = browserClosed ? await waitForChildExit(runtime.child, 2500) : null
-  const exited = cleanExit ?? await terminate(runtime.child)
-  report.warnings.push(...summarizeProcessOutput(runtime.phase, runtime.output, exited))
+  if (runtime.stopPromise) return runtime.stopPromise
+  runtime.stopPromise = (async () => {
+    try {
+      runtime.browser?.disconnect()
+    } catch {
+      // The debug connection may already be gone after a renderer failure.
+    }
+    const exited = await terminate(runtime.child)
+    const portClosed = await waitForPortClosed(runtime.port, 5_000)
+    const remainingProcesses = processRowsReferencing([tempRoot, userDataDir, mainEntry])
+    const output = readRuntimeOutput(runtime)
+    report.warnings.push(...summarizeProcessOutput(runtime.phase, output, exited))
+    if (!portClosed) report.warnings.push(`${runtime.phase} debug port ${runtime.port} remained open after Electron termination`)
+    if (remainingProcesses.length > 0) {
+      report.warnings.push(`${runtime.phase} retained related processes: ${JSON.stringify(remainingProcesses)}`)
+    }
+    return { exited, portClosed, remainingProcesses }
+  })()
+  return runtime.stopPromise
 }
 
 async function enterStudio(page) {
@@ -478,6 +549,45 @@ async function createDirectoryFreeProject(page) {
   await waitForSelectedProject(page, { requireWorkItems: false })
 }
 
+async function setupProjectWorkItems(page) {
+  await createDirectoryFreeProject(page)
+  const templateItems = await page.evaluate(
+    (projectId) => window.agentDesk.listProjectWorkItems(projectId),
+    state.projectId
+  )
+  const templateTitles = ['理解代码与约束', '实现变更', '独立验证', '审查与交付']
+  assert(
+    templateItems.length === templateTitles.length &&
+      templateItems.every((item) => item.id.startsWith('project-template-work-')) &&
+      templateTitles.every((title) => templateItems.filter((item) => item.title === title).length === 1),
+    `software Project template WorkItems changed: ${JSON.stringify(workItemIdentities(templateItems))}`
+  )
+  const first = await createWorkItem(page, state.primaryWorkItemTitle)
+  const second = await createWorkItem(page, state.secondaryWorkItemTitle)
+  state.primaryWorkItemId = first.id
+  state.secondaryWorkItemId = second.id
+  const allItems = await page.evaluate(
+    (projectId) => window.agentDesk.listProjectWorkItems(projectId),
+    state.projectId
+  )
+  state.expectedWorkItems = workItemIdentities(allItems)
+  assert(
+    state.expectedWorkItems.length === templateTitles.length + 2,
+    `initial WorkItem set changed: ${JSON.stringify(state.expectedWorkItems)}`
+  )
+  for (const expected of [
+    { id: state.primaryWorkItemId, title: state.primaryWorkItemTitle },
+    { id: state.secondaryWorkItemId, title: state.secondaryWorkItemTitle }
+  ]) {
+    assert(
+      state.expectedWorkItems.filter((item) => item.id === expected.id && item.title === expected.title).length === 1,
+      `explicit WorkItem identity changed: ${JSON.stringify({ expected, actual: state.expectedWorkItems })}`
+    )
+  }
+  const project = await page.evaluate((id) => window.agentDesk.getProjectWorkspace(id), state.projectId)
+  assert(project?.resources?.length === 0, `directory-free Project gained resources: ${JSON.stringify(project?.resources)}`)
+}
+
 async function createWorkItem(page, title) {
   await clickButtonByText(page, '新建工作项', '[data-project-workspace-studio]')
   await page.waitForSelector('[data-studio-form="work-item"]', { visible: true, timeout: 5_000 })
@@ -507,11 +617,23 @@ async function enterDigitalTeam(page) {
 }
 
 async function waitForSelectedProject(page, { requireWorkItems = true } = {}) {
-  await page.waitForFunction(
-    (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId,
-    { timeout: 15_000 },
-    state.projectId
-  )
+  try {
+    await page.waitForFunction(
+      (projectId) => document.querySelector('[data-project-workspace-select]')?.value === projectId,
+      { timeout: 15_000 },
+      state.projectId
+    )
+  } catch (error) {
+    const diagnostics = await readProjectSelectionDiagnostics(page).catch((diagnosticError) => ({
+      diagnosticError: diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)
+    }))
+    report.projectSelectionDiagnostics = diagnostics
+    await screenshot(page, 'project-selection-timeout').catch(() => undefined)
+    throw new Error(
+      `created Project was not selected automatically: expected ${state.projectId}; diagnostics=${JSON.stringify(diagnostics)}`,
+      { cause: error }
+    )
+  }
   await page.waitForFunction(
     () => document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false',
     { timeout: 15_000 }
@@ -525,6 +647,26 @@ async function waitForSelectedProject(page, { requireWorkItems = true } = {}) {
     { timeout: 15_000 },
     { first: state.primaryWorkItemTitle, second: state.secondaryWorkItemTitle }
   )
+}
+
+async function readProjectSelectionDiagnostics(page) {
+  return page.evaluate(async (expectedProjectId) => {
+    const selector = document.querySelector('[data-project-workspace-select]')
+    const studio = document.querySelector('[data-project-workspace-studio]')
+    const projects = await window.agentDesk.listProjectWorkspaces({ includeArchived: true, includeDeleted: true })
+    return {
+      expectedProjectId,
+      selectedValue: selector?.value ?? null,
+      options: selector instanceof HTMLSelectElement
+        ? [...selector.options].map((option) => ({ value: option.value, text: option.textContent?.trim() ?? '' }))
+        : [],
+      ariaBusy: studio?.getAttribute('aria-busy') ?? null,
+      errorFeedback: [...document.querySelectorAll('.pws-feedback-error')].map((element) => element.textContent?.trim() ?? ''),
+      successFeedback: [...document.querySelectorAll('.pws-feedback-success')].map((element) => element.textContent?.trim() ?? ''),
+      projects: projects.map((project) => ({ id: project.id, name: project.name, status: project.status })),
+      studioText: (studio?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 2500)
+    }
+  }, state.projectId)
 }
 
 async function readTeamSnapshot(page) {
@@ -541,14 +683,55 @@ async function readTeamSnapshot(page) {
   }, { projectId: state.projectId })
 }
 
-function assertTeamSnapshot(snapshot, label) {
+function assertTeamSnapshot(snapshot, label, assignmentStatus = 'active') {
   assert(snapshot.projects.length === 1 && snapshot.projects[0].id === state.projectId, `${label} Project duplication: ${snapshot.projects.length}`)
-  assert(snapshot.workItems.length === 2, `${label} WorkItem duplication: ${snapshot.workItems.length}`)
+  const actualWorkItems = workItemIdentities(snapshot.workItems)
+  assertSameJson(actualWorkItems, state.expectedWorkItems, `${label} WorkItem identity projection`)
+  assert(
+    new Set(actualWorkItems.map((item) => item.id)).size === actualWorkItems.length &&
+      new Set(actualWorkItems.map((item) => item.title)).size === actualWorkItems.length,
+    `${label} WorkItem duplication: ${JSON.stringify(actualWorkItems)}`
+  )
+  assert(
+    actualWorkItems.filter((item) => item.templateOrigin).length === 4 &&
+      actualWorkItems.filter((item) => !item.templateOrigin).length === 2,
+    `${label} template/explicit WorkItem partition changed: ${JSON.stringify(actualWorkItems)}`
+  )
   assert(snapshot.roles.length === 1 && snapshot.roles[0].id === state.roleId, `${label} RoleTemplate duplication: ${snapshot.roles.length}`)
   assert(snapshot.workers.length === 1 && snapshot.workers[0].id === state.workerId, `${label} DigitalWorker duplication: ${snapshot.workers.length}`)
   assertWorkerPolicy(snapshot.workers[0])
   assert(snapshot.history.length === 1 && snapshot.history[0].id === state.assignmentId, `${label} Assignment history duplication: ${snapshot.history.length}`)
-  assert(snapshot.activeAssignments.length === 1 && snapshot.activeAssignments[0].id === state.assignmentId, `${label} active Assignment changed`)
+  assert(snapshot.history[0].status === assignmentStatus, `${label} Assignment status changed: ${snapshot.history[0].status}`)
+  if (assignmentStatus === 'active') {
+    assert(snapshot.activeAssignments.length === 1 && snapshot.activeAssignments[0].id === state.assignmentId, `${label} active Assignment changed`)
+  } else {
+    assert(snapshot.activeAssignments.length === 0, `${label} released Assignment became active: ${JSON.stringify(snapshot.activeAssignments)}`)
+  }
+}
+
+async function assertHistoryPanel(page) {
+  const selector = `[data-dws-worker-history="${state.workerId}"]`
+  await page.waitForSelector(selector, { visible: true, timeout: 10_000 })
+  const summary = await page.$$eval(`${selector} .dws-history-summary > div`, (items) => Object.fromEntries(
+    items.map((item) => {
+      const label = item.querySelector('span')?.textContent?.trim() ?? ''
+      const value = Number(item.querySelector('strong')?.textContent?.trim() ?? 'NaN')
+      return [label, value]
+    })
+  ))
+  assert(summary.Assignment === 1, `worker history UI lost Assignment history: ${JSON.stringify(summary)}`)
+}
+
+function workItemIdentities(items) {
+  return items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    goalId: item.goalId ?? null,
+    parentId: item.parentId ?? null,
+    type: item.type,
+    dependencyIds: [...(item.dependencyIds ?? [])].sort(),
+    templateOrigin: item.id.startsWith('project-template-work-')
+  })).sort((left, right) => left.id.localeCompare(right.id))
 }
 
 function assertWorkerPolicy(worker) {
@@ -720,27 +903,24 @@ async function clickButtonByText(page, text, rootSelector = 'body', exact = true
 }
 
 async function clickVisibleSelector(page, selector) {
-  await page.waitForFunction((candidate) => {
-    const element = document.querySelector(candidate)
-    if (!(element instanceof HTMLElement)) return false
-    const style = getComputedStyle(element)
-    const rect = element.getBoundingClientRect()
-    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
-  }, { timeout: 5_000 }, selector)
+  let lastError
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const element = await page.$(selector)
+    let element
     try {
-      assert(element, `visible selector disappeared before click: ${selector}`)
+      element = await page.waitForSelector(selector, { visible: true, timeout: 5_000 })
+      if (!element) throw new Error(`visible selector disappeared before click: ${selector}`)
       await element.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }))
       await element.click()
       return
     } catch (error) {
+      lastError = error
       if (attempt === 2) throw error
       await sleep(100)
     } finally {
       await element?.dispose()
     }
   }
+  throw lastError ?? new Error(`visible selector did not become clickable: ${selector}`)
 }
 
 async function clickVisibleSelectorUntilVisible(page, triggerSelector, targetSelector) {
@@ -981,31 +1161,53 @@ function canListen(port) {
 }
 
 async function terminate(child) {
-  if (child.exitCode !== null) return { code: child.exitCode, signal: child.signalCode }
-  const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
-  child.kill('SIGTERM')
-  const graceful = await Promise.race([exited, sleep(3000).then(() => null)])
-  if (graceful) return graceful
-  child.kill('SIGKILL')
-  return Promise.race([
-    exited,
-    sleep(3000).then(() => ({ code: child.exitCode, signal: child.signalCode ?? 'SIGKILL' }))
-  ])
+  const exited = child.exitCode !== null
+    ? Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+    : new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })))
+  signalElectronTree(child.pid, 'SIGTERM')
+  let outcome = await Promise.race([exited, sleep(3000).then(() => null)])
+  if (electronTreeAlive(child.pid)) {
+    signalElectronTree(child.pid, 'SIGKILL')
+    outcome ??= await Promise.race([
+      exited,
+      sleep(3000).then(() => ({ code: child.exitCode, signal: child.signalCode ?? 'SIGKILL' }))
+    ])
+  }
+  await waitForProcessReferencesToClear([tempRoot, userDataDir, mainEntry], 5_000)
+  return outcome ?? { code: child.exitCode, signal: child.signalCode }
 }
 
-async function waitForChildExit(child, timeoutMs) {
-  if (child.exitCode !== null) return { code: child.exitCode, signal: child.signalCode }
-  return Promise.race([
-    new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal }))),
-    sleep(timeoutMs).then(() => null)
-  ])
+function signalElectronTree(pid, signal) {
+  if (!pid) return
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, signal)
+  } catch {
+    // The isolated process group already exited.
+  }
+}
+
+function electronTreeAlive(pid) {
+  if (!pid) return false
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readRuntimeOutput(runtime) {
+  return {
+    stdout: existsSync(runtime.stdoutPath) ? readFileSync(runtime.stdoutPath, 'utf8') : '',
+    stderr: existsSync(runtime.stderrPath) ? readFileSync(runtime.stderrPath, 'utf8') : ''
+  }
 }
 
 function summarizeProcessOutput(phase, output, exited) {
   const warnings = []
   if (output.stderr.trim()) warnings.push(`${phase} [stderr tail]\n${output.stderr.trim().slice(-1200)}`)
   if (output.stdout.trim()) warnings.push(`${phase} [stdout tail]\n${output.stdout.trim().slice(-600)}`)
-  if (exited.signal) warnings.push(`${phase} Electron exited by signal ${exited.signal}`)
+  if (exited?.signal) warnings.push(`${phase} Electron exited by signal ${exited.signal}`)
   return warnings
 }
 
@@ -1019,12 +1221,64 @@ function readGitState() {
   }
 }
 
-function cleanupTempRoot() {
+async function cleanupTempRoot() {
+  const remainingProcesses = await waitForProcessReferencesToClear([tempRoot, userDataDir, mainEntry], 5_000)
+  if (remainingProcesses.length > 0) {
+    report.warnings.push(`temporary directory retained because related processes are still running: ${JSON.stringify(remainingProcesses)}`)
+    return { removed: false, tempRoot, remainingProcesses }
+  }
   try {
     rmSync(tempRoot, { recursive: true, force: true })
-  } catch {
-    // Best-effort cleanup must not hide the release-bound result.
+    return { removed: true, tempRoot, remainingProcesses: [] }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    report.warnings.push(`temporary directory cleanup failed: ${message}`)
+    return { removed: false, tempRoot, remainingProcesses: [], error: message }
   }
+}
+
+function processRowsReferencing(needles) {
+  if (process.platform === 'win32') return []
+  let output = ''
+  try {
+    output = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' })
+  } catch (error) {
+    report.warnings.push(`process reference inspection failed: ${error instanceof Error ? error.message : String(error)}`)
+    return []
+  }
+  return output.split(/\r?\n/).map((line) => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+    return match ? { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] } : null
+  }).filter((row) => row && row.pid !== process.pid && needles.some((needle) => row.command.includes(needle)))
+}
+
+async function waitForProcessReferencesToClear(needles, timeoutMs) {
+  const startedAt = Date.now()
+  let rows = processRowsReferencing(needles)
+  while (rows.length > 0 && Date.now() - startedAt < timeoutMs) {
+    await sleep(150)
+    rows = processRowsReferencing(needles)
+  }
+  return rows
+}
+
+async function waitForPortClosed(port, timeoutMs) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await canListen(port)) return true
+    await sleep(150)
+  }
+  return canListen(port)
+}
+
+async function cleanupAfterSignal(signal) {
+  if (signalCleanupStarted) return
+  signalCleanupStarted = true
+  if (activeRuntime) await stopRuntime(activeRuntime).catch(() => undefined)
+  const cleanup = await cleanupTempRoot().catch(() => ({ removed: false }))
+  process.exitCode = signal === 'SIGINT' ? 130 : 143
+  if (!cleanup.removed) process.exitCode = 1
+  process.exit()
 }
 
 function sleep(ms) {

@@ -1,7 +1,11 @@
 import { lstat, rm } from 'node:fs/promises'
 import type { TaskSnapshotDatabase } from '../task/task-snapshot'
 import { mutateTaskSnapshotDatabase, readTaskSnapshotDatabase } from '../task/task-snapshot'
-import { artifactBlobPath } from '../task/artifact-lifecycle-content'
+import {
+  artifactBlobPath,
+  countArtifactSourceProjectFiles,
+  purgeArtifactSourceProjectFiles
+} from '../task/artifact-lifecycle-content'
 import { setupArtifactLifecycleSchema } from '../task/artifact-lifecycle-store'
 import { verifyModelAttemptLedger } from '../task/model-attempt-store'
 import { purgeModelAttemptsProject } from '../task/model-attempt-project-purge'
@@ -37,6 +41,10 @@ import {
   purgeConversationLedgerProject,
   verifyConversationLedgerArchive
 } from '../task/conversation-ledger-store'
+import {
+  countProjectEffectArtifactResiduals,
+  purgeProjectEffectArtifacts
+} from './project-effect-artifact-portability'
 
 const PROJECT_TABLES = [
   'workflow_goals',
@@ -59,6 +67,8 @@ export interface WorkflowProjectPurgeResult {
   sessionIds: string[]
   removed: Record<string, number>
   deletedBlobDigests: string[]
+  deletedArtifactSourceFiles: number
+  deletedEffectArtifacts: number
   retainedSharedBlobDigests: string[]
   verification: {
     workflowEvents: number
@@ -79,7 +89,8 @@ export interface WorkflowProjectResidualScan {
   total: number
 }
 
-interface DatabasePurgeResult extends Omit<WorkflowProjectPurgeResult, 'deletedBlobDigests'> {
+interface DatabasePurgeResult extends Omit<WorkflowProjectPurgeResult,
+  'deletedBlobDigests' | 'deletedArtifactSourceFiles' | 'deletedEffectArtifacts'> {
   deletableBlobDigests: string[]
 }
 
@@ -88,7 +99,8 @@ export async function purgeWorkflowProjectData(
   rootDir: string,
   operationId: string,
   knownSessionIds: readonly string[] = [],
-  knownBlobDigests: readonly string[] = []
+  knownBlobDigests: readonly string[] = [],
+  knownEffectArtifactRefs: readonly string[] = []
 ): Promise<WorkflowProjectPurgeResult> {
   const id = requiredId(projectId, 'projectId')
   const purgeOperationId = requiredId(operationId, 'operationId')
@@ -113,8 +125,10 @@ export async function purgeWorkflowProjectData(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
+  const deletedArtifactSourceFiles = await purgeArtifactSourceProjectFiles(rootDir, id)
+  const deletedEffectArtifacts = await purgeProjectEffectArtifacts(rootDir, knownEffectArtifactRefs)
   const { deletableBlobDigests: _deletable, ...result } = database
-  return { ...result, deletedBlobDigests }
+  return { ...result, deletedBlobDigests, deletedArtifactSourceFiles, deletedEffectArtifacts }
 }
 
 export async function planWorkflowProjectPurgeBlobs(projectId: string, rootDir: string): Promise<string[]> {
@@ -128,10 +142,22 @@ export async function planWorkflowProjectPurgeBlobs(projectId: string, rootDir: 
 export async function scanWorkflowProjectResiduals(
   projectId: string,
   rootDir: string,
-  knownSessionIds: readonly string[] = []
+  knownSessionIds: readonly string[] = [],
+  knownEffectArtifactRefs: readonly string[] = []
 ): Promise<WorkflowProjectResidualScan> {
   const id = requiredId(projectId, 'projectId')
-  return readTaskSnapshotDatabase(rootDir, (db) => scanDatabase(db, id, new Set(knownSessionIds)))
+  const database = await readTaskSnapshotDatabase(rootDir, (db) => scanDatabase(db, id, new Set(knownSessionIds)))
+  const artifactSourceFiles = await countArtifactSourceProjectFiles(rootDir, id)
+  const effectArtifacts = await countProjectEffectArtifactResiduals(rootDir, knownEffectArtifactRefs)
+  return {
+    ...database,
+    counts: {
+      ...database.counts,
+      artifact_source_files: artifactSourceFiles,
+      effect_artifacts: effectArtifacts
+    },
+    total: database.total + artifactSourceFiles + effectArtifacts
+  }
 }
 
 function purgeWorkflowProjectDatabase(

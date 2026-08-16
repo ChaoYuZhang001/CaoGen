@@ -1,5 +1,6 @@
 ﻿// Must run before imports that construct app-path-bound singletons.
 import './app-runtime-paths'
+import './security/main-process-console-redaction'
 import {
   app,
   BrowserWindow,
@@ -25,10 +26,14 @@ import {
   initializeRoutineSessionLifecycle,
   reconcileRoutineRunsAtStartup
 } from './routines/routine-session-lifecycle'
+import { executePendingRemoteCommands, reconcileRemoteExecutions } from './remote/executor'
+import { startRemoteWebhookServer, stopRemoteWebhookServer } from './remote/webhook-server'
+import { startRemoteContinuationReconciler, stopRemoteContinuationReconciler } from './remote/reconciler'
 import { initAutoUpdater } from './updater'
 import { configureQuickbar, disposeQuickbar, registerQuickbarGlobalShortcut } from './quickbar'
 import { listProjects } from './projects'
 import { ensureProjectSkillReadiness } from './learning/learning-lifecycle'
+import { configurePluginRuntimeAuthorization } from './plugin/plugin-runtime-authorization'
 import { configureLearningUserDataRoot } from './learning/learning-store'
 import { configurePermissionAuditUserDataRoot } from './permission/audit-log'
 import { reconcileProviderProfileOperations } from './provider/providerProfileService'
@@ -44,7 +49,20 @@ import {
 import { reconcileCcSwitchProviderImportOperations } from './provider/ccSwitchProviderImport'
 import { refreshProviderCredentialMetrics } from './provider/providerCredentialMetrics'
 import { initializeProviderGateway, stopProviderGateway } from './provider/providerGatewayService'
+import { buildRendererCrashDiagnostic } from './security/crash-diagnostic'
+import { recoverProducedArtifactStageAttachments } from './task/workflow-stage-handoff'
+import {
+  startDataRetentionExpiryScheduler,
+  stopDataRetentionExpiryScheduler
+} from './data-lifecycle/retention-expiry-scheduler'
 import type { Routine } from '../shared/types'
+import { registerMediaProtocol, registerMediaProtocolPrivileges } from './media/media-protocol'
+import { startMediaReconciliationScheduler, stopMediaReconciliationScheduler } from './media/media-reconciliation-scheduler'
+import { recoverProjectConnectorLifecycles } from './project-workspace/project-connector-lifecycle'
+import {
+  startProjectConnectorAutoRefreshScheduler,
+  stopProjectConnectorAutoRefreshScheduler
+} from './project-workspace/project-connector-scheduler'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -54,6 +72,8 @@ let trayRunningCount: number | null = null
 let unsubscribeTraySessionEvents: (() => void) | null = null
 let shellInstalled = false
 
+registerMediaProtocolPrivileges()
+
 // GPU incompatibility fallback: disable hardware acceleration to avoid black screen
 if (process.argv.includes('--disable-gpu') || process.env.CAOGEN_DISABLE_GPU === '1') {
   app.disableHardwareAcceleration()
@@ -62,6 +82,7 @@ if (process.argv.includes('--disable-gpu') || process.env.CAOGEN_DISABLE_GPU ===
 process.env.CAOGEN_MEMORY_DIR ??= join(app.getPath('userData'), 'memory')
 configureLearningUserDataRoot(app.getPath('userData'))
 configurePermissionAuditUserDataRoot(app.getPath('userData'))
+configurePluginRuntimeAuthorization(app.getPath('userData'))
 const singleInstanceOwner = app.requestSingleInstanceLock()
 if (!singleInstanceOwner) {
   app.quit()
@@ -122,7 +143,7 @@ function createWindow(): BrowserWindow {
 
   // Diagnostic: renderer process crash
   win.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[caogen] render-process-gone:', details.reason, details.exitCode)
+    console.error('[caogen] render-process-gone:', buildRendererCrashDiagnostic(details))
   })
 
   // Diagnostic: forward renderer console to main process
@@ -341,6 +362,7 @@ void app.whenReady().then(async () => {
   // IPC handlers are safe to register before session hydration; they expose the
   // current (possibly empty) session set until recovery completes.
   ensureApplicationShell()
+  registerMediaProtocol()
 
   try {
     reconcileProviderProfileOperations()
@@ -361,9 +383,41 @@ void app.whenReady().then(async () => {
   try { await initializeProviderGateway() } catch (e) { console.error('[caogen] Local Provider Gateway startup failed:', e) }
   try { await recoverLearningMaterializationAtStartup() } catch (e) { console.error('[caogen] learning recovery failed:', e) }
   try { await sessionManager.whenInitialized() } catch (e) { console.error('[caogen] session init failed:', e) }
+  try {
+    const recovery = await recoverProjectConnectorLifecycles(app.getPath('userData'), {
+      blockRevokedSource: (projectId, resourceId) =>
+        sessionManager.blockRevokedConnectorSource(projectId, resourceId)
+    })
+    if (recovery.failures.length > 0) {
+      console.error('[caogen] Project connector lifecycle recovery failed:', recovery.failures)
+    }
+  } catch (e) { console.error('[caogen] Project connector recovery startup failed:', e) }
+  try { startProjectConnectorAutoRefreshScheduler(app.getPath('userData')) } catch (e) { console.error('[caogen] Project connector auto-refresh scheduler failed:', e) }
+  try { startDataRetentionExpiryScheduler(app.getPath('userData')) } catch (e) { console.error('[caogen] retention scheduler failed:', e) }
+  try {
+    const recovered = await recoverProducedArtifactStageAttachments(app.getPath('userData'))
+    if (recovered.failures.length > 0) {
+      console.error('[caogen] Artifact stage recovery failed:', recovered.failures)
+    }
+  } catch (e) { console.error('[caogen] Artifact stage recovery startup failed:', e) }
   const routineRoot = join(app.getPath('userData'), 'routines')
   try { initializeRoutineSessionLifecycle(routineRoot, app.getPath('userData')) } catch (e) { console.error('[caogen] routine lifecycle init failed:', e) }
   try { await reconcileRoutineRunsAtStartup(routineRoot, app.getPath('userData')) } catch (e) { console.error('[caogen] routine reconciliation failed:', e) }
+  try {
+    await reconcileRemoteExecutions(app.getPath('userData'))
+    await executePendingRemoteCommands(app.getPath('userData'))
+  } catch (e) { console.error('[caogen] remote continuation reconciliation failed:', e) }
+  try {
+    const webhook = await startRemoteWebhookServer({
+      rootDir: app.getPath('userData'),
+      onListening: (address) => console.info(`[caogen] remote webhook listening on ${address.host}:${address.port}`)
+    })
+    if (webhook.host !== '127.0.0.1' && webhook.host !== 'localhost' && webhook.host !== '::1') {
+      console.warn('[caogen] remote webhook is bound outside loopback; use only with a trusted network boundary')
+    }
+  } catch (e) { console.error('[caogen] remote webhook server failed to start:', e) }
+  try { startRemoteContinuationReconciler(app.getPath('userData')) } catch (e) { console.error('[caogen] remote continuation reconciler failed to start:', e) }
+  try { startMediaReconciliationScheduler(app.getPath('userData')) } catch (e) { console.error('[caogen] media reconciliation scheduler failed to start:', e) }
   try { configureQuickbar({ getMainWindow: () => mainWindow, showMainWindow }) } catch (e) { console.error('[caogen] quickbar config failed:', e) }
   try {
     const quickbarState = registerQuickbarGlobalShortcut()
@@ -401,6 +455,10 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   disposeRoutineSessionLifecycle()
   disposeQuickbar()
+  stopRemoteContinuationReconciler()
+  stopMediaReconciliationScheduler()
+  stopProjectConnectorAutoRefreshScheduler()
+  void stopRemoteWebhookServer().catch((error) => console.error('[caogen] remote webhook stop failed:', error))
 })
 
 app.on('before-quit', (event) => {
@@ -412,6 +470,10 @@ app.on('before-quit', (event) => {
   unsubscribeTraySessionEvents?.()
   unsubscribeTraySessionEvents = null
   stopRoutineScheduler()
+  stopRemoteContinuationReconciler()
+  stopMediaReconciliationScheduler()
+  stopProjectConnectorAutoRefreshScheduler()
+  stopDataRetentionExpiryScheduler()
   stopProviderProfileWebDavAutoSync()
   stopProviderProfileS3AutoSync()
   disposeOfficeVisualPreviews()
@@ -419,6 +481,7 @@ app.on('before-quit', (event) => {
   disposeProjectDebuggers()
   // 退出前等待任务快照落盘,再释放项目索引 watcher/SQLite 句柄。
   void (async () => {
+    await stopRemoteWebhookServer()
     await sessionManager.disposeAll()
     await Promise.all([
       disposeProjectIndexers(),

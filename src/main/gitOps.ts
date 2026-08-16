@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import type { GitCommitResult, GitFileStatus, GitOperationResult, GitStatus } from '../shared/types'
-import { withSafeLocalGitConfig } from './git/safe-git'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
 
 const GIT_TIMEOUT_MS = 30_000
 const MAX_BUFFER = 2 * 1024 * 1024
@@ -9,6 +9,7 @@ function runGit(cwd: string, args: string[]): string {
   return execFileSync('git', withSafeLocalGitConfig(args), {
     cwd,
     encoding: 'utf8',
+    env: isolatedLocalGitEnv(process.env),
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: MAX_BUFFER,
     stdio: ['ignore', 'pipe', 'pipe']

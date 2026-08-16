@@ -45,6 +45,10 @@ const EFFECT_FREE_TOOLS = new Set([
   'browser_screenshot',
   'gui_list_windows',
   'gui_screenshot',
+  // Canonical Artifact registration is an app-owned, deterministic local transaction.
+  'artifact_register',
+  // Knowledge search may append citation Evidence, but has no external side effect.
+  'project_knowledge_search',
   // ProjectWorkspace owns deterministic comment idempotency and atomic recovery.
   'work_item_comment'
 ])

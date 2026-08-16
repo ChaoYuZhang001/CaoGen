@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { StartSuggestion, StartSuggestionPriority } from '../shared/types'
-import { withSafeLocalGitConfig } from './git/safe-git'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
 
 export interface StartSuggestionSignal {
   id?: string
@@ -386,6 +386,7 @@ function readGitStatus(root: string): GitStatusSummary | null {
     withSafeLocalGitConfig(['-C', root, 'status', '--porcelain=v1', '--untracked-files=all']),
     {
       encoding: 'utf8',
+      env: isolatedLocalGitEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: MAX_GIT_BUFFER

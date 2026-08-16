@@ -7,15 +7,23 @@ import type {
 import type { LearningAuditEvent, LearningRecord } from './learning-types'
 import type {
   Goal,
+  ProjectMember,
+  ProjectInvitation,
   ProjectSquad,
   ProjectResource,
   ProjectWorkspace,
   ProjectWorkspaceEvent,
   WorkItem,
-  WorkItemComment
+  WorkItemComment,
+  WorkItemSharedApproval,
+  ProjectCollaborationInboxReceipt
 } from './project-workspace-types'
 import type { WorkflowLedgerExportSelection, WorkflowRunRecord } from './workflow-types'
 import type { Routine, RoutineRunRecord } from './types'
+import type { ModelAttemptRecord } from './model-attempt-types'
+import type { TaskSnapshotRecord } from './types'
+import type { ProjectDependency, ProjectMilestone } from './project-portfolio-types'
+import type { MediaProjectSlice } from './media-types'
 
 export const PROJECT_AGGREGATE_SCHEMA_VERSION = 1 as const
 export const PROJECT_AGGREGATE_FORMAT = 'caogen.project-aggregate.v1' as const
@@ -27,7 +35,10 @@ export const PROJECT_AGGREGATE_OBJECT_KINDS = [
   'goal',
   'work_item',
   'squad',
+  'member',
+  'invitation',
   'comment',
+  'shared_approval',
   'digital_worker',
   'assignment',
   'lease',
@@ -112,7 +123,12 @@ export interface ProjectAggregateSnapshot {
   goals: Goal[]
   workItems: WorkItem[]
   squads: ProjectSquad[]
+  members: ProjectMember[]
+  invitations: ProjectInvitation[]
   comments: WorkItemComment[]
+  sharedApprovals: WorkItemSharedApproval[]
+  /** Added compatibly to v1; legacy exports omit the collection. */
+  inboxReceipts?: ProjectCollaborationInboxReceipt[]
   digitalWorkers: DigitalWorker[]
   assignments: DigitalWorkerAssignment[]
   leases: DigitalWorkerLease[]
@@ -161,6 +177,81 @@ export interface ProjectAggregateAutomation {
   runs: RoutineRunRecord[]
 }
 
+export interface ProjectAggregatePortfolio {
+  dependencies: ProjectDependency[]
+  milestones: ProjectMilestone[]
+}
+
+export interface ProjectAggregateArtifactBlob {
+  digest: string
+  sizeBytes: number
+  encoding: 'base64'
+  data: string
+}
+
+export interface ProjectAggregateArtifactSourceFile extends ProjectAggregateArtifactBlob {
+  artifactId: string
+  /** Safe extension only; source host paths and filenames are never used at the destination. */
+  extension: string
+}
+
+export interface ProjectAggregatePortableFile {
+  path: string
+  digest: string
+  sizeBytes: number
+  encoding: 'base64'
+  data: string
+}
+
+export interface ProjectAggregatePortableTaskPlan {
+  sessionId: string
+  value: unknown
+}
+
+export interface ProjectAggregateEffectArtifact {
+  /** App-private relative path. Host userData paths are never exported as the portable identity. */
+  artifactRef: string
+  effectIds: string[]
+  files: ProjectAggregatePortableFile[]
+}
+
+export interface ProjectAggregateExternalFileManifest {
+  kind: 'learning_skill' | 'office_artifact'
+  ownerId: string
+  resourceId?: string
+  /** POSIX-style path relative to the declared external owner root. */
+  relativePath: string
+  digest: string
+  sizeBytes: number
+  content: 'external_manifest_only' | 'artifact_source_bytes'
+}
+
+/** Recovery/runtime records that are Project-owned but not part of the sealed business aggregate. */
+export interface ProjectAggregatePortableRuntime {
+  schemaVersion: 1
+  sessionIds: string[]
+  sdkSessionIds: string[]
+  sessionHistory: unknown[]
+  activeSessions: unknown[]
+  sessionCreationJournal: unknown[]
+  taskPlans: ProjectAggregatePortableTaskPlan[]
+  sessionFiles: ProjectAggregatePortableFile[]
+  taskSnapshots: TaskSnapshotRecord[]
+  modelAttempts: ModelAttemptRecord[]
+  artifactLifecycles: unknown[]
+  artifactPurges: unknown[]
+  /** Optional for backward compatibility with exports created before mutable retention policies. */
+  artifactRetentionRevisions?: unknown[]
+  artifactBlobs: ProjectAggregateArtifactBlob[]
+  /** Optional for backward compatibility with exports created before source_ref portability. */
+  artifactSourceFiles?: ProjectAggregateArtifactSourceFile[]
+  /** Optional only when the export contains no Effect target backed by an app-private artifact. */
+  effectArtifacts?: ProjectAggregateEffectArtifact[]
+  /** Optional for backward compatibility with exports created before external-file inventory. */
+  externalFiles?: ProjectAggregateExternalFileManifest[]
+  runtimeDigest: string
+}
+
 export interface ProjectAggregateExportBundle {
   schemaVersion: typeof PROJECT_AGGREGATE_SCHEMA_VERSION
   format: typeof PROJECT_AGGREGATE_EXPORT_FORMAT
@@ -170,6 +261,12 @@ export interface ProjectAggregateExportBundle {
   dependencies: ProjectAggregateDependencies
   /** Project-owned local automation. Optional only for backward-compatible v1 imports. */
   automation?: ProjectAggregateAutomation
+  /** Cross-Project dependency records touching this Project and its owned milestones. */
+  portfolio?: ProjectAggregatePortfolio
+  /** Project-owned video production and MediaJob state. Optional for backward-compatible v1 imports. */
+  media?: MediaProjectSlice
+  /** Optional only for backward-compatible exports created before runtime portability. */
+  runtime?: ProjectAggregatePortableRuntime
   verification: ProjectAggregateVerification
   exportDigest: string
 }
@@ -180,6 +277,15 @@ export interface ProjectAggregateExportResult {
   json: string
   exportDigest: string
   bundle: ProjectAggregateExportBundle
+}
+
+export interface ProjectAggregateDeliveryExportResult extends ProjectAggregateExportResult {
+  workflowArtifactId: string
+  workflowEvidenceId: string
+  workflowAcceptanceId: string
+  workflowGoalId: string
+  workflowWorkItemId: string
+  workflowRunId: string
 }
 
 export interface ProjectAggregateReference {

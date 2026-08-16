@@ -2,9 +2,11 @@ import { BrowserWindow, dialog, type IpcMainInvokeEvent, type WebContents } from
 import type { ProviderProfileImportDecision } from '../../shared/types'
 import {
   applyProviderProfileBackupPreview,
+  deleteProviderProfileBackup,
   applyProviderProfilePreview,
   exportProviderProfileToFile,
   listProviderProfileBackups,
+  preflightProviderProfilePreview,
   previewProviderProfileBackup,
   previewProviderProfileFile,
   rollbackProviderProfileBackup
@@ -27,6 +29,7 @@ import {
   previewCodexNativeConfig,
   rollbackCodexNativeConfigBackup
 } from '../provider/codexNativeConfigService'
+import { executeProviderProfileOperationDelivery } from '../provider/provider-profile-operation-delivery'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 
 type ProviderProfileAction =
@@ -36,6 +39,7 @@ type ProviderProfileAction =
   | 'backups'
   | 'backup-preview'
   | 'backup-apply'
+  | 'backup-delete'
   | 'rollback'
   | 'native-codex-preview'
   | 'native-codex-apply'
@@ -64,7 +68,24 @@ export async function handleProviderProfileIpc(
     return previewProviderProfileBackup(typeof args[0] === 'string' ? args[0] : '')
   }
   if (action === 'backup-apply') {
-    return applyProviderProfileBackupPreview(typeof args[0] === 'string' ? args[0] : '')
+    return executeProviderProfileOperationDelivery({
+      operation: 'backup_restore',
+      transport: 'local',
+      title: 'Restore Provider Profile backup',
+      objective: '恢复 Provider Profile 私有备份并生成脱敏、可验收的操作报告',
+      execute: () => applyProviderProfileBackupPreview(typeof args[0] === 'string' ? args[0] : '')
+    })
+  }
+  if (action === 'backup-delete') {
+    const backupId = typeof args[0] === 'string' ? args[0] : ''
+    return executeProviderProfileOperationDelivery({
+      operation: 'backup_delete',
+      transport: 'local',
+      title: 'Delete Provider Profile backup',
+      objective: '删除已过期或不再需要的 Provider Profile 私有备份并生成脱敏操作报告',
+      backupId,
+      execute: () => deleteProviderProfileBackup(backupId)
+    })
   }
   if (action === 'native-codex-preview') return previewCodexNativeProviderImport()
   if (isCcSwitchProviderProfileAction(action)) return handleCcSwitchProviderProfileAction(action, args)
@@ -81,9 +102,22 @@ export async function handleProviderProfileIpc(
   if (action === 'apply') {
     const previewId = typeof args[0] === 'string' ? args[0] : ''
     const decisions = Array.isArray(args[1]) ? args[1] as ProviderProfileImportDecision[] : []
-    return applyProviderProfilePreview(previewId, decisions)
+    return executeProviderProfileOperationDelivery({
+      operation: 'profile_import',
+      transport: 'local',
+      title: 'Import Provider Profile',
+      objective: '应用无凭据 Provider Profile 并生成脱敏、可验收的操作报告',
+      preflight: () => preflightProviderProfilePreview(previewId, decisions),
+      execute: () => applyProviderProfilePreview(previewId, decisions)
+    })
   }
-  return rollbackProviderProfileBackup(typeof args[0] === 'string' ? args[0] : '')
+  return executeProviderProfileOperationDelivery({
+    operation: 'backup_restore',
+    transport: 'local',
+    title: 'Rollback Provider Profile backup',
+    objective: '回滚 Provider Profile 私有备份并生成脱敏、可验收的操作报告',
+    execute: () => rollbackProviderProfileBackup(typeof args[0] === 'string' ? args[0] : '')
+  })
 }
 
 async function exportProfile(sender: WebContents) {
@@ -111,7 +145,7 @@ async function previewProfile(sender: WebContents) {
 
 function isProviderProfileAction(value: unknown): value is ProviderProfileAction {
   return [
-    'export', 'preview', 'apply', 'backups', 'backup-preview', 'backup-apply', 'rollback',
+    'export', 'preview', 'apply', 'backups', 'backup-preview', 'backup-apply', 'backup-delete', 'rollback',
     'native-codex-preview', 'native-codex-apply', 'native-backups', 'native-rollback',
     'cc-switch-preview', 'cc-switch-apply', 'cc-switch-backups', 'cc-switch-rollback',
     'native-config-preview', 'native-config-apply', 'native-config-backups', 'native-config-rollback'

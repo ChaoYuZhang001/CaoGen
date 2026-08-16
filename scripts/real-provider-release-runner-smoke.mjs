@@ -40,6 +40,18 @@ try {
     requests.push({ authorizationPresent: Boolean(request.headers.authorization), body })
     const rawInput = JSON.stringify(body.input ?? [])
     if (rawInput.includes('function_call_output')) {
+      if (body.previous_response_id) {
+        response.writeHead(400, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ error: { message: 'previous_response_id is not supported by this fixture' } }))
+        return
+      }
+      const input = Array.isArray(body.input) ? body.input : []
+      const call = input.find((item) => item?.type === 'function_call' && item?.call_id === 'call_release_evidence')
+      const output = input.find((item) => item?.type === 'function_call_output' && item?.call_id === 'call_release_evidence')
+      if (!call || !output) {
+        response.writeHead(400).end('structured tool replay missing')
+        return
+      }
       writeFinalResponse(response)
       return
     }
@@ -95,7 +107,7 @@ try {
   const summary = JSON.parse(result.stdout.trim())
   assert.equal(summary.functionalPassed, true)
   assert.equal(summary.formalBinding, summary.worktreeClean)
-  assert.equal(summary.requestCount, 2)
+  assert.equal(summary.requestCount, 3)
   assert.equal(summary.toolCallCount, 1)
   assert.equal(Object.hasOwn(summary, 'recordPath'), false)
   assert.equal(Object.hasOwn(summary, 'auditReport'), false)
@@ -109,7 +121,7 @@ try {
   assert.equal(record.schemaVersion, 1)
   assert.equal(record.protocol, 'openai-compatible')
   assert.equal(record.redacted, true)
-  assert.equal(record.requestCount, 2)
+  assert.equal(record.requestCount, 3)
   assert.equal(record.toolCallCount, 1)
   for (const field of ['sendPassed', 'toolPassed', 'artifactPassed', 'recoveryPassed', 'usagePassed', 'billingPassed']) {
     assert.equal(record[field], true, field)
@@ -119,8 +131,12 @@ try {
   assert.match(record.artifactSha256, /^sha256:[0-9a-f]{64}$/)
   assert.match(record.recoverySha256, /^sha256:[0-9a-f]{64}$/)
   if (process.platform !== 'win32') assert.equal(statSync(recordFile).mode & 0o777, 0o600)
-  assert.equal(requests.length, 2)
-  assert.deepEqual(requests.map((item) => item.authorizationPresent), [true, true])
+  assert.equal(requests.length, 3)
+  assert.deepEqual(requests.map((item) => item.authorizationPresent), [true, true, true])
+  assert.equal(requests[1].body.previous_response_id, 'resp_release_tool')
+  assert.equal(Object.hasOwn(requests[2].body, 'previous_response_id'), false)
+  assert(requests[2].body.input.some((item) => item?.type === 'function_call'))
+  assert(requests[2].body.input.some((item) => item?.type === 'function_call_output'))
 
   const publicOutput = `${result.stdout}\n${result.stderr}\n${JSON.stringify(record)}`
   for (const forbidden of [

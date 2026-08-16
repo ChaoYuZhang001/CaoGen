@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 import {
   runLocalCommand,
   writeTextFileLocally,
@@ -33,6 +33,7 @@ import {
 } from './agent/tools/office-artifact'
 import { clipToolOutput } from './agent/tool-output'
 import type { CodeForgeWorktreeContext } from './code-forge/delivery'
+import type { ToolProducedArtifactDescriptor } from './agent/tools/tool-types'
 import {
   GENESIS_ORCHESTRATE_TOOL_NAME,
   type GenesisOrchestrationInput
@@ -56,6 +57,10 @@ import {
   mcpServerConfigFromToolInput,
   recordApprovedMcpDiscovery
 } from './mcp/mcp-effect'
+import {
+  authorizeMcpRuntimeConfig,
+  authorizeSkillRuntime
+} from './plugin/plugin-runtime-authorization'
 import type {
   CommandTermination,
   EngineKind,
@@ -67,7 +72,8 @@ import type {
   TaskDagDispatchInput,
   TaskDagDispatchResult,
   TaskDecomposeInput,
-  TaskDecomposeResult
+  TaskDecomposeResult,
+  WorkflowArtifactKind
 } from '../shared/types'
 
 /**
@@ -97,6 +103,8 @@ export interface ToolExecResult {
   modeUsed?: SandboxMode
   sandboxed?: boolean
   fallbackReason?: string
+  /** Main-process only; stripped after canonical Artifact registration. */
+  producedArtifacts?: ToolProducedArtifactDescriptor[]
 }
 export interface ToolExecutionOptions {
   signal?: AbortSignal
@@ -115,6 +123,11 @@ export interface ToolExecutionOptions {
 const READ_MAX_BYTES = 200 * 1024
 const BASH_TIMEOUT_MS = 120_000
 const LIST_MAX_ENTRIES = 500
+const ARTIFACT_REGISTER_KINDS = new Set<WorkflowArtifactKind>([
+  'report', 'source', 'requirement', 'design', 'document', 'spreadsheet',
+  'presentation', 'pdf', 'code', 'patch', 'diff', 'test_report', 'screenshot',
+  'pull_request', 'issue', 'release_package', 'custom'
+])
 
 /** Chat Completions 工具声明(发给模型的 schema) */
 export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
@@ -176,6 +189,34 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           content: { type: 'string', description: '完整文件内容' }
         },
         required: ['path', 'content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'artifact_register',
+      description:
+        '把当前 Project 内已经生成的真实文件登记为 canonical Artifact，并自动写入版本、摘要、位置、Evidence、Artifact 级完整性 Acceptance、阶段交接与可恢复导出。适用于报告、需求、设计、代码、Diff、测试报告、截图、PR/Issue 回退包和发布安装包等成品。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string', description: '当前 Project 内已存在的非符号链接普通文件' },
+          kind: {
+            type: 'string',
+            enum: [
+              'report', 'source', 'requirement', 'design', 'document', 'spreadsheet',
+              'presentation', 'pdf', 'code', 'patch', 'diff', 'test_report', 'screenshot',
+              'pull_request', 'issue', 'release_package', 'custom'
+            ]
+          },
+          title: { type: 'string', description: '结果工作台显示的成品标题' },
+          lineageKey: { type: 'string', description: '可选稳定版本线标识；默认使用 Project 相对路径' },
+          mediaType: { type: 'string', description: '可选 MIME type；默认按扩展名推断' },
+          evidenceSummary: { type: 'string', description: '可选的交付证据摘要' }
+        },
+        required: ['path', 'kind', 'title']
       }
     }
   },
@@ -652,11 +693,13 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
         type: 'object',
         properties: {
           command: { type: 'string', description: 'stdio server 命令' },
+          serverId: { type: 'string', description: 'Plugin Registry 中已批准且启用的 MCP server 名称' },
           args: { type: 'array', items: { type: 'string' } },
           url: { type: 'string', description: 'HTTP JSON-RPC 或 SSE endpoint' },
           transport: { type: 'string', enum: ['stdio', 'http', 'sse'] },
           timeoutMs: { type: 'number' }
-        }
+        },
+        required: ['serverId']
       }
     }
   },
@@ -669,6 +712,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
         type: 'object',
         properties: {
           command: { type: 'string' },
+          serverId: { type: 'string', description: 'Plugin Registry 中已批准且启用的 MCP server 名称' },
           args: { type: 'array', items: { type: 'string' } },
           url: { type: 'string' },
           transport: { type: 'string', enum: ['stdio', 'http', 'sse'] },
@@ -687,7 +731,7 @@ export const OPENAI_CODING_TOOLS: ToolDefinition[] = [
           },
           timeoutMs: { type: 'number' }
         },
-        required: ['toolName']
+        required: ['serverId', 'toolName']
       }
     }
   },
@@ -724,6 +768,7 @@ export const READONLY_TOOLS = OPENAI_PERMISSION_READ_ONLY_TOOLS
 /** 文件写入类(acceptEdits 模式自动放行) */
 export const EDIT_TOOLS = new Set([
   'write_file',
+  'artifact_register',
   'search_replace',
   'edit_file',
   CREATE_DOCUMENT_TOOL,
@@ -793,8 +838,18 @@ function memoryRoot(): string {
   return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
 }
 
-function mcpConfigArg(args: Record<string, unknown>): McpServerConfig {
-  return mcpServerConfigFromToolInput(args)
+function authorizedMcpConfigArg(
+  args: Record<string, unknown>,
+  projectRoot: string
+) {
+  const requestedConfig = args.command !== undefined || args.url !== undefined
+    ? mcpServerConfigFromToolInput(args)
+    : undefined
+  return authorizeMcpRuntimeConfig({
+    projectRoot,
+    serverId: stringArg(args, 'serverId'),
+    requestedConfig
+  })
 }
 async function importClaudeDesktopMcp(args: Record<string, unknown>): Promise<ToolExecResult> {
   if (Object.keys(args).length > 0) {
@@ -1002,6 +1057,14 @@ export async function executeCodingTool(
           options.sandboxMode
         )
       }
+      case 'artifact_register': {
+        const descriptor = artifactRegisterDescriptor(cwd, args)
+        return {
+          ok: true,
+          output: `Artifact 待登记: ${descriptor.title} (${descriptor.kind})`,
+          producedArtifacts: [descriptor]
+        }
+      }
       case 'search_replace': {
         let writeResult: LocalCommandResult | undefined
         const result = await runSearchReplace(cwd, {
@@ -1134,6 +1197,7 @@ export async function executeCodingTool(
           manager.list().find((item) => item.id === id || item.name.toLowerCase() === id.toLowerCase()) ??
           manager.match(id, 0.1)[0]?.skill
         if (!skill) return { ok: false, output: `未找到 Skill: ${id}` }
+        authorizeSkillRuntime(cwd, skill)
         return { ok: true, output: clip(manager.exportSkill(skill.id) ?? JSON.stringify(skill, null, 2)) }
       }
       case 'run_skill': {
@@ -1143,6 +1207,7 @@ export async function executeCodingTool(
           manager.list().find((item) => item.id === id || item.name.toLowerCase() === id.toLowerCase()) ??
           manager.match(id, 0.1)[0]?.skill
         if (!skill) return { ok: false, output: `未找到 Skill: ${id}` }
+        authorizeSkillRuntime(cwd, skill)
         const executionPlan = {
           id: skill.id,
           name: skill.name,
@@ -1174,9 +1239,9 @@ export async function executeCodingTool(
       }
       case 'mcp_discover': {
         const timeoutMs = numberArg(args.timeoutMs)
-        const config = mcpConfigArg(args)
-        const result = await discoverMcpServer(config, timeoutMs)
-        recordApprovedMcpDiscovery(config, result)
+        const authorized = authorizedMcpConfigArg(args, cwd)
+        const result = await discoverMcpServer(authorized.config, timeoutMs)
+        recordApprovedMcpDiscovery(authorized.publicConfig, authorized.binding, result)
         return { ok: true, output: clip(JSON.stringify(result, null, 2)) }
       }
       case 'mcp_call_tool': {
@@ -1185,8 +1250,9 @@ export async function executeCodingTool(
           const execution = await executeMcpEffectTarget(options.effectTarget, args, timeoutMs)
           return { ok: execution.ok, output: clip(JSON.stringify(execution, null, 2)) }
         }
+        const authorized = authorizedMcpConfigArg(args, cwd)
         const result = await callMcpTool(
-          mcpConfigArg(args),
+          authorized.config,
           stringArg(args, 'toolName', 'name'),
           recordArg(args.arguments),
           timeoutMs
@@ -1207,6 +1273,77 @@ export async function executeCodingTool(
 
 function clipExecResult(result: ToolExecResult): ToolExecResult {
   return { ...result, output: clip(result.output) }
+}
+
+function artifactRegisterDescriptor(
+  cwd: string,
+  args: Record<string, unknown>
+): ToolProducedArtifactDescriptor {
+  const safe = resolveExistingProjectPathSync(cwd, stringArg(args, 'path'))
+  const info = statSync(safe.fullPath)
+  if (!info.isFile()) throw new Error('artifact_register path 必须是普通文件')
+  const kind = args.kind
+  if (typeof kind !== 'string' || !ARTIFACT_REGISTER_KINDS.has(kind as WorkflowArtifactKind)) {
+    throw new Error('artifact_register kind 无效')
+  }
+  const title = boundedArtifactText(stringArg(args, 'title'), 'title', 240)
+  const lineageKey = boundedArtifactText(
+    optionalStringArg(args.lineageKey) ?? safe.relativePath,
+    'lineageKey',
+    2_048
+  )
+  const evidenceSummary = optionalStringArg(args.evidenceSummary)
+  return {
+    kind: kind as WorkflowArtifactKind,
+    title,
+    path: safe.fullPath,
+    lineageKey,
+    producer: 'artifact_register',
+    mediaType: optionalStringArg(args.mediaType) ?? artifactMediaType(safe.fullPath),
+    metadata: {
+      projectRelativePath: safe.relativePath,
+      sizeBytes: info.size
+    },
+    evidenceKind: kind === 'test_report' ? 'test_result' : 'delivery_check',
+    evidenceSummary: evidenceSummary
+      ? boundedArtifactText(evidenceSummary, 'evidenceSummary', 4_000)
+      : `The registered ${kind} file is available and bound to its canonical digest and Project ownership.`,
+    evidenceVerifier: 'artifact-register-runtime',
+    requiredCanonicalRegistration: true
+  }
+}
+
+function boundedArtifactText(value: string, label: string, maxLength: number): string {
+  const clean = value.trim()
+  if (!clean || clean.length > maxLength || /[\0-\x1f\x7f]/.test(clean)) {
+    throw new Error(`artifact_register ${label} 无效`)
+  }
+  return clean
+}
+
+function artifactMediaType(path: string): string | undefined {
+  const types: Record<string, string> = {
+    '.md': 'text/markdown; charset=utf-8',
+    '.txt': 'text/plain; charset=utf-8',
+    '.json': 'application/json',
+    '.html': 'text/html; charset=utf-8',
+    '.csv': 'text/csv; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.patch': 'text/x-diff',
+    '.diff': 'text/x-diff',
+    '.zip': 'application/zip',
+    '.dmg': 'application/x-apple-diskimage',
+    '.pkg': 'application/vnd.apple.installer+xml'
+  }
+  return types[extname(path).toLowerCase()]
 }
 
 async function localFileWrite(

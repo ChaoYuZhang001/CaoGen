@@ -1,7 +1,5 @@
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { resolve } from 'node:path'
 import { app } from 'electron'
 import { documentAttachmentsToPrompt, sessionImageAttachmentsRoot } from './attachmentOps'
 import { TranscriptWriter } from './transcript'
@@ -44,10 +42,8 @@ import { canRotateProviderKey } from './providerKeyRouting'
 import { OPENAI_CODING_TOOLS, RESPONSES_CODING_TOOLS } from './openaiTools'
 import { NativeToolRuntime, type NativeToolExecutionResult } from './native-tool-runtime'
 import { buildProjectContextSystemAppendSync } from './agent/context-loader'
-import { buildEffectiveMemoryPrompt } from './memory/memory-retriever'
-import { buildDigitalWorkerMemoryPrompt } from './digital-worker/worker-memory'
-import { buildSkillInvocationPrompt } from './skill/skill-invocation'
-import { buildIdeDocumentContextPrompt } from './ide/ide-document-context'
+import { augmentNativePayloadWithLayeredMemory } from './native-layered-prompt'
+import { nativeAdditionalContextItems } from './anthropic-outbound-context'
 import {
   adaptChatCompletionRequest, buildChinaProviderPromptAppend, type ProviderAdapterContext
 } from './model/llm-providers/china-provider-adapter'
@@ -65,6 +61,12 @@ import {
   OutboundContextPolicyError,
   prepareOutboundContext
 } from './project-workspace/outbound-context-policy'
+import {
+  consumeOpenAIChatResponse,
+  consumeOpenAIResponsesResponse,
+  type OpenAIChatToolCall,
+  type OpenAIResponsesToolCall
+} from './protocol-adapters/openai-compatible-stream'
 import {
   openAiEndpoint,
   parseProviderHeaders,
@@ -101,11 +103,11 @@ import {
 } from './conversation-ledger-replay'
 import { isModelAttemptPersistenceError, unwrapModelAttemptOperationError } from './task/model-attempt-runtime'
 import { addUsageTotals, OpenAIModelAttemptTracker } from './task/openai-model-attempt-runtime'
+import { buildProviderNeutralContextDigest } from './task/provider-neutral-context'
 import type {
   ChatContent,
   ChatMessage,
   OpenAIErrorContext,
-  PendingToolCall,
   TurnToolFailure
 } from './openAiEngineTypes'
 import { formatProviderErrorContext, isResponsesConversationContext } from './openAiEngineTypes'
@@ -122,7 +124,6 @@ import type {
   EffectStatus,
   ImageAttachmentView,
   OpenAIProtocol,
-  OutboundContextItemView,
   OutboundContextManifest,
   PermissionModeId,
   PermissionRequestInfo,
@@ -172,7 +173,7 @@ export class OpenAIEngine implements Engine {
   /** chat 协议的多轮历史(user/assistant/tool);responses 协议不使用 */
   private chatHistory: ChatMessage[] = []
   /** 本轮流式累积的工具调用(SSE delta 分片拼装) */
-  private pendingToolCalls: PendingToolCall[] = []
+  private pendingToolCalls: OpenAIChatToolCall[] = []
   /** 本轮 GUI 工具失败;最终文本不能掩盖真实桌面自动化失败 */
   private turnGuiToolFailures: TurnToolFailure[] = []
   private lastContextPressure: NonNullable<SessionMeta['contextPressure']> = 'normal'
@@ -192,7 +193,7 @@ export class OpenAIEngine implements Engine {
     }
     this.emitRaw = (event) => {
       const entry = this.transcript.nextEntry(event)
-      emit(event, entry.seq, entry)
+      emit(entry.event, entry.seq, entry)
     }
     this.nativeToolRuntime = new NativeToolRuntime(this.meta, (event) => this.emit(event))
     this.restoreResponsesContext()
@@ -682,72 +683,51 @@ export class OpenAIEngine implements Engine {
     payload: SendMessagePayload
     manifest: OutboundContextManifest
   }> {
-    const skillPrompt = payload.text.trim()
-      ? buildSkillInvocationPrompt({
-        enabled: getSettings().autoSkillLearningEnabled,
-        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
-        query: payload.text,
-        maxSkills: 2
-      })
-      : ''
-    const memory = payload.text.trim()
-      ? await buildEffectiveMemoryPrompt({
-        rootDir: openAiMemoryRoot(),
-        query: payload.text,
-        projectRoot: this.meta.sourceCwd ?? this.meta.cwd,
-        limit: 6
-      }).catch((error) => {
-        console.error('[caogen] layered memory retrieval failed:', error)
-        return ''
-      })
-      : ''
-    const workerMemory = payload.text.trim()
-      ? await buildDigitalWorkerMemoryPrompt(app.getPath('userData'), this.meta)
-      : ''
+    const layered = await augmentNativePayloadWithLayeredMemory(
+      {
+        ...payload,
+        images: payload.images ?? [],
+        documents: payload.documents ?? []
+      },
+      this.meta,
+      app.getPath('userData')
+    )
     const handoff = await buildWorkflowStageHandoffPrompt(this.meta, app.getPath('userData'))
       .catch((error) => {
         console.error('[caogen] workflow stage handoff retrieval failed:', error)
         return ''
       })
-    const ideDocumentContext = buildIdeDocumentContextPrompt(this.meta.id)
-    const additionalItems = openAiAdditionalContextItems({
-      memory: [memory, workerMemory].filter(Boolean).join('\n\n'),
-      ideDocumentContext,
-      handoff,
-      hasConversationContext: this.chatHistory.length > 0 || Boolean(this.lastResponseId)
-    })
     const outbound = await prepareOutboundContext({
       meta: this.meta,
       rootDir: app.getPath('userData'),
-      payload,
+      payload: layered.payload,
       providerId: this.meta.providerId,
       model: this.effectiveModel(),
-      additionalItems
+      additionalItems: nativeAdditionalContextItems(
+        handoff,
+        this.chatHistory.length > 0 || Boolean(this.lastResponseId),
+        layered.hasMemoryContext
+      )
     })
     const projectResources = outbound.resourceContext.prompt
     const documentPrompt = documentAttachmentsToPrompt(
       payload.documents ?? [],
       sessionImageAttachmentsRoot(app.getPath('userData'), this.meta.id)
     )
-    const enriched = memory.trim() || workerMemory.trim() || skillPrompt.trim() || ideDocumentContext.trim() ||
-      handoff.trim() || projectResources.trim() || documentPrompt.trim()
+    const enriched = handoff.trim() || projectResources.trim() || documentPrompt.trim()
       ? {
-        ...payload,
+        ...layered.payload,
         text: [
           projectResources,
           handoff,
-          skillPrompt,
-          ideDocumentContext,
-          memory,
-          workerMemory,
           documentPrompt,
           '## Current User Request',
-          payload.text
+          layered.payload.text
         ]
           .filter((item) => item.trim().length > 0)
           .join('\n\n')
       }
-      : payload
+      : layered.payload
     return { payload: enriched, manifest: outbound.manifest }
   }
 
@@ -762,7 +742,7 @@ export class OpenAIEngine implements Engine {
   /** 端点不支持 REST 模式的 previous_response_id 时置 true，后续请求跳过该字段 */
   private previousResponseIdUnsupported = false
   /** 本轮流式累积的 Responses 函数调用(按 output_index 拼装) */
-  private pendingResponseCalls: Array<{ callId: string; name: string; argsText: string }> = []
+  private pendingResponseCalls: OpenAIResponsesToolCall[] = []
   private static readonly MAX_FAILOVERS_PER_TURN = 3
 
   /**
@@ -849,6 +829,7 @@ export class OpenAIEngine implements Engine {
       ...(replay ? [{ role: 'user', content: [{ type: 'input_text', text: replay.text }] }] : []),
       { role: 'user', content: buildInputContent(payload) }
     ]
+    const statelessInput = [...input]
     if (replay) {
       this.emit({
         kind: 'hook-event',
@@ -908,13 +889,9 @@ export class OpenAIEngine implements Engine {
           }
         )
       } catch (err) {
-        // previous_response_id fallback: rebuild input with full context and retry once
+        // previous_response_id fallback: replay the complete structured call/result chain.
         if (err instanceof Error && err.message === '__PREVIOUS_RESPONSE_ID_UNSUPPORTED__') {
-          const replay = buildPortableConversationReplay(this.transcript.read(), payload.messageId)
-          input = [
-            ...(replay ? [{ role: 'user', content: [{ type: 'input_text', text: replay.text }] }] : []),
-            ...input
-          ]
+          input = statelessInput
           continue
         }
         throw err
@@ -978,7 +955,17 @@ export class OpenAIEngine implements Engine {
         assertToolEffectSettled(effectStatus, call.name, call.callId)
         outputs.push({ type: 'function_call_output', call_id: call.callId, output: resultText })
       }
-      input = outputs // 下一轮只发工具结果(previous_response_id 续上文)
+      statelessInput.push(
+        ...calls.map((call) => ({
+          type: 'function_call',
+          call_id: call.callId,
+          name: call.name,
+          arguments: call.argsText
+        })),
+        ...outputs
+      )
+      // 支持服务端上下文时只发工具结果；无状态兼容端点必须重放匹配的结构化调用。
+      input = this.previousResponseIdUnsupported ? statelessInput : outputs
     }
     this.appendText(`\n\n[已达单轮工具调用上限 ${MAX_TOOL_ITERATIONS} 次,任务可能未完成;请拆分任务后继续]`)
   }
@@ -1271,7 +1258,8 @@ export class OpenAIEngine implements Engine {
         // assistant(含 tool_calls)入历史 —— 模型下一轮需要看到自己的调用
         this.chatHistory.push({
           role: 'assistant',
-          content: segmentText || null,
+          // OpenAI accepts null here, but some compatible gateways reject it on the tool-result continuation.
+          content: segmentText || '',
           tool_calls: toolCalls.map((c) => ({
             id: c.id,
             type: 'function',
@@ -1475,7 +1463,8 @@ export class OpenAIEngine implements Engine {
       taskStrategySystemPrompt(this.meta.taskStrategy),
       '你是 CaoGen 桌面工作室里的编码 Agent。',
       `当前工作目录: ${this.meta.cwd}`,
-      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/create_document/create_spreadsheet/create_presentation/create_pdf/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_stage/git_stage_all/git_commit/git_push/git_create_pr/git_create_issue/git_merge/code_forge_delivery/send_notification)读写项目文件、生成 Word/Excel/PowerPoint/PDF 办公成品、执行命令、规划编排、发送已配置通知并完成 Git 流程。',
+      '你可以使用工具(bash/view/read_file/write_file/search_replace/edit_file/artifact_register/create_document/create_spreadsheet/create_presentation/create_pdf/list_dir/search_symbol/search_code/find_file/get_dependencies/task_decompose/genesis_orchestrate/task_dispatch_dag/task_decompose_and_dispatch_dag/git_status/git_diff/git_stage/git_stage_all/git_commit/git_push/git_create_pr/git_create_issue/git_merge/code_forge_delivery/send_notification)读写项目文件、生成 Word/Excel/PowerPoint/PDF 办公成品、执行命令、规划编排、发送已配置通知并完成 Git 流程。',
+      '凡是通过 bash、外部工具或已有工作区文件形成的最终报告、需求、设计、代码包、测试报告、截图、回退包或安装包,必须调用 artifact_register 登记真实文件;只有 canonical Artifact/Evidence/Acceptance 返回成功后才可宣称已交付。',
       '开始任务时先用 search_symbol/search_code/find_file 定位相关文件和符号,不要盲猜路径;修改文件前用 get_dependencies 查看正向/反向依赖影响面。',
       '开始修改前再用 view 查看相关行号和上下文;已有文件编辑必须优先用 search_replace,old_str 至少包含前后 3 行上下文并保证唯一匹配。',
       'search_replace 失败时根据返回的相似片段修正 old_str 后重试;禁止因为匹配失败就改用 write_file 全量覆盖。write_file 仅用于新建文件或确需整体重写的文件。',
@@ -1493,66 +1482,10 @@ export class OpenAIEngine implements Engine {
 
   /** 消费 Chat Completions SSE 流(choices[].delta.content + 末尾 usage 块) */
   private async consumeChatStream(res: Response): Promise<void> {
-    if (!res.body) {
-      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null
-      const choices = Array.isArray(json?.choices) ? (json?.choices as Array<Record<string, unknown>>) : []
-      const msg = choices[0]?.message as Record<string, unknown> | undefined
-      if (typeof msg?.content === 'string' && msg.content) this.appendText(msg.content)
-      this.applyChatUsage(json)
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n')
-      buffer = parts.pop() ?? ''
-      for (const part of parts) this.handleChatSseEvent(part)
-    }
-    if (buffer.trim()) this.handleChatSseEvent(buffer)
-  }
-
-  private handleChatSseEvent(raw: string): void {
-    const dataLines = raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-    for (const data of dataLines) {
-      if (!data || data === '[DONE]') continue
-      let event: unknown
-      try {
-        event = JSON.parse(data)
-      } catch {
-        continue
-      }
-      const record = event as Record<string, unknown>
-      // 网关/端点即使在流里报错也走 error 字段
-      if (record.error) throw new Error(extractErrorMessage(record.error) || 'Chat Completions 流式响应报错')
-      const choices = Array.isArray(record.choices) ? (record.choices as Array<Record<string, unknown>>) : []
-      const delta = choices[0]?.delta as Record<string, unknown> | undefined
-      if (typeof delta?.content === 'string' && delta.content) this.appendText(delta.content)
-      // 工具调用按 index 分片流式到达:逐片拼装 id/name/arguments
-      if (Array.isArray(delta?.tool_calls)) {
-        for (const raw of delta.tool_calls as Array<Record<string, unknown>>) {
-          const index = typeof raw.index === 'number' ? raw.index : 0
-          while (this.pendingToolCalls.length <= index) {
-            this.pendingToolCalls.push({ id: '', name: '', argsText: '' })
-          }
-          const slot = this.pendingToolCalls[index]
-          if (typeof raw.id === 'string' && raw.id) slot.id = raw.id
-          const fn = raw.function as Record<string, unknown> | undefined
-          if (typeof fn?.name === 'string' && fn.name) slot.name += fn.name
-          if (typeof fn?.arguments === 'string') slot.argsText += fn.arguments
-        }
-      }
-      // usage 通常出现在最后一个块(stream_options.include_usage)
-      if (record.usage) this.applyChatUsage(record)
-    }
+    await consumeOpenAIChatResponse(res, this.pendingToolCalls, {
+      appendText: (text) => this.appendText(text),
+      recordUsage: (usage) => this.recordTurnUsage(usage)
+    })
   }
 
   /** Chat Completions 的 usage 命名(prompt/completion_tokens)转 CaoGen UsageTotals */
@@ -1588,97 +1521,12 @@ export class OpenAIEngine implements Engine {
   }
 
   private async consumeResponse(res: Response): Promise<void> {
-    if (!res.body) {
-      const json = await res.json().catch(() => null)
-      const text = extractResponseText(json)
-      if (text) this.appendText(text)
-      this.applyUsage(json)
-      const responseId = json && typeof json === 'object' && !Array.isArray(json)
-        ? (json as Record<string, unknown>).id
-        : undefined
-      if (typeof responseId === 'string') this.rememberResponsesContext(responseId)
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n')
-      buffer = parts.pop() ?? ''
-      for (const part of parts) this.handleSseEvent(part)
-    }
-    if (buffer.trim()) this.handleSseEvent(buffer)
-  }
-
-  private handleSseEvent(raw: string): void {
-    const dataLines = raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-    for (const data of dataLines) {
-      if (!data || data === '[DONE]') continue
-      let event: unknown
-      try {
-        event = JSON.parse(data)
-      } catch {
-        continue
-      }
-      const record = event as Record<string, unknown>
-      const type = typeof record.type === 'string' ? record.type : ''
-      if (type === 'response.output_text.delta' || type === 'response.refusal.delta') {
-        const delta = typeof record.delta === 'string' ? record.delta : ''
-        if (delta) this.appendText(delta)
-        continue
-      }
-      // 函数调用参数流式分片:response.function_call_arguments.delta
-      if (type === 'response.function_call_arguments.delta') {
-        const idx = typeof record.output_index === 'number' ? record.output_index : 0
-        const slot = this.ensureResponseCall(idx)
-        if (typeof record.delta === 'string') slot.argsText += record.delta
-        continue
-      }
-      // 函数调用条目登场:response.output_item.added,item={type:'function_call',call_id,name}
-      if (type === 'response.output_item.added' && record.item && typeof record.item === 'object') {
-        const item = record.item as Record<string, unknown>
-        if (item.type === 'function_call') {
-          const idx = typeof record.output_index === 'number' ? record.output_index : 0
-          const slot = this.ensureResponseCall(idx)
-          if (typeof item.call_id === 'string') slot.callId = item.call_id
-          if (typeof item.name === 'string') slot.name = item.name
-          if (typeof item.arguments === 'string') slot.argsText += item.arguments
-        }
-        continue
-      }
-      // 函数调用条目完成:补全终值(部分实现只在 done 给全量 arguments)
-      if (type === 'response.output_item.done' && record.item && typeof record.item === 'object') {
-        const item = record.item as Record<string, unknown>
-        if (item.type === 'function_call') {
-          const idx = typeof record.output_index === 'number' ? record.output_index : 0
-          const slot = this.ensureResponseCall(idx)
-          if (typeof item.call_id === 'string') slot.callId = item.call_id
-          if (typeof item.name === 'string') slot.name = item.name
-          if (typeof item.arguments === 'string' && item.arguments) slot.argsText = item.arguments
-        }
-        continue
-      }
-      if (type === 'response.completed') {
-        this.applyUsage(record.response)
-        // 记录 response id 供下一轮 previous_response_id 续上下文
-        const responseId = (record.response as Record<string, unknown> | undefined)?.id
-        if (typeof responseId === 'string' && responseId) this.rememberResponsesContext(responseId)
-        const text = extractResponseText(record.response)
-        if (text && !this.assistantText.includes(text)) this.appendText(text)
-      }
-      if (type === 'response.failed') {
-        const error = (record.response as Record<string, unknown> | undefined)?.error ?? record.error
-        throw new Error(extractErrorMessage(error) || 'OpenAI response failed')
-      }
-    }
+    await consumeOpenAIResponsesResponse(res, this.pendingResponseCalls, {
+      appendText: (text) => this.appendText(text),
+      hasAssistantText: (text) => this.assistantText.includes(text),
+      recordUsage: (usage) => this.recordTurnUsage(usage),
+      rememberResponse: (responseId) => this.rememberResponsesContext(responseId)
+    })
   }
 
   /**
@@ -1708,6 +1556,10 @@ export class OpenAIEngine implements Engine {
       init: { ...init, signal },
       signal,
       auth: { keyId: auth.keyId, keyLabel: auth.keyLabel },
+      canonicalContextDigest: buildProviderNeutralContextDigest({
+        entries: this.transcript.readAll(),
+        outboundContext: this.activeOutboundContext
+      }),
       estimateCost: (usage) => estimateModelAttemptCostUsd({ providerId, model, protocol }, usage),
       executeFetch: async (operationId) => {
         const deadline = new ProviderRequestDeadline(signal, timeouts, streaming)
@@ -1754,14 +1606,6 @@ export class OpenAIEngine implements Engine {
         }
       }
     })
-  }
-
-  /** 按 output_index 取/建一个 Responses 函数调用累积槽 */
-  private ensureResponseCall(index: number): { callId: string; name: string; argsText: string } {
-    while (this.pendingResponseCalls.length <= index) {
-      this.pendingResponseCalls.push({ callId: '', name: '', argsText: '' })
-    }
-    return this.pendingResponseCalls[index]
   }
 
   private appendText(text: string): void {
@@ -1831,11 +1675,6 @@ export class OpenAIEngine implements Engine {
     return `GUI 工具失败，任务未标记为成功: ${failures}${suffix}`
   }
 
-  private applyUsage(value: unknown): void {
-    const usage = normalizeOpenAIUsage((value as Record<string, unknown> | null)?.usage)
-    if (!usage) return
-    this.recordTurnUsage(usage)
-  }
   private recordTurnUsage(usage: UsageTotals): void {
     this.turnUsage = addUsageTotals(this.turnUsage, usage)
     this.meta.usage = this.turnUsage
@@ -1978,30 +1817,6 @@ function openAIRequestHeaders(auth: OpenAIAuthConfig): Record<string, string> {
   }
 }
 
-function openAiAdditionalContextItems(input: {
-  memory: string
-  ideDocumentContext: string
-  handoff: string
-  hasConversationContext: boolean
-}): OutboundContextItemView[] {
-  const items: OutboundContextItemView[] = []
-  const add = (
-    present: boolean,
-    id: string,
-    kind: OutboundContextItemView['kind'],
-    label: string,
-    dataClass: OutboundContextItemView['dataClass']
-  ): void => {
-    if (!present) return
-    items.push({ id, kind, label, dataClass, egressPolicy: 'allow', decision: 'included' })
-  }
-  add(Boolean(input.memory.trim()), 'context:memory', 'memory_context', 'Local memory matches', 'S2')
-  add(Boolean(input.ideDocumentContext.trim()), 'context:ide', 'ide_context', 'IDE document context', 'S2')
-  add(Boolean(input.handoff.trim()), 'context:workflow', 'workflow_context', 'Workflow handoff', 'S4')
-  add(input.hasConversationContext, 'context:conversation', 'conversation_context', 'Conversation history', 'S2')
-  return items
-}
-
 function buildInputContent(payload: SendMessagePayload): Array<Record<string, string>> {
   const out: Array<Record<string, string>> = []
   if (payload.text) out.push({ type: 'input_text', text: payload.text })
@@ -2034,21 +1849,6 @@ function imageToDataUrl(image: ImageAttachmentView): string | null {
   }
 }
 
-function openAiMemoryRoot(): string {
-  return process.env.CAOGEN_MEMORY_DIR || resolve(homedir(), '.caogen', 'memory')
-}
-
-function normalizeOpenAIUsage(value: unknown): UsageTotals | null {
-  if (!value || typeof value !== 'object') return null
-  const usage = value as Record<string, unknown>
-  const input = numberField(usage.input_tokens)
-  const output = numberField(usage.output_tokens)
-  const details = usage.input_tokens_details as Record<string, unknown> | undefined
-  const cacheRead = numberField(details?.cached_tokens)
-  if (input + output + cacheRead === 0) return null
-  return { input, output, cacheRead, cacheCreation: 0 }
-}
-
 function numberField(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
@@ -2070,25 +1870,6 @@ function summarizeToolFailure(resultText: string): string {
 
 function clipText(text: string, max = 500): string {
   return text.length > max ? `${text.slice(0, max)}...[truncated]` : text
-}
-
-function extractResponseText(value: unknown): string {
-  if (!value || typeof value !== 'object') return ''
-  const record = value as Record<string, unknown>
-  if (typeof record.output_text === 'string') return record.output_text
-  const output = Array.isArray(record.output) ? record.output : []
-  return output
-    .map((item) => {
-      const content = (item as Record<string, unknown>)?.content
-      if (!Array.isArray(content)) return ''
-      return content
-        .map((part) => {
-          const block = part as Record<string, unknown>
-          return typeof block.text === 'string' ? block.text : ''
-        })
-        .join('')
-    })
-    .join('')
 }
 
 async function formatOpenAIError(res: Response, context?: OpenAIErrorContext): Promise<string> {

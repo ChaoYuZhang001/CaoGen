@@ -159,7 +159,7 @@ export function executeGitIndexUpdateTarget(
     }
     const artifact = readFrozenGitIndexArtifact(target)
     assertFrozenIndexEntries(target.repoRoot, target.objectDir, artifact.indexBytes, target.expectedIndexEntriesDigest)
-    promoteGitIndexArtifactObjects(target, artifact.manifest)
+    promoteGitIndexArtifactObjects(target, artifact)
     replaceIndexWithArtifact(target, artifact)
     return { ok: true }
   } catch (error) {

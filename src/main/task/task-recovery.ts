@@ -48,7 +48,16 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
     byEventId.set(receipt.eventId, receipt)
   }
   const receipts = [...byEventId.values()].sort((left, right) => left.seq - right.seq)
-  if (receipts.length === 0) return { snapshot }
+  if (receipts.length === 0) {
+    const terminalRun = safelyCompletedRun(snapshot.run)
+    if (!terminalRun) return { snapshot }
+    const transcript = fullTranscript.length > 0 ? fullTranscript : snapshot.transcript
+    const conversationLedger = verifiedConversationLedger(transcript)
+    return {
+      snapshot: { ...snapshot, conversationLedger, transcript },
+      terminalRun
+    }
+  }
 
   let run = snapshot.run
   let successfulTerminal = false
@@ -88,12 +97,7 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
 
   const lastReceipt = receipts[receipts.length - 1]
   const transcript = fullTranscript.length > 0 ? fullTranscript : snapshot.transcript
-  const conversationLedger = verifyConversationLedgerEntries(transcript)
-  if (!conversationLedger.valid) {
-    throw new Error(
-      `Canonical Conversation Ledger 校验失败，已阻止事件回执对账:${conversationLedger.error ?? 'unknown integrity error'}`
-    )
-  }
+  const conversationLedger = verifiedConversationLedger(transcript)
   const nextSnapshot: TaskSnapshotRecord = {
     ...snapshot,
     updatedAt: Math.max(snapshot.updatedAt, lastReceipt.occurredAt),
@@ -110,7 +114,24 @@ export function reconcileSnapshotWithReceipts(snapshot: TaskSnapshotRecord): {
     transcript,
     ...(run ? { run } : {})
   }
-  return successfulTerminal && run ? { snapshot: nextSnapshot, terminalRun: run } : { snapshot: nextSnapshot }
+  const terminalRun = successfulTerminal ? run : safelyCompletedRun(run)
+  return terminalRun ? { snapshot: nextSnapshot, terminalRun } : { snapshot: nextSnapshot }
+}
+
+function safelyCompletedRun(run: TaskRunRecord | undefined): TaskRunRecord | undefined {
+  return run?.status === 'completed' && !hasPendingTaskSteps(run) && !hasUnresolvedEffects(run)
+    ? run
+    : undefined
+}
+
+function verifiedConversationLedger(transcript: TranscriptEntry[]) {
+  const conversationLedger = verifyConversationLedgerEntries(transcript)
+  if (!conversationLedger.valid) {
+    throw new Error(
+      `Canonical Conversation Ledger 校验失败，已阻止事件回执对账:${conversationLedger.error ?? 'unknown integrity error'}`
+    )
+  }
+  return conversationLedger
 }
 
 function receiptFromTranscriptEntry(entry: TranscriptEntry, fallbackAt: number): EventReceipt {

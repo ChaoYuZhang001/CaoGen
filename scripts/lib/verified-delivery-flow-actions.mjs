@@ -3,6 +3,7 @@ import { repairReview } from './verified-delivery-flow-repair-actions.mjs'
 import { finalReadback, runProbe } from './verified-delivery-flow-probes.mjs'
 import {
   attachAndFinalizeStage,
+  crashStageHandoffAtCheckpoint,
   completeStage,
   createStageAcceptance,
   createStageArtifact,
@@ -11,6 +12,7 @@ import {
   failReview,
   passStagedAcceptance,
   prepareReview,
+  recoverStageHandoffAfterCrash,
   seedWorkflow
 } from './verified-delivery-flow-stage-actions.mjs'
 import { stageByName } from './verified-delivery-flow-contract.mjs'
@@ -29,6 +31,8 @@ export async function runVerifiedDeliveryAction(payload) {
     'create-link': () => createStageLink(api, payload, stage()),
     'pass-acceptance': () => passStagedAcceptance(api, payload, stage()),
     'attach-artifact': () => attachAndFinalizeStage(api, payload, stage()),
+    'crash-stage-handoff': () => crashStageHandoffAtCheckpoint(api, payload, stage()),
+    'recover-stage-handoff': () => recoverStageHandoffAfterCrash(api, payload, stage()),
     'complete-stage': () => completeStage(api, payload, stage()),
     'prepare-review': () => prepareReview(api, payload),
     'fail-review': () => failReview(api, payload),

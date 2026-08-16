@@ -1,5 +1,6 @@
 import type {
   ProjectWorkspace,
+  ProjectWorkspaceState,
   WorkItem,
   WorkItemActor,
   WorkItemAuthorizationView,
@@ -7,6 +8,7 @@ import type {
   WorkItemOwner
 } from '../../shared/project-workspace-types'
 import { ProjectWorkspaceError } from './errors'
+import { inspectProjectAuthorization } from './project-authorization'
 
 export const LOCAL_USER_ACTOR: WorkItemActor = Object.freeze({
   type: 'local_user',
@@ -20,14 +22,25 @@ const OWNER_CAPABILITIES: WorkItemCapability[] = ['view', 'edit', 'execute', 'ap
 export function inspectWorkItemAuthorization(
   project: ProjectWorkspace,
   workItem: WorkItem,
-  actor: WorkItemActor
+  actor: WorkItemActor,
+  state?: ProjectWorkspaceState
 ): WorkItemAuthorizationView {
   assertActor(actor)
   if (workItem.projectId !== project.id) {
     throw new ProjectWorkspaceError('project_scope_conflict', 'WorkItem does not belong to the authorization Project')
   }
-  const projectAdministrator = actor.type === 'local_user' || project.ownerId === actor.id
+  const projectAuthorization = state ? inspectProjectAuthorization(state, project, actor) : undefined
+  const projectAdministrator = actor.type === 'local_user' || project.ownerId === actor.id ||
+    projectAuthorization?.role === 'owner' || projectAuthorization?.role === 'admin'
   const currentOwner = ownerMatchesActor(workItem.owner, actor)
+  const projectCapabilities: WorkItemCapability[] = projectAuthorization
+    ? [
+        ...(projectAuthorization.capabilities.includes('view') ? ['view' as const] : []),
+        ...(projectAuthorization.capabilities.includes('edit') ? ['edit' as const, 'execute' as const] : []),
+        ...(projectAuthorization.capabilities.includes('approve') ? ['approve' as const] : []),
+        ...(projectAuthorization.capabilities.includes('transfer') ? ['transfer' as const] : [])
+      ]
+    : []
   return {
     projectId: project.id,
     workItemId: workItem.id,
@@ -40,7 +53,7 @@ export function inspectWorkItemAuthorization(
       ? [...ADMIN_CAPABILITIES]
       : currentOwner
         ? [...OWNER_CAPABILITIES]
-        : []
+        : [...new Set(projectCapabilities)]
   }
 }
 
@@ -49,7 +62,8 @@ export function assertWorkItemAuthorized(
   workItem: WorkItem,
   actor: WorkItemActor,
   capability: WorkItemCapability,
-  expectedRevision?: number
+  expectedRevision?: number,
+  state?: ProjectWorkspaceState
 ): WorkItemAuthorizationView {
   if (expectedRevision !== undefined && workItem.revision !== expectedRevision) {
     throw new ProjectWorkspaceError(
@@ -57,7 +71,7 @@ export function assertWorkItemAuthorized(
       `WorkItem ${workItem.id} authorization is at revision ${workItem.revision}, expected ${expectedRevision}`
     )
   }
-  const view = inspectWorkItemAuthorization(project, workItem, actor)
+  const view = inspectWorkItemAuthorization(project, workItem, actor, state)
   if (!view.capabilities.includes(capability)) {
     throw new ProjectWorkspaceError(
       'actor_forbidden',

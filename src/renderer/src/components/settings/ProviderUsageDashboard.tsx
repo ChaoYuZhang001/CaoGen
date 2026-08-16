@@ -152,67 +152,16 @@ export default function ProviderUsageDashboard({
 
   return (
     <section className="settings-section provider-usage-dashboard" aria-label={t('providerUsageTitle')} data-provider-usage-dashboard>
-      <div className="provider-usage-toolbar">
-        <div>
-          <h3 className="settings-h3">{t('providerUsageTitle')}</h3>
-          <p className="settings-hint">{t('providerUsageHint')}</p>
-        </div>
-        <div className="provider-usage-toolbar-actions">
-          <div className="provider-usage-range" role="group" aria-label={t('providerUsageRange')}>
-            {(['today', '24h', '7d', '30d'] as UsageRange[]).map((option) => (
-              <button
-                type="button"
-                key={option}
-                className={range === option ? 'active' : ''}
-                aria-pressed={range === option}
-                onClick={() => {
-                  setRange(option)
-                  setModel('')
-                  setKeyLabel('')
-                  setRequestPage(0)
-                }}
-              >
-                {t(`providerUsageRange_${option}`)}
-              </button>
-            ))}
-          </div>
-          <label className="provider-usage-refresh-interval">
-            <span>{t('providerUsageAutoRefresh')}</span>
-            <select
-              className="select"
-              aria-label={t('providerUsageAutoRefresh')}
-              value={refreshInterval}
-              onChange={(event) => setRefreshInterval(Number(event.target.value) as RefreshInterval)}
-            >
-              <option value={0}>{t('providerUsageAutoRefreshOff')}</option>
-              <option value={5_000}>{t('providerUsageAutoRefreshSeconds', { n: 5 })}</option>
-              <option value={10_000}>{t('providerUsageAutoRefreshSeconds', { n: 10 })}</option>
-              <option value={30_000}>{t('providerUsageAutoRefreshSeconds', { n: 30 })}</option>
-              <option value={60_000}>{t('providerUsageAutoRefreshSeconds', { n: 60 })}</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            aria-label={t('providerUsageRefresh')}
-            title={t('providerUsageRefresh')}
-            disabled={loading}
-            onClick={() => void reload()}
-          >
-            <RefreshCw size={14} aria-hidden="true" className={loading ? 'provider-usage-spin' : ''} />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            aria-label={t('providerUsageExport')}
-            title={t('providerUsageExport')}
-            disabled={exporting || loading}
-            onClick={() => void exportUsage()}
-          >
-            <Download size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
+      <UsageDashboardToolbar
+        range={range}
+        refreshInterval={refreshInterval}
+        loading={loading}
+        exporting={exporting}
+        onRangeChange={(option) => { setRange(option); setModel(''); setKeyLabel(''); setRequestPage(0) }}
+        onRefreshIntervalChange={setRefreshInterval}
+        onRefresh={reload}
+        onExport={exportUsage}
+      />
 
       <ProviderUsageFilters
         providers={providers}
@@ -320,6 +269,39 @@ export default function ProviderUsageDashboard({
       )}
     </section>
   )
+}
+
+function UsageDashboardToolbar({ range, refreshInterval, loading, exporting, onRangeChange, onRefreshIntervalChange, onRefresh, onExport }: {
+  range: UsageRange
+  refreshInterval: RefreshInterval
+  loading: boolean
+  exporting: boolean
+  onRangeChange: (range: UsageRange) => void
+  onRefreshIntervalChange: (interval: RefreshInterval) => void
+  onRefresh: () => Promise<void>
+  onExport: () => Promise<void>
+}): React.JSX.Element {
+  const t = useT()
+  return <div className="provider-usage-toolbar">
+    <div><h3 className="settings-h3">{t('providerUsageTitle')}</h3><p className="settings-hint">{t('providerUsageHint')}</p></div>
+    <div className="provider-usage-toolbar-actions">
+      <div className="provider-usage-range" role="group" aria-label={t('providerUsageRange')}>
+        {(['today', '24h', '7d', '30d'] as UsageRange[]).map((option) => <button type="button" key={option} className={range === option ? 'active' : ''} aria-pressed={range === option} onClick={() => onRangeChange(option)}>{t(`providerUsageRange_${option}`)}</button>)}
+      </div>
+      <label className="provider-usage-refresh-interval">
+        <span>{t('providerUsageAutoRefresh')}</span>
+        <select className="select" aria-label={t('providerUsageAutoRefresh')} value={refreshInterval} onChange={(event) => onRefreshIntervalChange(Number(event.target.value) as RefreshInterval)}>
+          <option value={0}>{t('providerUsageAutoRefreshOff')}</option>
+          <option value={5_000}>{t('providerUsageAutoRefreshSeconds', { n: 5 })}</option>
+          <option value={10_000}>{t('providerUsageAutoRefreshSeconds', { n: 10 })}</option>
+          <option value={30_000}>{t('providerUsageAutoRefreshSeconds', { n: 30 })}</option>
+          <option value={60_000}>{t('providerUsageAutoRefreshSeconds', { n: 60 })}</option>
+        </select>
+      </label>
+      <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('providerUsageRefresh')} title={t('providerUsageRefresh')} disabled={loading} onClick={() => void onRefresh()}><RefreshCw size={14} aria-hidden="true" className={loading ? 'provider-usage-spin' : ''} /></button>
+      <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('providerUsageExport')} title={t('providerUsageExport')} disabled={exporting || loading} onClick={() => void onExport()}><Download size={14} aria-hidden="true" /></button>
+    </div>
+  </div>
 }
 
 function ProviderCostProvenance({ sources }: { sources: ProviderUsageCostSourceSummary[] }): React.JSX.Element {

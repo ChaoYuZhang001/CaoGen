@@ -16,12 +16,17 @@ const dmgPath = path.join(repoRoot, targetArch === 'arm64' ? `dist/CaoGen-${vers
 const zipPath = path.join(repoRoot, targetArch === 'arm64' ? `dist/CaoGen-${version}-arm64-mac.zip` : `dist/CaoGen-${version}-mac.zip`)
 const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
 const unpackedRoot = `${asarPath}.unpacked`
+const resourcesRoot = path.join(appPath, 'Contents', 'Resources')
+const ffmpegPath = path.join(resourcesRoot, 'ffmpeg', 'ffmpeg')
+const officeFontPath = path.join(resourcesRoot, 'office-font', 'NotoSansSC-Regular.woff')
 const checks = []
 const budgets = {
-  appBytes: 400_000_000,
+  // Video Studio ships one offline x64 FFmpeg binary. Keep the compressed
+  // distributables below 190 MB while preserving the stricter ASAR ceiling.
+  appBytes: 425_000_000,
   asarBytes: 80_000_000,
-  dmgBytes: 160_000_000,
-  zipBytes: 160_000_000
+  dmgBytes: 190_000_000,
+  zipBytes: 190_000_000
 }
 
 check('target architecture is supported', targetArch === 'x64' || targetArch === 'arm64', targetArch)
@@ -53,6 +58,19 @@ try {
   check('app.asar is readable', false, errorMessage(error))
 }
 if (asarEntries.length > 0) check('app.asar is readable', true, `${asarEntries.length} entries`)
+
+check('one packaged FFmpeg resource is present', isFile(ffmpegPath), relative(ffmpegPath))
+check('one packaged Office Chinese font is present', isFile(officeFontPath), relative(officeFontPath))
+check(
+  'ffmpeg-static is not duplicated inside ASAR',
+  !asarEntries.some((entry) => entry.startsWith('/node_modules/ffmpeg-static/')) &&
+    !isDirectory(path.join(unpackedRoot, 'node_modules', 'ffmpeg-static'))
+)
+check(
+  'the full Noto Sans SC package is not duplicated inside ASAR',
+  !asarEntries.some((entry) => entry.startsWith('/node_modules/@fontsource/noto-sans-sc/')) &&
+    !isDirectory(path.join(unpackedRoot, 'node_modules', '@fontsource', 'noto-sans-sc'))
+)
 
 const rendererOnlyPackages = [
   '@react-three/drei',

@@ -4,6 +4,7 @@ import { reconcileGitIndexEffectTarget } from '../git/git-index-effect'
 import { reconcileManagedWorktreeLifecycleTarget } from '../git/managed-worktree-effect'
 import { reconcileManagedPluginEffectTarget } from '../plugin/plugin-directory-effect'
 import type { EffectReconciliationResult } from './effect-reconciliation-result'
+import { reconcileMigrationOperationEffectTarget } from '../migration-operation-effect'
 
 export function reconcileLocalEffectTarget(target: EffectTarget): EffectReconciliationResult | undefined {
   switch (target.kind) {
@@ -17,6 +18,8 @@ export function reconcileLocalEffectTarget(target: EffectTarget): EffectReconcil
     case 'managed_plugin_install':
     case 'managed_plugin_uninstall':
       return reconcileManagedPluginEffectTarget(target)
+    case 'migration_operation':
+      return reconcileMigrationOperationEffectTarget(target)
     default:
       return undefined
   }

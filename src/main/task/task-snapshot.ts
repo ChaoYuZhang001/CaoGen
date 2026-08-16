@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import initSqlJs from 'sql.js'
 import type {
@@ -12,6 +12,7 @@ import type {
 export { buildTaskSnapshot } from './task-snapshot-builder'
 export type { BuildTaskSnapshotInput } from './task-snapshot-builder'
 import { mergeTaskRunRecords } from './task-run'
+import { mergeTaskSnapshots } from './task-snapshot-merge'
 import {
   assertTaskDagFinalizationParentDeletable,
   findTaskDagFinalization,
@@ -71,6 +72,11 @@ export function taskSnapshotsDbFile(rootDir = app.getPath('userData')): string {
 
 export type { WorkflowLedgerReadMode } from './workflow-ledger-recovery'
 
+export interface SaveTaskSnapshotOptions {
+  /** Import already restored the sealed Workflow Ledger projection. */
+  projectWorkflow?: boolean
+}
+
 export function getWorkflowLedgerReadMode(rootDir?: string): WorkflowLedgerReadMode {
   return getConfiguredWorkflowLedgerReadMode(taskSnapshotsDbFile(rootDir))
 }
@@ -111,7 +117,11 @@ export async function getTaskSnapshot(snapshotId: string, rootDir?: string): Pro
   }
 }
 
-export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string): Promise<TaskSnapshotRecord> {
+export function saveTaskSnapshot(
+  snapshot: TaskSnapshotRecord,
+  rootDir?: string,
+  options: SaveTaskSnapshotOptions = {}
+): Promise<TaskSnapshotRecord> {
   return enqueueMutation(rootDir, async () => {
     const store = await openStore(rootDir)
     try {
@@ -119,7 +129,12 @@ export function saveTaskSnapshot(snapshot: TaskSnapshotRecord, rootDir?: string)
       let nextSnapshot = previous ? mergeTaskSnapshots(previous, snapshot) : snapshot
       if (nextSnapshot.run) {
         const persistedRun = upsertTaskRun(
-          store.db, nextSnapshot.run, store.readMode, nextSnapshot.meta.projectId, nextSnapshot
+          store.db,
+          nextSnapshot.run,
+          store.readMode,
+          nextSnapshot.meta.projectId,
+          nextSnapshot,
+          options.projectWorkflow !== false
         )
         nextSnapshot = {
           ...nextSnapshot,
@@ -523,16 +538,29 @@ async function openStore(
   const SQL = await loadSql()
   const dbPath = taskSnapshotsDbFile(rootDir)
   const readMode = requestedReadMode ?? getConfiguredWorkflowLedgerReadMode(dbPath)
-  await ensureWorkflowLedgerTaskStoreReady({
+  const readiness = {
     databasePath: dbPath,
     legacyJsonPath: taskSnapshotsFile(rootDir),
     supportedStoreVersion: STORE_VERSION,
     targetStoreVersion: STORE_VERSION,
     readMode,
-    forceRefresh: forceReadinessRefresh,
     buildCandidate: buildMigrationCandidate
-  })
-  const db = new SQL.Database(await readFile(dbPath))
+  }
+  await mkdir(dirname(dbPath), { recursive: true, mode: 0o700 })
+  await ensureWorkflowLedgerTaskStoreReady({ ...readiness, forceRefresh: forceReadinessRefresh })
+  let bytes: Uint8Array
+  try {
+    bytes = await readFile(dbPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // A test runner or external cleanup can remove an ephemeral userData root
+    // after the first-open readiness result was cached. Re-run the strict gate
+    // instead of leaking a raw ENOENT through every Project surface.
+    await mkdir(dirname(dbPath), { recursive: true, mode: 0o700 })
+    await ensureWorkflowLedgerTaskStoreReady({ ...readiness, forceRefresh: true })
+    bytes = await readFile(dbPath)
+  }
+  const db = new SQL.Database(bytes)
   try {
     const previousVersion = readStoreVersion(db)
     if (previousVersion > STORE_VERSION) {
@@ -598,6 +626,7 @@ function validateLegacyJsonSource(sourceBytes: Uint8Array): TaskSnapshotRecord[]
 async function persistStore(store: { db: SqlDatabase; path: string }): Promise<void> {
   const tmpPath = `${store.path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   try {
+    await mkdir(dirname(store.path), { recursive: true, mode: 0o700 })
     const handle = await open(tmpPath, 'w')
     try {
       await handle.writeFile(store.db.export())
@@ -676,11 +705,14 @@ function upsertTaskRun(
   run: TaskRunRecord,
   readMode: WorkflowLedgerReadMode,
   projectId?: string,
-  snapshot?: TaskSnapshotRecord
+  snapshot?: TaskSnapshotRecord,
+  projectWorkflow = true
 ): TaskRunRecord {
   const previous = findRecoveryTaskRun(db, run.id, readMode)
   const next = previous ? mergeTaskRunRecords(previous, run) : run
-  const workflowContext = resolveRunWorkflowProjectionContext(db, next, projectId, snapshot)
+  const workflowContext = projectWorkflow
+    ? resolveRunWorkflowProjectionContext(db, next, projectId, snapshot)
+    : undefined
   db.run(
     `
       INSERT INTO task_runs(id, session_id, updated_at, payload)
@@ -692,41 +724,13 @@ function upsertTaskRun(
     `,
     [next.id, next.sessionId, next.updatedAt, JSON.stringify(next)]
   )
-  appendTaskRunEvidence(db, next, workflowContext.projectId)
-  projectRunIntoWorkflow(db, next, workflowContext)
-  projectTaskEvidenceIntoWorkflow(db, { runId: next.id })
+  if (workflowContext) {
+    appendTaskRunEvidence(db, next, workflowContext.projectId)
+    projectRunIntoWorkflow(db, next, workflowContext)
+    projectTaskEvidenceIntoWorkflow(db, { runId: next.id })
+  }
   return next
 }
-
-function compareSnapshotFreshness(left: TaskSnapshotRecord, right: TaskSnapshotRecord): number {
-  const leftCursor = left.execution.cursor?.seq ?? left.execution.lastSeq
-  const rightCursor = right.execution.cursor?.seq ?? right.execution.lastSeq
-  if (leftCursor !== rightCursor) return leftCursor - rightCursor
-  const leftRevision = left.run?.revision ?? 0
-  const rightRevision = right.run?.revision ?? 0
-  if (leftRevision !== rightRevision) return leftRevision - rightRevision
-  return left.updatedAt - right.updatedAt
-}
-
-function mergeTaskSnapshots(
-  current: TaskSnapshotRecord,
-  incoming: TaskSnapshotRecord
-): TaskSnapshotRecord {
-  const preferred = compareSnapshotFreshness(current, incoming) >= 0 ? current : incoming
-  const other = preferred === current ? incoming : current
-  const run = preferred.run && other.run
-    ? preferred.run.id === other.run.id
-      ? mergeTaskRunRecords(preferred.run, other.run)
-      : preferred.run
-    : preferred.run ?? other.run
-  return {
-    ...preferred,
-    createdAt: current.createdAt,
-    updatedAt: Math.max(current.updatedAt, incoming.updatedAt, run?.updatedAt ?? 0),
-    ...(run ? { run } : {})
-  }
-}
-
 
 function markToolExecutionSuperseded(
   run: TaskRunRecord,

@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { provider, verifyOperationJournalFileGuards } from './lib/provider-profile-smoke-helpers.mjs'
 
 const repoRoot = process.cwd()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-profile-smoke-'))
@@ -40,7 +41,7 @@ try {
   const profileStore = await import(pathToFileURL(findCompiled(outDir, 'providerProfileStore.js')).href)
   const operationJournal = await import(pathToFileURL(findCompiled(outDir, 'providerProfileOperationJournal.js')).href)
   const providersApi = await import(pathToFileURL(findCompiled(outDir, 'providers.js')).href)
-  verifyOperationJournalFileGuards(operationJournal, tempRoot)
+  verifyOperationJournalFileGuards(operationJournal, tempRoot, assert)
   const existing = [
     {
       ...provider('alpha', 'Alpha Gateway', 'https://alpha.example/v1', ['alpha-old']),
@@ -307,7 +308,7 @@ try {
     'local no-auth provider must be immediately routable without a credential')
 
   const providersPath = path.join(userDataDir, 'providers.json')
-  const persistedAfterCreate = JSON.parse(readFileSync(providersPath, 'utf8'))
+  const persistedAfterCreate = readProviderEntries(providersPath)
   equal(persistedAfterCreate[0].authMode, 'none', 'local no-auth mode must be written to disk')
   const restartedAfterCreate = loadProvidersInFreshProcess(findCompiled(outDir, 'providers.js'))
   equal(restartedAfterCreate[0].authMode, 'none', 'local no-auth mode must survive a fresh process')
@@ -990,7 +991,7 @@ try {
   const migratedLocalNoAuth = loadProvidersInFreshProcess(findCompiled(outDir, 'providers.js'))[0]
   assert(migratedLocalNoAuth.authMode === 'none' && migratedLocalNoAuth.apiKeys?.length === 0,
     'fresh-process migration must erase dormant keys from a legacy local no-auth Provider')
-  const persistedMigratedLocalNoAuth = JSON.parse(readFileSync(providersPath, 'utf8'))[0]
+  const persistedMigratedLocalNoAuth = readProviderEntries(providersPath)[0]
   assert(persistedMigratedLocalNoAuth.encryptedToken === ''
     && persistedMigratedLocalNoAuth.apiKeys.length === 0
     && !persistedMigratedLocalNoAuth.activeKeyId,
@@ -1016,7 +1017,7 @@ try {
       )
       assert(/mutation lock|LOCK_IO|EACCES|permission denied/i.test(fallbackFreshLoadError),
         'unwritable Provider Store must fail closed before migration without bypassing the mutation lock')
-      equal(JSON.parse(readFileSync(providersPath, 'utf8'))[0].authMode, 'none',
+      equal(readProviderEntries(providersPath)[0].authMode, 'none',
         'failed migration writeback fixture must leave the unsafe disk input unchanged')
     } finally {
       chmodSync(userDataDir, 0o700)
@@ -1027,7 +1028,7 @@ try {
     'fresh process load must downgrade remote no-auth configuration')
   assert(sanitizedFreshLoad[0].ready === false && sanitizedFreshLoad[0].credentialMigrationRequired === true,
     'fresh process downgrade must fail closed without a credential')
-  const persistedSanitizedLoad = JSON.parse(readFileSync(providersPath, 'utf8'))
+  const persistedSanitizedLoad = readProviderEntries(providersPath)
   equal(persistedSanitizedLoad[0].authMode, 'api-key',
     'fresh process downgrade must be persisted')
 
@@ -1063,7 +1064,7 @@ try {
     'legacy OpenAI-compatible Providers must migrate to Authorization')
   equal(migratedDefaultHeaders[1].credentialHeaderNames?.join(','), 'x-api-key',
     'legacy Anthropic Providers must migrate to x-api-key')
-  const persistedDefaultHeaders = JSON.parse(readFileSync(providersPath, 'utf8'))
+  const persistedDefaultHeaders = readProviderEntries(providersPath)
   equal(persistedDefaultHeaders[0].credentialHeaderNames?.join(','), 'authorization',
     'OpenAI credential-header migration must be persisted')
   equal(persistedDefaultHeaders[1].credentialHeaderNames?.join(','), 'x-api-key',
@@ -1110,83 +1111,6 @@ try {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
-function provider(id, name, baseUrl, models) {
-  return {
-    id,
-    name,
-    baseUrl,
-    models,
-    authMode: 'api-key',
-    ready: true,
-    engine: 'openai',
-    openaiProtocol: 'chat',
-    budgetUsd: 0,
-    createdAt: 1,
-    hasToken: true,
-    credentialStorage: 'encrypted'
-  }
-}
-
-function verifyOperationJournalFileGuards(journalApi, root) {
-  verifyMalformedOperationJournal(journalApi, path.join(root, 'journal-malformed'))
-  verifyTamperedOperationJournal(journalApi, path.join(root, 'journal-tampered'))
-  if (process.platform !== 'win32') {
-    verifySymlinkOperationJournal(journalApi, path.join(root, 'journal-symlink'))
-  }
-  verifyOversizedOperationJournal(journalApi, path.join(root, 'journal-oversized'))
-}
-
-function verifyMalformedOperationJournal(journalApi, userDataDir) {
-  const journal = new journalApi.ProviderProfileOperationJournal(userDataDir)
-  writePrivateJournal(journal, '{not-json')
-  assertJournalCorrupt(() => journal.list(), 'operation journal must reject malformed JSON')
-}
-
-function verifyTamperedOperationJournal(journalApi, userDataDir) {
-  const journal = new journalApi.ProviderProfileOperationJournal(userDataDir)
-  const digest = createHash('sha256').update('provider-profile-journal-fixture').digest('hex')
-  journal.prepare({
-    operationId: 'journal-integrity-fixture',
-    operation: 'import',
-    beforeSnapshotDigest: digest,
-    desiredSnapshotDigest: digest,
-    safetyBackupId: 'journal-safety-backup',
-    safetyBackupDigest: digest
-  })
-  const document = JSON.parse(readFileSync(journal.filePath, 'utf8'))
-  document.revision += 1
-  writeFileSync(journal.filePath, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 })
-  assertJournalCorrupt(() => journal.list(), 'operation journal must reject an integrity mismatch')
-}
-
-function verifySymlinkOperationJournal(journalApi, userDataDir) {
-  const journal = new journalApi.ProviderProfileOperationJournal(userDataDir)
-  mkdirSync(journal.directoryPath, { recursive: true, mode: 0o700 })
-  chmodSync(journal.directoryPath, 0o700)
-  const target = path.join(userDataDir, 'journal-target.json')
-  writeFileSync(target, '{}', { mode: 0o600 })
-  symlinkSync(target, journal.filePath)
-  assertJournalCorrupt(() => journal.list(), 'operation journal must reject symbolic links')
-}
-
-function verifyOversizedOperationJournal(journalApi, userDataDir) {
-  const journal = new journalApi.ProviderProfileOperationJournal(userDataDir)
-  writePrivateJournal(journal, Buffer.alloc(512 * 1024 + 1, 0x20))
-  assertJournalCorrupt(() => journal.list(), 'operation journal must reject files above its bounded read limit')
-}
-
-function writePrivateJournal(journal, content) {
-  mkdirSync(journal.directoryPath, { recursive: true, mode: 0o700 })
-  if (process.platform !== 'win32') chmodSync(journal.directoryPath, 0o700)
-  writeFileSync(journal.filePath, content, { mode: 0o600 })
-  if (process.platform !== 'win32') chmodSync(journal.filePath, 0o600)
-}
-
-function assertJournalCorrupt(action, message) {
-  const error = capturedError(action)
-  assert(error?.code === 'JOURNAL_CORRUPT', message)
-}
-
 function compile(outDirPath) {
   execFileSync(
     process.execPath,
@@ -1216,8 +1140,14 @@ function gitOutput(args) {
 }
 
 function installElectronStub(compiledRoot, userDataDir) {
-  const electronRoot = path.join(compiledRoot, 'node_modules', 'electron')
+  const modulesRoot = path.join(compiledRoot, 'node_modules')
+  const electronRoot = path.join(modulesRoot, 'electron')
   mkdirSync(electronRoot, { recursive: true })
+  symlinkSync(
+    path.join(repoRoot, 'node_modules', 'sql.js'),
+    path.join(modulesRoot, 'sql.js'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
   mkdirSync(userDataDir, { recursive: true })
   writeFileSync(path.join(electronRoot, 'package.json'), JSON.stringify({
     name: 'electron',
@@ -1233,6 +1163,11 @@ function loadProvidersInFreshProcess(compiledProvidersPath) {
     `const providers = require(${JSON.stringify(compiledProvidersPath)}); process.stdout.write(JSON.stringify(providers.listProviders()))`
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   return JSON.parse(output)
+}
+
+function readProviderEntries(filePath) {
+  const value = JSON.parse(readFileSync(filePath, 'utf8'))
+  return Array.isArray(value) ? value : value.entries
 }
 
 function findCompiled(root, fileName) {

@@ -53,13 +53,16 @@ try {
   const canonicalBinding = await import(pathToFileURL(
     findCompiledModule(outDir, 'workflow-run-canonical-binding.js')
   ).href)
+  const sessionManagerSupport = await import(pathToFileURL(
+    findCompiledModule(outDir, 'session-manager-support.js')
+  ).href)
 
   await assertOwnershipResolution(lifecycle, workspaceStore)
   await assertActivationProjection(activation, workspaceStore, workflowApi)
   await assertActivationProjectionFailsClosed(activation, workspaceStore, workflowApi)
   await assertUnscopedActivationSkipsProjection(activation)
   await assertSnapshotRecoveryProjection(snapshotRecovery, workspaceStore, snapshotStore, workflowApi)
-  assertSessionManagerRunGuard()
+  assertSessionManagerRunGuard(sessionManagerSupport)
   await assertWorkspaceRunRequiresWorkItem(snapshotStore, workflowApi)
   await assertExplicitAndLegacyProjection(snapshotStore, workflowApi, workflowStore, readinessParity)
   await assertCanonicalRunInvariant(
@@ -400,16 +403,22 @@ async function assertPersistedOwnershipClaims(lifecycle, store) {
   )
 }
 
-function assertSessionManagerRunGuard() {
+function assertSessionManagerRunGuard(sessionManagerSupport) {
   const source = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
   const activationSource = readFileSync(path.join(repoRoot, 'src/main/session-domain-activation.ts'), 'utf8')
   const recoverySource = readFileSync(
     path.join(repoRoot, 'src/main/task/task-snapshot-recovery-lifecycle.ts'),
     'utf8'
   )
+  const ownershipError = sessionManagerSupport.managedTaskRunSendGateError(
+    { workspaceId: 'workspace-a' },
+    false,
+    null
+  )
   assert(
-    source.includes('session.meta.workspaceId && !session.meta.workItemId') &&
-      source.includes('已阻止创建脱离业务任务的 Run'),
+    ownershipError?.includes('已阻止创建脱离业务任务的 Run') &&
+      source.includes('managedTaskRunSendGateError(session.meta') &&
+      source.includes('return rejectSessionSend(session, runGateError)'),
     'SessionManager.send must fail closed before creating a Workspace Run without WorkItem ownership'
   )
   assert(

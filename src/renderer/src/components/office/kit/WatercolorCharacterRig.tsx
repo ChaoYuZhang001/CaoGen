@@ -3,6 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { useTexture } from '@react-three/drei'
 import { SRGBColorSpace, type Sprite } from 'three'
 import type { WatercolorCharacterRole, WatercolorCharacterState } from '../../../../../shared/watercolor-character'
+import type { OfficeHairStyle, OfficeOutfitPalette } from '../../../../../shared/types'
 import { watercolorCharacterAssetUrl } from '../watercolor-character-assets'
 
 export interface WatercolorCharacterRigProps {
@@ -12,6 +13,8 @@ export interface WatercolorCharacterRigProps {
   scale?: number
   compact?: boolean
   liveliness?: number
+  outfitPalette?: OfficeOutfitPalette
+  hairStyle?: OfficeHairStyle
 }
 
 export default function WatercolorCharacterRig(props: WatercolorCharacterRigProps): React.JSX.Element | null {
@@ -27,7 +30,9 @@ function LoadedWatercolorCharacterRig({
   position = [0, 0.94, 0.58],
   role,
   scale = 1,
-  state
+  state,
+  outfitPalette = 'role-default',
+  hairStyle = 'role-default'
 }: WatercolorCharacterRigProps & { assetUrl: string }): React.JSX.Element {
   const spriteRef = useRef<Sprite>(null)
   const texture = useTexture(assetUrl)
@@ -68,22 +73,46 @@ function LoadedWatercolorCharacterRig({
   })
 
   return (
-    <sprite
-      ref={spriteRef}
-      name="watercolor-digital-worker"
-      position={position}
-      scale={dimensions}
-      userData={{ watercolorRole: role, watercolorState: state, transparentAsset: true }}
+    <group
+      name="office-watercolor-character"
+      userData={{
+        officeWatercolorCharacter: true,
+        officeWatercolorRole: role,
+        officeWatercolorState: state,
+        outfitPalette,
+        hairStyle
+      }}
     >
-      <spriteMaterial
-        map={texture}
-        transparent
-        alphaTest={0.045}
-        depthWrite={false}
-        toneMapped={false}
-      />
-    </sprite>
+      <sprite
+        ref={spriteRef}
+        name="watercolor-digital-worker"
+        position={position}
+        scale={dimensions}
+        userData={{ watercolorRole: role, watercolorState: state, transparentAsset: true }}
+      >
+        <spriteMaterial map={texture} color={outfitTint(outfitPalette)} transparent alphaTest={0.045} depthWrite={false} toneMapped={false} />
+      </sprite>
+      {hairStyle !== 'role-default' && (
+        <mesh position={[position[0], position[1] + (compact ? 0.42 : 0.51) * scale, position[2] + 0.012]} scale={hairScale(hairStyle, scale)}>
+          <sphereGeometry args={[0.22, 20, 12]} />
+          <meshBasicMaterial color="#283039" transparent opacity={0.78} depthWrite={false} />
+        </mesh>
+      )}
+    </group>
   )
+}
+
+function outfitTint(palette: OfficeOutfitPalette): string {
+  if (palette === 'graphite') return '#bcc3ca'
+  if (palette === 'teal') return '#9fd0ca'
+  if (palette === 'rose') return '#d8abb4'
+  return '#ffffff'
+}
+
+function hairScale(style: OfficeHairStyle, scale: number): [number, number, number] {
+  if (style === 'long') return [1.15 * scale, 1.45 * scale, 0.55]
+  if (style === 'tied') return [0.95 * scale, 1.12 * scale, 0.55]
+  return [1.05 * scale, 0.78 * scale, 0.55]
 }
 
 function stateMotion(

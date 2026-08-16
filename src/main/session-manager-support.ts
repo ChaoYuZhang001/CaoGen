@@ -34,6 +34,7 @@ import {
 } from './task/supervisor-taskrun-bridge'
 import { SupervisorStateStore } from './task/supervisor-state'
 import { buildTaskSnapshot, saveTaskSnapshot } from './task/task-snapshot'
+import type { WorkflowAcceptanceFailureResult } from './task/workflow-acceptance-failure-ingress'
 
 export interface SessionNotificationState {
   turnActive: boolean
@@ -68,6 +69,20 @@ export function managedSessionSendGateError(
   return undefined
 }
 
+export function managedTaskRunSendGateError(
+  meta: SessionMeta,
+  hasUnresolvedEffects: boolean,
+  budgetError: string | null
+): string | undefined {
+  if (meta.workspaceId && !meta.workItemId) {
+    return '当前会话已关联 Workspace，但未指定 WorkItem；已阻止创建脱离业务任务的 Run。'
+  }
+  if (hasUnresolvedEffects) {
+    return '当前任务存在尚未完成真实状态对账的外部副作用，已阻止继续发送；请先完成效果对账。'
+  }
+  return budgetError ?? undefined
+}
+
 interface Lookup<T> { get(key: string): T | undefined }
 type WorkflowSession = { meta: SessionMeta; getTranscript(): TranscriptEntry[] }
 interface SessionWorkflowRuntimeDependencies {
@@ -77,6 +92,7 @@ interface SessionWorkflowRuntimeDependencies {
   subtasks(sessionId: string): TaskSnapshotSubtaskState[]
   dagExecutions(sessionId: string): TaskDagExecutionView[]
   dagRuntimes(sessionId: string): TaskDagRuntimeSnapshot[]
+  onAcceptanceFailure?(result: WorkflowAcceptanceFailureResult): Promise<void> | void
 }
 
 export interface SessionWorkflowRuntimeOptions {
@@ -108,7 +124,8 @@ export class SessionWorkflowRuntime {
         }
       },
       captureEventBarrier: (sessionId, identity) => this.captureSnapshot(
-        sessionId, 'important-event', identity.seq, 'tool-result', identity.eventId, true)
+        sessionId, 'important-event', identity.seq, 'tool-result', identity.eventId, true),
+      onAcceptanceFailure: dependencies.onAcceptanceFailure
     })
   }
 

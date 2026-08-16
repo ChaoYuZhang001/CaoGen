@@ -311,7 +311,7 @@ async function verifyLegacyProjectOfficeDelivery(input) {
   assertEqual(lifecycle.projectRevision, 0, 'legacy Project Artifact revision sentinel')
   const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId, limit: 100 }, userData)
   assertEqual(
-    ledger.acceptances.items.find((candidate) => candidate.id === `acceptance:office:${effect.id}`)?.status,
+    ledger.acceptances.items.find((candidate) => candidate.id === `acceptance:artifact:office:${effect.id}`)?.status,
     'passed',
     'legacy Project Office Acceptance status'
   )
@@ -578,11 +578,13 @@ async function produceOfficeArtifact(input) {
     `${specification.kind} source snapshot coverage`
   )
 
-  const acceptanceId = `acceptance:office:${effect.id}`
-  const evidenceId = `evidence:office:${effect.id}`
+  const acceptanceId = `acceptance:artifact:office:${effect.id}`
+  const evidenceId = `evidence:artifact:office:${effect.id}`
+  const criterionId = `criterion:artifact:office:${effect.id}:deliverable`
   const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId: fixture.projectId, limit: 500 }, userData)
   const acceptance = ledger.acceptances.items.find((candidate) => candidate.id === acceptanceId)
-  const link = ledger.evidenceLinks.items.find((candidate) => candidate.id === `link:office:${effect.id}`)
+  const link = ledger.evidenceLinks.items.find((candidate) =>
+    candidate.id === `${acceptanceId}:link:${criterionId}`)
   const evidence = (await workflowApi.listWorkflowEvidence({
     projectId: fixture.projectId,
     workItemId: fixture.workItemId
@@ -657,8 +659,8 @@ async function produceFailedOfficeArtifact({ fixture, effectRuntime, officeApi, 
   const effect = resolvedSnapshot.run?.effects.find((candidate) => candidate.id === unresolved.id)
   assertEqual(effect?.status, 'confirmed', 'manually confirmed source-drift Office Effect')
   const artifactId = `artifact:office:${unresolved.id}`
-  const acceptanceId = `acceptance:office:${unresolved.id}`
-  const evidenceId = `evidence:office:${unresolved.id}`
+  const acceptanceId = `acceptance:artifact:office:${unresolved.id}`
+  const evidenceId = `evidence:artifact:office:${unresolved.id}`
   const lifecycle = await lifecycleApi.getPersistedArtifactLifecycle(artifactId, userData)
   assert(lifecycle, 'failed Office Acceptance must retain the exact observed Artifact for audit')
   const ledger = await workflowApi.listPersistedWorkflowLedger({ projectId: fixture.projectId, limit: 500 }, userData)

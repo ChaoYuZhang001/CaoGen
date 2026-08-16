@@ -15,6 +15,8 @@ export interface InternalMigrationAsset {
   readSourceDigest?: () => string
   sourceDirectorySnapshot?: SafeDirectorySnapshot
   targetBytes?: Buffer
+  routineEntryId?: string
+  routineEntry?: JsonObject
 }
 
 export interface StoredMigrationScan {

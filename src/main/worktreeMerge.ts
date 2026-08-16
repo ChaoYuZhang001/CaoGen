@@ -9,8 +9,46 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { withSafeLocalGitConfig } from './git/safe-git'
+import { isolatedLocalGitEnv, withSafeLocalGitConfig } from './git/safe-git'
+import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 import { writeDurableFileSync } from './durable-file'
+import {
+  WorktreeMergeReceiptFormatError,
+  type ApplySquashPatchSuccess,
+  type ApplySquashPatchResult,
+  type CanFastApplyPatchResult,
+  type ConflictRisk,
+  type CreatePullRequestOptions,
+  type CreatePullRequestResult,
+  type CreateSquashPatchSuccess,
+  type CreateSquashPatchResult,
+  type InspectMergeSuccess,
+  type InspectMergeResult,
+  type PullRequestTool,
+  type WorktreeConflictFileContent,
+  type WorktreeConflictFilesResult,
+  type WorktreeMergeFailure,
+  type WorktreeMergeReceipt
+} from './worktreeMergeTypes'
+
+export { WorktreeMergeReceiptFormatError } from './worktreeMergeTypes'
+export type {
+  ApplySquashPatchSuccess,
+  ApplySquashPatchResult,
+  CanFastApplyPatchResult,
+  ConflictRisk,
+  CreatePullRequestOptions,
+  CreatePullRequestResult,
+  CreateSquashPatchSuccess,
+  CreateSquashPatchResult,
+  InspectMergeSuccess,
+  InspectMergeResult,
+  PullRequestTool,
+  WorktreeConflictFileContent,
+  WorktreeConflictFilesResult,
+  WorktreeMergeFailure,
+  WorktreeMergeReceipt
+} from './worktreeMergeTypes'
 
 const GIT_TIMEOUT_MS = 120_000
 const MAX_GIT_BUFFER = 100 * 1024 * 1024
@@ -23,96 +61,6 @@ export const WORKTREE_MERGE_EXCLUDE_PATHSPECS = [
   ':(exclude).caogen/index.db-*'
 ] as const
 
-export type ConflictRisk = 'low' | 'medium' | 'unknown'
-
-export interface WorktreeMergeFailure {
-  ok: false
-  error: string
-}
-
-export interface InspectMergeSuccess {
-  ok: true
-  repoRoot: string
-  worktreePath: string
-  baseSha: string
-  headSha: string
-  changedFiles: number
-  insertions: number
-  deletions: number
-  conflictRisk: ConflictRisk
-}
-
-export type InspectMergeResult = InspectMergeSuccess | WorktreeMergeFailure
-
-export interface CreateSquashPatchSuccess {
-  ok: true
-  repoRoot: string
-  worktreePath: string
-  baseSha: string
-  headSha: string
-  path: string
-  patchText: string
-  bytes: number
-}
-
-export type CreateSquashPatchResult = CreateSquashPatchSuccess | WorktreeMergeFailure
-
-export type CanFastApplyPatchResult =
-  | { ok: true; canApply: true }
-  | { ok: true; canApply: false; error: string }
-  | WorktreeMergeFailure
-
-export interface ApplySquashPatchSuccess {
-  ok: true
-  repoRoot: string
-  bytes: number
-  changedFiles: number
-  applied: boolean
-}
-
-export type ApplySquashPatchResult = ApplySquashPatchSuccess | WorktreeMergeFailure
-
-// 冲突三栏:单文件三份内容(基线/worktree/主工作区)。
-// 缺失文件返回空串并置 missing 标记;超限内容截断并置 truncated 标记。
-export interface WorktreeConflictFileContent {
-  path: string
-  base: string
-  worktree: string
-  main: string
-  baseMissing?: boolean
-  worktreeMissing?: boolean
-  mainMissing?: boolean
-  truncated?: boolean
-}
-
-// 单对象可选字段形态(同 GitResult 模式),避免非严格 tsc 下判别联合收窄问题。
-export interface WorktreeConflictFilesResult {
-  ok: boolean
-  files?: WorktreeConflictFileContent[]
-  truncatedList?: boolean
-  error?: string
-}
-
-// 合并回执:applySquashPatch 成功后落盘,供事后验收"到底合了什么"。
-export interface WorktreeMergeReceipt {
-  schemaVersion?: 1
-  sessionId: string
-  branch: string
-  baseSha: string
-  filesChanged: number
-  insertions: number
-  deletions: number
-  mergedAt: number
-  patchSha256: string
-}
-
-export class WorktreeMergeReceiptFormatError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'WorktreeMergeReceiptFormatError'
-  }
-}
-
 // 冲突文件上限与单文件内容上限(需求约定:20 个文件、200KB/文件)。
 const MAX_CONFLICT_FILES = 20
 const MAX_CONFLICT_FILE_BYTES = 200 * 1024
@@ -120,22 +68,6 @@ const MAX_CONFLICT_FILE_BYTES = 200 * 1024
 const MAX_MERGE_RECEIPTS = 200
 const MERGE_RECEIPT_SCHEMA_VERSION = 1 as const
 const MERGE_RECEIPT_FORMAT = 'caogen.worktree-merge-receipts.v1' as const
-
-export type PullRequestTool = 'gh' | 'glab'
-
-export interface CreatePullRequestOptions {
-  repoRoot: string
-  worktreePath: string
-  branch: string
-  title: string
-  body?: string
-  baseBranch?: string | null
-}
-
-export type CreatePullRequestResult =
-  | { ok: true; created: true; tool: PullRequestTool; branch: string; url: string; pushed: boolean }
-  | { ok: true; created: false; message: string }
-  | WorktreeMergeFailure
 
 // 拒绝直接向这些分支推送/建 PR,遵守 git-safety(绝不直接动 main/master)。
 const PROTECTED_BRANCHES = new Set(['main', 'master', 'HEAD'])
@@ -394,6 +326,21 @@ export function listMergeReceipts(filePath: string): WorktreeMergeReceipt[] {
   }
 }
 
+/** Remove terminal merge display receipts for one deleted Session. */
+export function purgeMergeReceiptsForSession(filePath: string, sessionId: string): number {
+  const id = sessionId.trim()
+  if (!id) throw new Error('merge receipt Session ID is required')
+  const receipts = listMergeReceipts(filePath)
+  const next = receipts.filter((receipt) => receipt.sessionId !== id)
+  if (next.length === receipts.length) return 0
+  writeDurableFileSync(filePath, `${JSON.stringify({
+    schemaVersion: MERGE_RECEIPT_SCHEMA_VERSION,
+    format: MERGE_RECEIPT_FORMAT,
+    receipts: next
+  }, null, 2)}\n`, { mode: 0o600 })
+  return receipts.length - next.length
+}
+
 function decodeMergeReceiptDocument(value: unknown): { receipts: unknown[]; legacy: boolean } {
   if (Array.isArray(value)) return { receipts: value, legacy: true }
   if (!value || typeof value !== 'object') throw new WorktreeMergeReceiptFormatError('worktree merge receipt document is invalid')
@@ -552,6 +499,7 @@ function commandExists(command: string): boolean {
   const probe = process.platform === 'win32' ? 'where' : 'which'
   try {
     execFileSync(probe, [command], {
+      env: buildMinimalSubprocessEnv(),
       stdio: 'ignore',
       timeout: GIT_TIMEOUT_MS
     })
@@ -569,6 +517,7 @@ function runPrTool(
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
+    env: buildMinimalSubprocessEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: MAX_GIT_BUFFER
@@ -791,6 +740,7 @@ function runGit(
     cwd,
     input: options.input,
     encoding: 'utf8',
+    env: isolatedLocalGitEnv(process.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: MAX_GIT_BUFFER

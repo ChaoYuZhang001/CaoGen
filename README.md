@@ -6,11 +6,13 @@
 
 # CaoGen
 
-## 多厂商 AI 工作桌面——用你自己的 key 跑所选模型，一个服务不可用时按策略切换。
+## 用你自己的 Key，在本地让 AI 完成真实工作；服务不可用时按策略切换，改动全程可审查。
 
-<img src="https://img.shields.io/badge/version-v0.1.7-blue" alt="version">
+<img src="https://img.shields.io/badge/release-v0.1.7-blue" alt="latest public release v0.1.7">
+<img src="https://img.shields.io/badge/source-v0.1.8--dev-orange" alt="current source line v0.1.8 development">
 <img src="https://img.shields.io/badge/license-AGPL--3.0--only-green" alt="AGPL-3.0-only">
-<img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20build-lightgrey" alt="platform">
+<img src="https://img.shields.io/badge/macOS-Intel%20x64%20signed-success" alt="macOS Intel x64 signed and notarized">
+<img src="https://img.shields.io/badge/Windows-x64%20unsigned%20preview-yellow" alt="Windows x64 unsigned preview">
 <img src="https://img.shields.io/badge/Electron-40-informational" alt="Electron 40">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 
@@ -20,46 +22,48 @@
 
 </div>
 
-## 这是什么
+## CaoGen 能帮你做什么
 
-CaoGen 是一个开源、厂商中立、本地优先的 AI 工作桌面，把多厂商模型、你的本地项目和完成任务所需的工具放在同一个 Electron 应用里。用户使用自己的 API Key，Provider 是可替换的算力，项目目录、worktree、工具与审查流程留在自己的桌面工作流中。
+CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面。用户使用自己的 API Key 连接已配置的模型服务商，在一个桌面里处理多模型、多项目、多文件、多任务、多工具；服务异常时按策略尝试备用 Key 或兼容服务，项目、记录和审查流程仍由 CaoGen 持有。
 
-CaoGen 面向需要完成真实任务的用户，把多模型、多项目、多文件、多任务、多工具统一到一个可审查的本地工作区。
+它面向两类人：
 
-> “所选模型”指通过 CaoGen 当前支持的 OpenAI-compatible 或 Anthropic Messages 原生 HTTP 运行时接入；实际可用性取决于模型服务的协议兼容性、账号、网络和额度。基础发行包不嵌入外部 Agent SDK 或 CLI。
+- **想用 AI 完成日常工作的人**：整理资料、写文档、做研究、处理表格和检查最终产物，不必先理解模型路由、Git 或任务图。
+- **管理多项目和多把 Key 的专业用户**：在同一工作台查看会话、终端、文件、浏览器、Diff、Git、worktree、成本和审批。
 
-| 能力 | CaoGen 当前实现 | 证据边界 |
-|---|---|---|
-| Provider 与模型 | 多 Provider、BYOK、自定义兼容服务 | 只保证已配置且协议兼容的目标 |
-| 故障恢复 | 备用 Key 与已配置 Provider 间的受控 failover | 外部账号、网络和额度仍可能阻断请求 |
-| 本地工作流 | 本地项目、Git worktree、Diff、终端和文件工具 | 高风险操作仍受权限与验收门禁约束 |
-| 开放性 | AGPL-3.0-only 开源并提供独立商业授权 | v0.1.7 macOS Intel x64 安装包已完成 Developer ID 签名与 Apple 公证 |
+当前公开版本可以：
 
-这张表只描述当前产品结构，不表示所有模型、Provider 或外部网络条件都已验证；精确边界见 [STATUS.md](./STATUS.md)。
+- 配置多个模型服务商、API Key、自定义接口地址和本地兼容服务。
+- 按任务、成本、速度、质量和健康状态选择执行路径，并记录切换原因。
+- 在独立 Git worktree 中执行改动，合并前检查 Diff、冲突、测试和 Patch。
+- 在应用内使用终端、文件、浏览器、Git，以及 PDF、图片和 Office 文档预览。
+- 用 3D 办公区查看真实会话、审批、失败、成本和工作区状态。
 
 ## 当前进展
 
-截至 2026-08-07，当前结构投影为：PRD 64 个 P0 = 21 个已验证 + 30 个部分完成 + 12 个立项目标 + 1 个仅达到基础。它不是版本完成率，也不构成发布绑定；已发布的 `v0.1.7` 是 macOS Intel 签名楔子版，不是 1.0 stable，正式跨平台 Release Gate 仍为 blocked。精确边界见 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md) 与 [STATUS.md](./STATUS.md)。
+<!-- caogen-public-status:start -->
+截至 2026-08-14，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
+<!-- caogen-public-status:end -->
+
+这不是版本完成率或发布承诺。已发布的 `v0.1.7` 不是 1.0 stable；完整证据和边界统一放在 [STATUS.md](./STATUS.md) 与 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)。公共数字由 `npm run update:public-status` 从 PRD 状态和 STATUS 日期生成，不应手工修改。
 
 > **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
-
-## 当前核心能力
-
-- **连接多种 Provider 并 BYOK**：配置多个 Provider、多个 API Key、自定义 Base URL、中转站或本地 OpenAI-compatible 服务，覆盖 DeepSeek、Kimi、GLM 等常见兼容模型来源。
-- **按策略路由并自动切换**：根据模型能力、成本、速度、预算与健康状态选择目标；遇到额度、限流、服务端或网络类可恢复错误时，先尝试备用 Key，再切到已配置的健康 Provider。
-- **隔离任务改动**：为会话创建独立 Git worktree，在合并前查看 Diff、检查冲突、导出或应用 patch，不满意可以直接丢弃隔离工作区。
-- **在工作台完成任务**：在应用内使用终端、文件浏览、文本编辑、浏览器、Diff、Git，以及 HTML/Markdown/JSON/CSV/图片/PDF/Office 文档预览。
-- **查看 3D 办公区**：用真实会话状态展示运行、等待审批、完成、失败、Provider、成本、子任务与 worktree/Git 信号；当前发布的是机器人办公区，不是路线图中的水墨角色形态。
 
 ![CaoGen 3D 办公区](./docs/screenshot-office.jpg)
 
 ## Quick Start
 
-1. **下载**：macOS Intel x64 请下载已签名、公证的 [v0.1.7](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7)；Windows x64 仍使用 v0.1.5。当前没有 macOS Apple Silicon arm64 或 Linux 的现行发布资产。
+| 平台 | 当前入口 | 信任状态 |
+|---|---|---|
+| macOS Intel x64 | [v0.1.7 DMG / ZIP](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | Developer ID 签名、Apple 公证 |
+| Windows x64 | [v0.1.7 unsigned preview](https://github.com/ChaoYuZhang001/CaoGen/releases/tag/v0.1.7) | 未签名，Windows 会显示未知发布者 |
+| macOS Apple Silicon / Linux | 暂无现行安装包 | 从源码构建 |
+
+1. **下载并核对来源**：只使用本仓库的 GitHub Releases，并按 Release Notes 核对 SHA-256。
 2. **添加 Provider 和 Key**：打开设置，选择 Provider 模板或填写兼容服务的 Base URL，再添加你自己的 API Key。密钥不会提交到本仓库。
 3. **开始第一个任务**：新建会话，选择本地项目目录或使用“未关联项目”，然后输入：`先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。`
 
-> v0.1.7 macOS Intel x64 安装包已完成 Developer ID 签名、Apple 公证与 Gatekeeper 验证；但当前公开 Release 的资产集合和正文已偏离仓库批准合同，完整性审计仍失败。Windows x64 v0.1.5 是保留的旧版本；未来 Windows 资产只能在原生审计后以文件名和说明均明确标注的 `unsigned preview` 发布，且不能计入正式跨平台门禁。请仅从本项目 Releases 下载并核对对应 Release 说明，最新证据以 [STATUS.md](./STATUS.md) 为准。
+> macOS 与 Windows 的签名状态不同；平台例外、发布审计和后续候选状态集中记录在 [STATUS.md](./STATUS.md)，不在 Quick Start 中展开内部发布流程。
 
 从源码运行：
 

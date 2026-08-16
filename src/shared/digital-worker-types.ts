@@ -440,18 +440,139 @@ export interface DigitalWorkerHistoryRun {
   errorDigest?: string
 }
 
-export interface DigitalWorkerHistorySnapshot {
+export interface DigitalWorkerHistoryAssignment {
   schemaVersion: 1
-  format: 'caogen.digital-worker-history.v1'
+  id: string
+  projectId: string
+  workItemId: string
+  assigneeKind: AssignmentAssigneeKind
+  assigneeId: string
+  assignedAt: number
+  releasedAt?: number
+  status: AssignmentStatus
+  revision: number
+  assignedByDigest: string
+  scopeDigest: string
+  reasonDigest?: string
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryLease {
+  schemaVersion: 1
+  id: string
+  projectId: string
+  workItemId: string
+  assignmentId: string
+  workerId: string
+  fencingToken: number
+  acquiredAt: number
+  expiresAt: number
+  releasedAt?: number
+  status: WorkerLeaseStatus
+  revision: number
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryArtifact {
+  schemaVersion: 1
+  id: string
+  projectId?: string
+  goalId?: string
+  workItemId?: string
+  runId?: string
+  kind: WorkflowArtifactRecord['kind']
+  version: number
+  digest: string
+  provenance: WorkflowArtifactRecord['provenance']
+  createdAt: number
+  updatedAt: number
+  supersedesId?: string
+  titleDigest: string
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryEvidence {
+  schemaVersion: 1
+  origin: 'workflow' | 'task_effect'
+  id: string
+  evidenceId: string
+  projectId?: string
+  goalId?: string
+  workItemId?: string
+  runId?: string
+  artifactId?: string
+  kind?: string
+  source?: WorkflowEvidenceRecord['source']
+  observedAt: number
+  createdAt?: number
+  contentDigest?: string
+  evidenceDigest?: string
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryEvidenceLink {
+  schemaVersion: 1
+  id: string
+  evidenceId: string
+  projectId?: string
+  runId?: string
+  artifactId?: string
+  acceptanceId?: string
+  criterionId?: string
+  evidenceOrigin?: WorkflowEvidenceLinkRecord['evidenceOrigin']
+  relation: WorkflowEvidenceLinkRecord['relation']
+  createdAt: number
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryAcceptance {
+  schemaVersion: 1
+  id: string
+  projectId?: string
+  goalId?: string
+  workItemId?: string
+  status: WorkflowAcceptanceRecord['status']
+  evidenceRefs: string[]
+  revision: number
+  createdAt: number
+  updatedAt: number
+  verifiedAt?: number
+  criterionCount: number
+  criteriaDigest: string
+  criterionPoliciesDigest?: string
+  criterionEvidenceDigest?: string
+  recordDigest: string
+}
+
+export interface DigitalWorkerHistoryAuditEvent {
+  schemaVersion: 1
+  id: string
+  source: 'digital_worker' | 'workflow_ledger'
+  kind: string
+  entityType: string
+  entityId: string
+  workerId: string
+  occurredAt: number
+  workItemId?: string
+  assignmentId?: string
+  leaseId?: string
+  runId?: string
+  eventDigest: string
+}
+
+export interface DigitalWorkerHistorySnapshot {
+  schemaVersion: 2
+  format: 'caogen.digital-worker-history.v2'
   generatedAt: number
   worker: Pick<DigitalWorker, 'id' | 'projectId' | 'roleTemplateId' | 'displayName' | 'status' | 'createdAt' | 'updatedAt' | 'retiredAt' | 'revision'>
-  assignments: DigitalWorkerAssignment[]
-  leases: DigitalWorkerLease[]
+  assignments: DigitalWorkerHistoryAssignment[]
+  leases: DigitalWorkerHistoryLease[]
   runs: DigitalWorkerHistoryRun[]
-  artifacts: WorkflowArtifactRecord[]
-  evidence: Array<WorkflowEvidenceRecord | WorkflowLedgerExportTaskEvidenceRecord>
-  evidenceLinks: WorkflowEvidenceLinkRecord[]
-  acceptances: WorkflowAcceptanceRecord[]
+  artifacts: DigitalWorkerHistoryArtifact[]
+  evidence: DigitalWorkerHistoryEvidence[]
+  evidenceLinks: DigitalWorkerHistoryEvidenceLink[]
+  acceptances: DigitalWorkerHistoryAcceptance[]
+  audit: DigitalWorkerHistoryAuditEvent[]
   summary: {
     assignments: number
     leases: number
@@ -460,6 +581,7 @@ export interface DigitalWorkerHistorySnapshot {
     evidence: number
     evidenceLinks: number
     acceptances: number
+    audit: number
   }
   integrity: {
     complete: true
@@ -469,8 +591,8 @@ export interface DigitalWorkerHistorySnapshot {
 }
 
 export interface DigitalWorkerHistoryExport {
-  schemaVersion: 1
-  format: 'caogen.digital-worker-history.export.v1'
+  schemaVersion: 2
+  format: 'caogen.digital-worker-history.export.v2'
   workerId: string
   projectId: string
   json: string

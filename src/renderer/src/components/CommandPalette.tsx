@@ -15,9 +15,23 @@ interface PaletteItem extends CommandDescriptor {
   section: PaletteSection
 }
 
+function useCloseOnEscape(setVisible: (visible: boolean) => void): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      setVisible(false)
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [setVisible])
+}
+
 export default function CommandPalette(): React.JSX.Element {
   const t = useT()
-  const projection = useStore((s) => s.experienceMode)
+  const experienceMode = useStore((s) => s.experienceMode)
+  const projection = experienceMode === 'studio' ? 'studio' : 'assistant'
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -53,6 +67,7 @@ export default function CommandPalette(): React.JSX.Element {
   useEffect(() => {
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
+  useCloseOnEscape(setShowCommandPalette)
 
   useEffect(() => {
     if (!pluginRegistry && !pluginRegistryLoading) void loadPluginRegistryForSlash()
@@ -189,11 +204,6 @@ export default function CommandPalette(): React.JSX.Element {
   }
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      close()
-      return
-    }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActiveIndex((i) => (matches.length === 0 ? 0 : (i + 1) % matches.length))

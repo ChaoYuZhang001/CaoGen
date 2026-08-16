@@ -1,5 +1,6 @@
 import type { EffectTarget, FileSystemIdentity } from '../../shared/types'
 import { isManagedPluginEffectTarget } from '../plugin/plugin-effect-target-validation'
+import { isAbsolute } from 'node:path'
 
 export function isEffectTarget(value: unknown): value is EffectTarget {
   if (!isRecord(value)) return false
@@ -21,7 +22,87 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
   if (value.kind === 'mcp_tool_call') return isMcpToolCallTarget(value)
   if (value.kind === 'webhook_message_send') return isWebhookMessageTarget(value)
   if (value.kind === 'office_artifact') return isOfficeArtifactTarget(value)
+  if (value.kind === 'migration_operation') return isMigrationOperationTarget(value)
+  if (value.kind === 'project_portable_export') return isProjectPortableExportTarget(value)
+  if (value.kind === 'project_portable_import') return isProjectPortableImportTarget(value)
+  if (value.kind === 'project_permanent_deletion') return isProjectPermanentDeletionTarget(value)
+  if (value.kind === 'provider_profile_operation') return isProviderProfileOperationTarget(value)
+  if (value.kind === 'media_job_operation') return isMediaJobOperationTarget(value)
   return value.kind === 'unsupported' && isString(value.toolName)
+}
+
+function isMediaJobOperationTarget(record: Record<string, unknown>): boolean {
+  const operations = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose']
+  const statuses = ['submitting', 'running', 'downloading', 'succeeded', 'failed', 'cancelled', 'waiting_reconciliation']
+  const identifiers = [
+    'mediaJobId', 'externalJobId', 'projectId', 'goalId', 'workItemId', 'runId'
+  ]
+  const artifactFields = ['artifactId', 'evidenceId', 'acceptanceId']
+  const hasArtifactFields = artifactFields.every((key) => isString(record[key]))
+  const noArtifactFields = artifactFields.every((key) => record[key] === undefined)
+  return operations.includes(String(record.operation)) && statuses.includes(String(record.expectedStatus)) &&
+    identifiers.every((key) => isString(record[key])) && isSha256(record.idempotencyKeyDigest) &&
+    (['download', 'asset_import', 'compose'].includes(String(record.operation)) ? hasArtifactFields : hasArtifactFields || noArtifactFields)
+}
+
+function isProviderProfileOperationTarget(record: Record<string, unknown>): boolean {
+  const operations = ['profile_import', 'backup_restore', 'backup_delete', 'sync_publish', 'sync_apply']
+  const transports = ['local', 'folder', 'webdav', 's3']
+  const identifiers = [
+    'projectId', 'goalId', 'workItemId', 'runId', 'artifactId', 'evidenceId', 'acceptanceId'
+  ]
+  return operations.includes(String(record.operation)) && transports.includes(String(record.transport)) &&
+    identifiers.every((key) => isString(record[key])) &&
+    (record.operation !== 'backup_delete' || isSha256(record.backupIdDigest))
+}
+
+function isProjectPortableExportTarget(record: Record<string, unknown>): boolean {
+  const keys = [
+    'projectId', 'goalId', 'workItemId', 'runId', 'artifactId', 'evidenceId', 'acceptanceId'
+  ]
+  return record.format === 'caogen.project-aggregate.v1' && keys.every((key) => isString(record[key]))
+}
+
+function isProjectPortableImportTarget(record: Record<string, unknown>): boolean {
+  const keys = [
+    'operationId', 'importedProjectId', 'projectId', 'goalId', 'workItemId', 'runId',
+    'artifactId', 'evidenceId', 'acceptanceId'
+  ]
+  return record.format === 'caogen.project-aggregate.v1' && keys.every((key) => isString(record[key])) &&
+    isSha256(record.exportDigest) && isSha256(record.sourceAggregateDigest)
+}
+
+function isProjectPermanentDeletionTarget(record: Record<string, unknown>): boolean {
+  const keys = [
+    'deletionOperationId', 'deletedProjectId', 'projectId', 'goalId', 'workItemId', 'runId',
+    'artifactId', 'evidenceId', 'acceptanceId'
+  ]
+  return keys.every((key) => isString(record[key])) &&
+    Number.isSafeInteger(record.expectedWorkspaceRevision) && Number(record.expectedWorkspaceRevision) >= 1
+}
+
+function isSha256(value: unknown): boolean {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+function isMigrationOperationTarget(record: Record<string, unknown>): boolean {
+  if (!isRecord(record.kindCounts)) return false
+  const kindCountKeys = ['rules', 'mcp', 'config', 'skill', 'prompt', 'usage', 'hook', 'memory', 'routine', 'channel']
+  const counts = record.kindCounts
+  return [
+    record.operation === 'apply' || record.operation === 'rollback',
+    record.backupRef === 'caogen-private:migration-backups' ||
+      (isString(record.backupRoot) && isAbsolute(record.backupRoot)),
+    record.backupRef === undefined || record.backupRef === 'caogen-private:migration-backups',
+    record.backupRoot === undefined || (isString(record.backupRoot) && isAbsolute(record.backupRoot)),
+    typeof record.backupId === 'string' && /^[A-Za-z0-9._-]{1,120}$/.test(record.backupId),
+    isNonNegativeInteger(record.assetCount),
+    Object.keys(counts).length === kindCountKeys.length,
+    kindCountKeys.every((key) => isNonNegativeInteger(counts[key])),
+    Object.values(counts).reduce<number>((sum, value) => sum + Number(value), 0) === record.assetCount,
+    typeof record.selectionDigest === 'string' && /^[a-f0-9]{64}$/.test(record.selectionDigest),
+    record.expectedState === (record.operation === 'apply' ? 'committed' : 'rolled_back')
+  ].every(Boolean)
 }
 
 function isGuiPostconditionTarget(record: Record<string, unknown>): boolean {
@@ -367,6 +448,10 @@ function isMcpToolCallTarget(record: Record<string, unknown>): boolean {
     record.commandArgs === undefined || isStringArray(record.commandArgs),
     isOptionalString(record.url),
     isString(record.serverIdentityDigest),
+    isOptionalString(record.pluginRegistryItemKey),
+    isOptionalString(record.pluginContentDigest),
+    isOptionalString(record.pluginCapabilityDigest),
+    isOptionalString(record.pluginServerId),
     isString(record.discoveryDigest),
     isString(record.toolName),
     isString(record.toolArgumentsDigest),

@@ -204,12 +204,15 @@ async function waitForCameraPreset(page, expected, timeout = 5_000) {
 
 async function waitForFacilitySelection(page, expected, timeout) {
   const deadline = Date.now() + timeout
-  let last = { selected: '', panel: '', preset: '' }
+  let last = { selected: '', panel: '', preset: '', hitSeq: 0, hitKind: '', hitId: '' }
   while (Date.now() < deadline) {
     last = await page.evaluate(() => ({
       selected: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-selected-facility') ?? '',
       panel: document.querySelector('.office-facility-panel')?.getAttribute('data-office-facility-panel') ?? '',
-      preset: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''
+      preset: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? '',
+      hitSeq: Number(document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-last-hit-seq') ?? 0),
+      hitKind: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-last-hit-kind') ?? '',
+      hitId: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-last-hit-id') ?? ''
     }))
     if (last.selected === expected && last.panel === expected) return last
     if (last.selected && last.selected !== expected) return last

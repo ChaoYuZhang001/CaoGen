@@ -17,6 +17,8 @@ import { normalizeToolName, stableValueDigest } from './tool-idempotency'
 export const EFFECT_LEASE_TTL_MS = 30 * 60 * 1000
 
 export interface EffectExecutionHandle {
+  /** Optional application-owned data root; omitted for ordinary Agent tools. */
+  rootDir?: string
   sessionId: string
   effectId: string
   effectKey: string
@@ -478,9 +480,24 @@ function buildResourceKey(
     })}`
   }
   if (target.kind === 'mcp_tool_call') {
+    if (
+      !target.pluginRegistryItemKey || !target.pluginContentDigest ||
+      !target.pluginCapabilityDigest || !target.pluginServerId
+    ) {
+      return `resource-v1:${stableValueDigest({
+        scope: 'mcp-tool-call',
+        serverIdentityDigest: target.serverIdentityDigest,
+        toolName: target.toolName,
+        toolArgumentsDigest: target.toolArgumentsDigest
+      })}`
+    }
     return `resource-v1:${stableValueDigest({
-      scope: 'mcp-tool-call',
+      scope: 'mcp-tool-call-plugin-bound-v2',
       serverIdentityDigest: target.serverIdentityDigest,
+      pluginRegistryItemKey: target.pluginRegistryItemKey,
+      pluginContentDigest: target.pluginContentDigest,
+      pluginCapabilityDigest: target.pluginCapabilityDigest,
+      pluginServerId: target.pluginServerId,
       toolName: target.toolName,
       toolArgumentsDigest: target.toolArgumentsDigest
     })}`
@@ -490,6 +507,12 @@ function buildResourceKey(
       scope: 'webhook-message',
       connectorId: target.connectorId,
       payloadDigest: target.payloadDigest
+    })}`
+  }
+  if (target.kind === 'media_job_operation') {
+    return `resource-v1:${stableValueDigest({
+      scope: 'media-job',
+      mediaJobId: target.mediaJobId
     })}`
   }
   return `resource-v1:${stableValueDigest({

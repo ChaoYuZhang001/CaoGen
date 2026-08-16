@@ -12,10 +12,12 @@ const require = createRequire(import.meta.url)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-acceptance-repair-'))
 const outDir = path.join(tempRoot, 'compiled')
 const userData = path.join(tempRoot, 'user-data')
+const appUserData = path.join(tempRoot, 'app-user-data')
 
 process.env.NODE_PATH = path.join(repoRoot, 'node_modules')
 require('node:module').Module._initPaths()
 mkdirSync(userData, { recursive: true })
+mkdirSync(appUserData, { recursive: true })
 
 try {
   compileSources()
@@ -23,6 +25,7 @@ try {
   const api = await loadCompiled('workflow-ledger-api.js')
   const handlers = await loadCompiled('workflow-ledger-handlers.js')
   const repairRuntime = await loadCompiled('workflow-acceptance-repair-coordinator.js')
+  const repairExecutionRuntime = await loadCompiled('workflow-acceptance-repair-runtime.js')
   const projectStoreApi = await loadCompiledAt('main/project-workspace/store.js')
   const projectCommandsApi = await loadCompiledAt('main/project-workspace/command-service.js')
 
@@ -135,23 +138,17 @@ try {
   }, authority('repair-reviewer', 1_650), userData)
   assert.equal(repairAcceptance.acceptance.status, 'passed')
 
-  let completedRepair = await commands.setWorkItemAcceptance(firstRepairId, {
-    status: 'passed',
-    evidenceRefs: ['repair-result-proof'],
-    verifiedBy: 'repair-reviewer',
-    verifiedAt: 1_700
-  })
-  completedRepair = await commands.acquireWorkItemLease(firstRepairId, {
-    expectedRevision: completedRepair.revision,
-    ownerId: completedRepair.owner.id
-  })
-  completedRepair = await commands.transitionWorkItem(firstRepairId, 'running', completedRepair.revision)
-  completedRepair = await commands.transitionWorkItem(firstRepairId, 'verifying', completedRepair.revision)
-  completedRepair = await commands.transitionWorkItem(firstRepairId, 'done', completedRepair.revision)
+  const completedRepair = await store.getWorkItem(firstRepairId)
+  assert(completedRepair)
   assert.equal(completedRepair.status, 'done')
+  assert.equal(completedRepair.lease, undefined, 'automatic repair settlement must clear its execution lease')
+  assert.equal(completedRepair.acceptance?.status, 'passed')
+  assert.deepEqual(completedRepair.acceptance?.evidenceRefs, [repairEvidence.evidenceId])
 
-  const authorizedPlan = await coordinator.prepareRetest(failedResult.acceptance, { updatedAt: 1_900 })
-  assert.deepEqual(authorizedPlan.acceptanceInput.criterionPolicies, acceptance.criterionPolicies)
+  const authorizedPlan = {
+    previousAcceptance: failedResult.acceptance,
+    failedAcceptanceRevision: failedResult.acceptance.revision
+  }
   repairRuntime.assertWorkflowAcceptanceRetestPlanCurrent(failedResult.acceptance, authorizedPlan)
   assert.throws(
     () => repairRuntime.assertWorkflowAcceptanceRetestPlanCurrent({
@@ -161,19 +158,21 @@ try {
     (error) => error?.code === 'WORKFLOW_REPAIR_REVISION_CONFLICT'
   )
 
-  const retested = await handlers.reviewWorkflowAcceptance({
-    acceptanceId: acceptance.id,
-    criterionEvidence: [],
-    decision: 'retest',
-    notes: 'repair completed'
-  }, authority('reviewer', 2_000), userData)
-  assert.equal(retested.acceptance.status, 'verifying')
-  assert.deepEqual(retested.acceptance.criterionPolicies, acceptance.criterionPolicies)
-  assert.deepEqual(retested.acceptance.evidenceRefs, [])
-  assert.equal(retested.acceptance.criterionEvidence, undefined)
-  assert.equal(retested.acceptance.verifier, undefined)
-  assert.equal(retested.repair?.workItemId, firstRepairId)
-  assert.equal(retested.repair?.disposition, 'completed')
+  const retested = (await api.listWorkflowLedger({ projectId: source.projectId }, userData))
+    .acceptances.items.find((item) => item.id === acceptance.id)
+  assert(retested)
+  assert.equal(retested.status, 'verifying')
+  assert.deepEqual(retested.criterionPolicies, acceptance.criterionPolicies)
+  assert.deepEqual(retested.evidenceRefs, [])
+  assert.equal(retested.criterionEvidence, undefined)
+  assert.equal(retested.verifier, undefined)
+  await verifyStartFailureCompensation(
+    repairExecutionRuntime,
+    commands,
+    store,
+    failedResult.acceptance,
+    source
+  )
 
   const secondEvidence = await createEvidence(api, source, 'repair-review-evidence-2', 'b')
   const failedAgain = await handlers.reviewWorkflowAcceptance({
@@ -243,6 +242,34 @@ try {
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
+async function verifyStartFailureCompensation(runtime, commands, store, acceptance, source) {
+  const item = await commands.createWorkItem({
+    id: 'repair-start-failure',
+    projectId: source.projectId,
+    goalId: source.goalId,
+    parentId: source.id,
+    type: 'custom',
+    title: 'Repair start failure compensation',
+    status: 'ready',
+    owner: source.owner,
+    acceptanceSpec: [{ id: 'start-failure-criterion', criterion: 'start succeeds', required: true }]
+  })
+  await assert.rejects(
+    runtime.startWorkflowAcceptanceRepair({
+      rootDir: userData,
+      activeSessionForWorkItem: () => undefined,
+      snapshots: async () => [],
+      createManaged: async () => { throw new Error('fixture repair Session creation failure') },
+      send: async () => true
+    }, acceptance, item, 'repair fixture'),
+    /fixture repair Session creation failure/
+  )
+  const compensated = await store.getWorkItem(item.id)
+  assert(compensated)
+  assert.equal(compensated.status, 'blocked')
+  assert.equal(compensated.lease, undefined, 'failed repair Session creation must not leak its execution lease')
+}
+
 async function createEvidence(api, source, evidenceId, digestCharacter) {
   return api.createWorkflowEvidence({
     evidenceId,
@@ -296,6 +323,7 @@ function compileSources() {
     'src/main/task/workflow-ledger-store.ts',
     'src/main/task/workflow-acceptance-guard.ts',
     'src/main/task/workflow-acceptance-repair-coordinator.ts',
+    'src/main/task/workflow-acceptance-repair-runtime.ts',
     'src/main/project-workspace/store.ts',
     'src/main/project-workspace/command-service.ts',
     'src/main/ipc/workflow-ledger-handlers.ts',
@@ -313,7 +341,7 @@ function installElectronStub() {
   const electronDir = path.join(outDir, 'node_modules', 'electron')
   mkdirSync(electronDir, { recursive: true })
   writeFileSync(path.join(electronDir, 'index.js'), [
-    `export const app = { getPath: () => ${JSON.stringify(userData)} }`,
+    `export const app = { getPath: () => ${JSON.stringify(appUserData)} }`,
     'export const ipcMain = { handle() {} }',
     'export const BrowserWindow = { getAllWindows: () => [] }'
   ].join('\n') + '\n')

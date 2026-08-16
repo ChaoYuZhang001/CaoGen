@@ -27,6 +27,7 @@ export interface OpenAIModelAttemptFetch<T> {
   init: RequestInit
   signal: AbortSignal
   auth: OpenAIModelAttemptAuth
+  canonicalContextDigest?: string
   readUsage: () => UsageTotals | undefined
   estimateCost?: (usage: ModelAttemptUsage | undefined) => number | undefined
   consume: (response: Response) => Promise<T>
@@ -117,6 +118,7 @@ export class OpenAIModelAttemptTracker {
           protocol: input.protocol,
           adapterVersion: 'openai-engine-v1',
           context: { url: input.url, method: input.init.method ?? 'GET', body: input.init.body },
+          contextDigest: input.canonicalContextDigest,
           routeReason: this.attemptRouteReason(failoverFromAttemptId),
           keyIdentity: { providerId: input.providerId, ...input.auth },
           failoverFromAttemptId

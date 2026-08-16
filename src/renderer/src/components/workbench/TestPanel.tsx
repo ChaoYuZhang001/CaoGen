@@ -101,10 +101,13 @@ function TestResult(props: {
         <span>{t('projectTestsDuration')}: {formatDuration(result.durationMs)}</span>
         <span>{t('projectTestsExitCode')}: {result.exitCode ?? '-'}</span>
       </div>
-      {result.evidenceId && (
+      {(result.evidenceId || result.workflowArtifactId) && (
         <div className="test-evidence" data-project-test-evidence>
           <span>{t('projectTestsEvidence')}</span>
-          <code>{result.evidenceId}</code>
+          {result.evidenceId && <code>{result.evidenceId}</code>}
+          {result.workflowArtifactId && <code>Artifact: {result.workflowArtifactId}</code>}
+          {result.workflowEvidenceId && <code>Evidence: {result.workflowEvidenceId}</code>}
+          {result.workflowAcceptanceId && <code>Acceptance: {result.workflowAcceptanceId}</code>}
         </div>
       )}
       {result.evidenceError && (

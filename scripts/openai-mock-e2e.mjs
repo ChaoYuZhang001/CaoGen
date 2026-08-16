@@ -106,11 +106,6 @@ try {
     await waitForText(cdp, '新建会话')
     await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await clickByText(cdp, '工作台')
-    await clickByText(cdp, '会话与工具')
-    await clickByText(cdp, '指定模型')
-    await chooseSelectOptionByText(cdp, 'CaoGen OpenAI Mock')
-    await chooseSelectOptionByText(cdp, 'mock-responses')
     await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', prompt)
     await screenshot(cdp, '01-new-session-openai-mock')
   })
@@ -118,12 +113,12 @@ try {
   await check(cdp, 'session can be created without real API key', async () => {
     await clickCreateSession(cdp, projectDir)
     await waitForText(cdp, projectDir, 10_000)
-    await waitForText(cdp, '厂商 CaoGen OpenAI Mock', 10_000)
-    await waitForDomValue(cdp, '[data-session-model-select="true"]', 'mock-responses', 10_000)
+    const session = await waitForSessionMeta(cdp, (meta) => meta.cwd === projectDir, 10_000)
+    assert(session.providerId === 'mock-openai', `wrong session provider: ${session.providerId}`)
+    assert(session.model === 'mock-responses', `wrong session model: ${session.model}`)
   })
 
   await check(cdp, 'real UI send receives streamed OpenAI Responses reply', async () => {
-    await waitForText(cdp, '已切换 → 备用密钥', 15_000)
     await waitForText(cdp, expected, 15_000)
     await waitForText(cdp, '本轮完成', 10_000)
   })
@@ -146,7 +141,8 @@ try {
 
   await check(cdp, 'failed primary key persists sanitized state and backup becomes active', async () => {
     const providerFile = path.join(userDataDir, 'providers.json')
-    const providers = JSON.parse(readFileSync(providerFile, 'utf8'))
+    const storedProviders = JSON.parse(readFileSync(providerFile, 'utf8'))
+    const providers = Array.isArray(storedProviders) ? storedProviders : storedProviders.entries
     const provider = providers.find((item) => item.id === 'mock-openai')
     assert(provider?.activeKeyId === 'backup-key', `backup key did not become active: ${provider?.activeKeyId}`)
     const primary = provider?.apiKeys?.find((item) => item.id === 'primary-key')
@@ -252,7 +248,7 @@ try {
     await focusComposer(cdp)
     await typeText(cdp, `protocol failover e2e ${runId}`)
     await press(cdp, 'Enter')
-    await waitForText(cdp, '已降级到 Chat Completions', 15_000)
+    await waitForText(cdp, '已自动改用 Chat Completions 重试', 15_000)
     await waitForText(cdp, 'Protocol fallback handled', 15_000)
     const requests = mock.requests.slice(requestOffset).filter((request) => request.kind === 'protocol-failover')
     assert(
@@ -266,6 +262,27 @@ try {
         index > fallbackIndex && entry.event.kind === 'turn-result' && entry.event.isError === false
       )
     }, 10_000)
+  })
+
+  await check(cdp, 'Chat tool continuation uses compatible empty assistant content', async () => {
+    const requestOffset = mock.requests.length
+    await focusComposer(cdp)
+    await typeText(cdp, `chat empty content tool loop e2e ${runId}`)
+    await press(cdp, 'Enter')
+    await waitForText(cdp, 'Chat tool loop handled', 15_000)
+    const requests = mock.requests.slice(requestOffset).filter((request) => request.kind === 'chat-empty-content-tool-loop')
+    assert(requests.length === 2, `expected tool request + continuation, got ${requests.length}`)
+    assert(requests.every((request) => request.url === '/v1/chat/completions'), 'tool loop must stay on Chat Completions')
+    const assistantToolMessage = requests[1].body?.messages?.find((message) =>
+      message?.role === 'assistant' && Array.isArray(message?.tool_calls)
+    )
+    assert(assistantToolMessage?.content === '', 'empty assistant tool-call content must be an empty string')
+    assert(
+      requests[1].body?.messages?.some((message) =>
+        message?.role === 'tool' && message?.tool_call_id === 'call_chat_empty_content'
+      ),
+      'tool result must be included in the continuation request'
+    )
   })
 
   await check(cdp, 'exhausted automatic recovery exits running state and exposes manual takeover', async () => {
@@ -382,105 +399,126 @@ function writeMockUserData(port) {
 
 async function startOpenAiMock() {
   const requests = []
-  const server = http.createServer(async (req, res) => {
-    if (!['/v1/responses', '/v1/chat/completions'].includes(req.url || '') || req.method !== 'POST') {
-      res.writeHead(404)
-      res.end('not found')
-      return
-    }
-    const body = await readJson(req)
-    const prompt = lastRequestText(body)
-    const kind = classifyMockRequest(body, prompt)
-    requests.push({
-      method: req.method,
-      url: req.url,
-      authorization: req.headers.authorization || '',
-      managedCredentialHeaderMatches:
-        req.headers['x-rapidapi-key'] === String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''),
-      rapidApiHostMatches: req.headers['x-rapidapi-host'] === '127.0.0.1',
-      body,
-      kind
-    })
-    if (req.headers.authorization === 'Bearer expired-key') {
-      res.writeHead(401, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'invalid API key' } }))
-      return
-    }
-    if (kind === 'model-failover' && body?.model === 'mock-responses') {
-      res.writeHead(503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'service unavailable for selected model' } }))
-      return
-    }
-    if (kind === 'protocol-failover' && req.url === '/v1/responses') {
-      res.writeHead(404, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'not found' } }))
-      return
-    }
-    if (kind === 'recovery-exhausted') {
-      res.writeHead(503, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: { message: 'service unavailable' } }))
-      return
-    }
-    if (req.url === '/v1/chat/completions') {
-      writeChatTextResponse(res, kind === 'protocol-failover' ? 'Protocol fallback handled' : `Mock Chat OK: ${prompt}`)
-      return
-    }
-    if (kind === 'permission-deny-call') {
-      writeFunctionCallResponse(res, {
-        responseId: 'resp_permission_deny_1',
-        callId: 'call_permission_deny',
-        command: denyCommand
-      })
-      return
-    }
-    if (kind === 'permission-allow-call') {
-      writeFunctionCallResponse(res, {
-        responseId: 'resp_permission_allow_1',
-        callId: 'call_permission_allow',
-        command: allowCommand
-      })
-      return
-    }
-    const reply =
-      kind === 'model-failover'
-        ? 'Model failover handled'
-        : kind === 'permission-deny-output'
-        ? 'Permission deny handled'
-        : kind === 'permission-allow-output'
-          ? 'Permission allow handled'
-          : `Mock Responses OK: ${prompt}`
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive'
-    })
-    for (const piece of reply.match(/.{1,9}/g) || []) {
-      res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: piece })}\n\n`)
-      await sleep(20)
-    }
-    res.write(
-      `data: ${JSON.stringify({
-        type: 'response.completed',
-        response: {
-          id: `resp_mock_caogen_${requests.length}`,
-          output_text: reply,
-          usage: {
-            input_tokens: 33,
-            output_tokens: 11,
-            input_tokens_details: { cached_tokens: 4 }
-          }
-        }
-      })}\n\n`
-    )
-    res.write('data: [DONE]\n\n')
-    res.end()
-  })
+  const server = http.createServer((req, res) => handleOpenAiMockRequest(req, res, requests))
   const port = await findFreePort(8800)
   await new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', resolve)
   })
   return { server, port, requests }
+}
+
+async function handleOpenAiMockRequest(req, res, requests) {
+  if (!['/v1/responses', '/v1/chat/completions'].includes(req.url || '') || req.method !== 'POST') {
+    writeJsonError(res, 404, 'not found')
+    return
+  }
+  const body = await readJson(req)
+  const prompt = lastRequestText(body)
+  const kind = classifyMockRequest(body, prompt)
+  requests.push(recordedMockRequest(req, body, kind))
+  if (writeMockFailure(req, res, body, kind)) return
+  if (writeSpecialMockResponse(req, res, body, kind, prompt)) return
+  await writeMockTextResponse(res, responseText(kind, prompt), requests.length)
+}
+
+function recordedMockRequest(req, body, kind) {
+  return {
+    method: req.method,
+    url: req.url,
+    authorization: req.headers.authorization || '',
+    managedCredentialHeaderMatches:
+      req.headers['x-rapidapi-key'] === String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''),
+    rapidApiHostMatches: req.headers['x-rapidapi-host'] === '127.0.0.1',
+    body,
+    kind
+  }
+}
+
+function writeMockFailure(req, res, body, kind) {
+  if (req.headers.authorization === 'Bearer expired-key') return writeJsonError(res, 401, 'invalid API key')
+  if (kind === 'model-failover' && body?.model === 'mock-responses') {
+    return writeJsonError(res, 503, 'service unavailable for selected model')
+  }
+  if (kind === 'protocol-failover' && req.url === '/v1/responses') return writeJsonError(res, 404, 'not found')
+  if (kind === 'recovery-exhausted') return writeJsonError(res, 503, 'service unavailable')
+  return false
+}
+
+function writeJsonError(res, status, message) {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ error: { message } }))
+  return true
+}
+
+function writeSpecialMockResponse(req, res, body, kind, prompt) {
+  if (req.url === '/v1/chat/completions' && kind === 'chat-empty-content-tool-loop') {
+    const messages = Array.isArray(body?.messages) ? body.messages : []
+    const assistantToolMessage = messages.find((message) =>
+      message?.role === 'assistant' && Array.isArray(message?.tool_calls)
+    )
+    if (!assistantToolMessage) {
+      writeChatToolCallResponse(res, {
+        callId: 'call_chat_empty_content',
+        name: 'read_file',
+        args: { path: 'README.md' }
+      })
+      return true
+    }
+    if (assistantToolMessage.content !== '') {
+      writeJsonError(res, 400, 'assistant tool-call content must be an empty string')
+      return true
+    }
+    writeChatTextResponse(res, 'Chat tool loop handled')
+    return true
+  }
+  if (req.url === '/v1/chat/completions') {
+    writeChatTextResponse(res, kind === 'protocol-failover' ? 'Protocol fallback handled' : `Mock Chat OK: ${prompt}`)
+    return true
+  }
+  if (kind === 'permission-deny-call' || kind === 'permission-allow-call') {
+    const allowed = kind === 'permission-allow-call'
+    writeFunctionCallResponse(res, {
+      responseId: `resp_permission_${allowed ? 'allow' : 'deny'}_1`,
+      callId: `call_permission_${allowed ? 'allow' : 'deny'}`,
+      command: allowed ? allowCommand : denyCommand
+    })
+    return true
+  }
+  return false
+}
+
+function responseText(kind, prompt) {
+  if (kind === 'model-failover') return 'Model failover handled'
+  if (kind === 'permission-deny-output') return 'Permission deny handled'
+  if (kind === 'permission-allow-output') return 'Permission allow handled'
+  return `Mock Responses OK: ${prompt}`
+}
+
+async function writeMockTextResponse(res, reply, requestCount) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  for (const piece of reply.match(/.{1,9}/g) || []) {
+    res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: piece })}\n\n`)
+    await sleep(20)
+  }
+  res.write(`data: ${JSON.stringify(completedTextResponse(reply, requestCount))}\n\n`)
+  res.write('data: [DONE]\n\n')
+  res.end()
+}
+
+function completedTextResponse(reply, requestCount) {
+  return {
+    type: 'response.completed',
+    response: {
+      id: `resp_mock_caogen_${requestCount}`,
+      output_text: reply,
+      usage: { input_tokens: 33, output_tokens: 11, input_tokens_details: { cached_tokens: 4 } }
+    }
+  }
 }
 
 function redactMockRequests(requests) {
@@ -492,12 +530,16 @@ function redactMockRequests(requests) {
 
 function classifyMockRequest(body, prompt) {
   const rawInput = JSON.stringify(body?.input ?? '')
+  const latestUserText = lastUserRequestText(body)
   if (rawInput.includes('function_call_output') && rawInput.includes('call_permission_deny')) return 'permission-deny-output'
   if (rawInput.includes('function_call_output') && rawInput.includes('call_permission_allow')) return 'permission-allow-output'
   if (prompt.includes('permission deny e2e')) return 'permission-deny-call'
   if (prompt.includes('permission allow e2e')) return 'permission-allow-call'
   if (prompt.includes('model failover e2e')) return 'model-failover'
   if (prompt.includes('protocol failover e2e')) return 'protocol-failover'
+  if (latestUserText.includes('chat empty content tool loop e2e')) {
+    return 'chat-empty-content-tool-loop'
+  }
   if (prompt.includes('recovery exhausted e2e')) return 'recovery-exhausted'
   return 'text'
 }
@@ -516,6 +558,31 @@ function writeChatTextResponse(res, reply) {
     completion_tokens: 8,
     prompt_tokens_details: { cached_tokens: 3 }
   } })}\n\n`)
+  res.write('data: [DONE]\n\n')
+  res.end()
+}
+
+function writeChatToolCallResponse(res, { callId, name, args }) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive'
+  })
+  res.write(`data: ${JSON.stringify({
+    choices: [{
+      index: 0,
+      delta: {
+        role: 'assistant',
+        tool_calls: [{
+          index: 0,
+          id: callId,
+          type: 'function',
+          function: { name, arguments: JSON.stringify(args) }
+        }]
+      },
+      finish_reason: 'tool_calls'
+    }]
+  })}\n\n`)
   res.write('data: [DONE]\n\n')
   res.end()
 }
@@ -582,12 +649,56 @@ function lastRequestText(body) {
   return '(empty)'
 }
 
+function lastUserRequestText(body) {
+  const input = Array.isArray(body?.input) ? body.input : []
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    if (input[i]?.role !== 'user') continue
+    const content = Array.isArray(input[i]?.content) ? input[i].content : []
+    const text = content.map((item) => typeof item?.text === 'string' ? item.text : '').filter(Boolean).join('\n')
+    if (text) return text
+  }
+  const messages = Array.isArray(body?.messages) ? body.messages : []
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role !== 'user') continue
+    const content = messages[i]?.content
+    if (typeof content === 'string') return content
+    if (Array.isArray(content)) {
+      const text = content.map((item) => typeof item?.text === 'string' ? item.text : '').filter(Boolean).join('\n')
+      if (text) return text
+    }
+  }
+  return promptTextFromResponsesInput(body)
+}
+
+function promptTextFromResponsesInput(body) {
+  const input = Array.isArray(body?.input) ? body.input : []
+  for (let i = input.length - 1; i >= 0; i -= 1) {
+    const content = Array.isArray(input[i]?.content) ? input[i].content : []
+    for (let j = content.length - 1; j >= 0; j -= 1) {
+      if (typeof content[j]?.text === 'string') return content[j].text
+    }
+  }
+  return '(empty)'
+}
+
 async function latestTranscript(cdp) {
   return evalValue(cdp, `(async () => {
     const sessions = await window.agentDesk.listSessions()
     const transcripts = await Promise.all(sessions.map((session) => window.agentDesk.getTranscript(session.id)))
     return transcripts.sort((left, right) => right.length - left.length)[0] || []
   })()`)
+}
+
+async function waitForSessionMeta(cdp, predicate, timeout = 5000) {
+  const start = Date.now()
+  let sessions = []
+  while (Date.now() - start < timeout) {
+    sessions = await evalValue(cdp, 'window.agentDesk.listSessions()')
+    const match = sessions.find(predicate)
+    if (match) return match
+    await sleep(150)
+  }
+  throw new Error(`session metadata condition not met: ${sessions.length} sessions`)
 }
 
 async function waitForTranscript(cdp, predicate, timeout = 5000) {

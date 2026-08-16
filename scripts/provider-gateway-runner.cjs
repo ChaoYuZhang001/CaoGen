@@ -22,7 +22,7 @@ const openAiProviderTokenB = `openai_b_${crypto.randomBytes(24).toString('base64
 const googleProviderToken = `google_${crypto.randomBytes(24).toString('base64url')}`
 const googleProviderTokenB = `google_b_${crypto.randomBytes(24).toString('base64url')}`
 
-async function run() {
+async function initializeGateway() {
   const upstream = await startUpstream()
   require(path.join(repoRoot, 'out', 'main', 'index.js'))
   await waitFor(() => ipcMain._invokeHandlers?.has('providers:gateway:update'), 12_000)
@@ -78,6 +78,11 @@ async function run() {
     && models.body.data.some((model) => model.id === 'gateway-chat')
     && !models.body.data.some((model) => model.id === 'gemini-gateway'))
 
+  return { upstream, upstreamPort, providerA, googleProviderA, firstPort, gatewayToken }
+}
+
+async function verifyOpenAiGatewayRoutes(context) {
+  const { firstPort, gatewayToken } = context
   const chat = await requestJson(firstPort, '/v1/chat/completions', {
     token: gatewayToken,
     body: { model: 'gateway-chat', messages: [{ role: 'user', content: 'hello' }] }
@@ -100,7 +105,10 @@ async function run() {
   })
   check('Responses endpoint routes independently', responses.status === 200
     && responses.body.output[0].content[0].text === 'gateway-response')
+}
 
+async function verifyAnthropicBasicRoute(context) {
+  const { firstPort, gatewayToken } = context
   const deniedAnthropic = await requestJson(firstPort, '/v1/messages', {
     body: { model: 'gateway-chat', max_tokens: 16, messages: [{ role: 'user', content: 'denied' }] }
   })
@@ -136,7 +144,10 @@ async function run() {
     && anthropicBasicUpstream.body.stop[0] === 'STOP')
   check('Anthropic x-api-key authenticates without forwarding the gateway credential', anthropicBasicUpstream.authorization === ''
     && anthropicBasicUpstream.apiKey === '' && !anthropicBasicUpstream.raw.includes(gatewayToken))
+}
 
+async function verifyAnthropicToolsAndStreaming(context) {
+  const { firstPort, gatewayToken } = context
   const anthropicTool = await requestJson(firstPort, '/v1/messages', {
     token: gatewayToken,
     body: {
@@ -187,7 +198,10 @@ async function run() {
     && anthropicStream.text.includes('"partial_json":"{\\"path\\":\\"README.md\\"}"')
     && anthropicStream.text.includes('"stop_reason":"tool_use"')
     && anthropicStream.text.trim().endsWith('{"type":"message_stop"}'))
+}
 
+async function verifyAnthropicFailureBoundaries(context) {
+  const { firstPort, gatewayToken } = context
   const anthropicUpstreamError = await requestJson(firstPort, '/v1/messages', {
     token: gatewayToken,
     body: { model: 'gateway-chat', max_tokens: 64, messages: [{ role: 'user', content: 'anthropic-upstream-error' }] }
@@ -211,7 +225,10 @@ async function run() {
     && unsupportedAnthropic.body.type === 'error'
     && unsupportedAnthropic.body.error.type === 'invalid_request_error'
     && upstreamRequests.length === beforeUnsupported)
+}
 
+async function verifyOpenAiUsageRoutingAndFailover(context) {
+  const { firstPort, gatewayToken, providerA, upstreamPort } = context
   await waitFor(async () => {
     const usage = await invoke('providers:usage', { source: 'gateway.openai.chat-completions' })
     return usage.requests >= 2 && usage.inputTokens >= 15 && usage.outputTokens >= 7
@@ -258,7 +275,10 @@ async function run() {
     invoke, requestJson, requestText, check, firstPort, gatewayToken, providerA, providerB,
     upstreamRequests, openAiProviderTokenA, openAiProviderTokenB, readGatewayUsage
   })
+}
 
+async function verifyGoogleGatewayRoutes(context) {
+  const { firstPort, gatewayToken } = context
   const deniedGoogleModels = await requestJson(firstPort, '/v1beta/models')
   check('Google model catalog returns a native authentication error', deniedGoogleModels.status === 401
     && deniedGoogleModels.body.error.code === 401
@@ -267,7 +287,10 @@ async function run() {
   check('Google model catalog exposes only ready Gemini models', googleModels.status === 200
     && googleModels.body.models.some((model) => model.name === 'models/gemini-gateway')
     && !googleModels.body.models.some((model) => model.name === 'models/gateway-chat'))
+}
 
+async function verifyGoogleJsonRoute(context) {
+  const { firstPort, gatewayToken } = context
   const googleBody = {
     systemInstruction: { parts: [{ text: 'Gateway system' }] },
     contents: [
@@ -293,7 +316,10 @@ async function run() {
     && googleJsonUpstream.googleApiKey === googleProviderToken
     && googleJsonUpstream.googleApiKey !== gatewayToken
     && !googleJsonUpstream.raw.includes(gatewayToken))
+}
 
+async function verifyGoogleStreamAndErrorRoutes(context) {
+  const { firstPort, gatewayToken } = context
   const googleStream = await requestText(firstPort, '/v1beta/models/gemini-gateway:streamGenerateContent?alt=sse', {
     googleApiKey: gatewayToken,
     body: { contents: [{ role: 'user', parts: [{ text: 'google-stream' }] }] }
@@ -310,7 +336,10 @@ async function run() {
     && googleError.body.error.code === 429
     && googleError.body.error.status === 'RESOURCE_EXHAUSTED'
     && !JSON.stringify(googleError.body).includes(secretCanary))
+}
 
+async function verifyGoogleRoutingFailoverAndUsage(context) {
+  const { firstPort, gatewayToken, upstreamPort, googleProviderA } = context
   const googleProviderB = await invoke('providers:create', {
     name: 'Gateway Gemini Beta',
     baseUrl: `http://127.0.0.1:${upstreamPort}/v1beta`,
@@ -357,7 +386,10 @@ async function run() {
   check('Google usage, thinking tokens, cache tokens and configured pricing are aggregated', googleUsage.requests >= 3
     && googleUsage.inputTokens >= 17 && googleUsage.outputTokens >= 12
     && googleUsage.cacheReadTokens >= 2 && googleUsage.pricedRequests >= 2 && googleUsage.costUsd > 0)
+}
 
+async function verifyGatewayPortAndTokenLifecycle(context) {
+  let { gatewayToken } = context
   const blocker = http.createServer((_request, response) => response.end('occupied'))
   const blockedPort = await listen(blocker)
   const blocked = await invoke('providers:gateway:update', { port: blockedPort })
@@ -380,7 +412,10 @@ async function run() {
   const newAllowed = await requestJson(replacementPort, '/v1/models', { token: rotatedToken })
   check('rotated token invalidates the old credential immediately', oldDenied.status === 401 && newAllowed.status === 200)
   gatewayToken = rotatedToken
+  return { gatewayToken, replacementPort }
+}
 
+async function verifyGatewaySettingsUi(gatewayToken) {
   const win = await openGatewaySettings()
   const ui = await rendererValue(win, `(() => {
     const panel = document.querySelector('[data-provider-gateway]');
@@ -405,7 +440,9 @@ async function run() {
   check('gateway settings remains contained at 760px', !compact.overflow && !compact.panelOverflow)
   fs.mkdirSync(path.dirname(screenshotPath), { recursive: true })
   fs.writeFileSync(screenshotPath, (await win.capturePage()).toPNG())
+}
 
+async function finishGatewayRun(upstream, gatewayToken) {
   await close(upstream)
 
   const report = {
@@ -423,8 +460,29 @@ async function run() {
   finish(0)
 }
 
+async function run() {
+  const context = await initializeGateway()
+  await verifyOpenAiGatewayRoutes(context)
+  await verifyAnthropicBasicRoute(context)
+  await verifyAnthropicToolsAndStreaming(context)
+  await verifyAnthropicFailureBoundaries(context)
+  await verifyOpenAiUsageRoutingAndFailover(context)
+  await verifyGoogleGatewayRoutes(context)
+  await verifyGoogleJsonRoute(context)
+  await verifyGoogleStreamAndErrorRoutes(context)
+  await verifyGoogleRoutingFailoverAndUsage(context)
+  const { gatewayToken } = await verifyGatewayPortAndTokenLifecycle(context)
+  await verifyGatewaySettingsUi(gatewayToken)
+  await finishGatewayRun(context.upstream, gatewayToken)
+}
+
 function startUpstream() {
-  const server = http.createServer(async (request, response) => {
+  const server = http.createServer()
+  server.on('request', (request, response) => void handleUpstreamRequest(server, request, response))
+  return listen(server).then(() => server)
+}
+
+async function handleUpstreamRequest(server, request, response) {
     const chunks = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const raw = Buffer.concat(chunks).toString('utf8')
@@ -439,6 +497,13 @@ function startUpstream() {
       body
     })
     if (/^\/v1beta\/models\/[^:]+:(?:generateContent|streamGenerateContent)/.test(request.url || '')) {
+      handleGoogleUpstream(request, response, body)
+      return
+    }
+    handleOpenAiUpstream(server, request, response, body)
+}
+
+function handleGoogleUpstream(request, response, body) {
       const bodyText = JSON.stringify(body)
       if (bodyText.includes('google-failover-503')) {
         if (request.headers['x-goog-api-key'] === googleProviderToken) {
@@ -476,8 +541,37 @@ function startUpstream() {
         usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 5, thoughtsTokenCount: 2, cachedContentTokenCount: 2 }
       })
       return
-    }
-    const messagesText = JSON.stringify(body.messages || [])
+}
+
+function handleOpenAiUpstream(server, request, response, body) {
+  const messagesText = JSON.stringify(body.messages || [])
+  if (isOpenAiFailureFixture(messagesText)) {
+    handleOpenAiFailureFixture(server, request, response, messagesText)
+    return
+  }
+  if (isOpenAiStreamFixture(request, body, messagesText)) {
+    handleOpenAiStreamFixture(request, response, body, messagesText)
+    return
+  }
+  handleOpenAiProtocolFixture(request, response, body, messagesText)
+}
+
+function isOpenAiFailureFixture(messagesText) {
+  return [
+    'gateway-failover-429',
+    'gateway-failover-max-retries',
+    'gateway-no-failover-400',
+    'gateway-no-failover-redirect'
+  ].some((marker) => messagesText.includes(marker))
+}
+
+function isOpenAiStreamFixture(request, body, messagesText) {
+  return messagesText.includes('gateway-stream-fail-before-byte')
+    || messagesText.includes('gateway-stream-fail-after-byte')
+    || (request.url === '/v1/chat/completions' && body.stream && !messagesText.includes('anthropic-stream'))
+}
+
+function handleOpenAiFailureFixture(server, request, response, messagesText) {
     if (messagesText.includes('gateway-failover-429')) {
       if (request.headers.authorization === `Bearer ${openAiProviderTokenA}`) {
         json(response, 429, {
@@ -505,6 +599,9 @@ function startUpstream() {
       response.end()
       return
     }
+}
+
+function handleOpenAiStreamFixture(request, response, body, messagesText) {
     if (messagesText.includes('gateway-stream-fail-before-byte')) {
       if (request.headers.authorization === `Bearer ${openAiProviderTokenA}`) {
         request.socket.destroy()
@@ -527,6 +624,9 @@ function startUpstream() {
       response.end('data: [DONE]\n\n')
       return
     }
+}
+
+function handleOpenAiProtocolFixture(request, response, body, messagesText) {
     if (request.url === '/v1/responses') {
       json(response, 200, { id: 'resp_gateway', output: [{ content: [{ type: 'output_text', text: 'gateway-response' }] }], usage: { input_tokens: 7, output_tokens: 3 } })
       return
@@ -553,8 +653,6 @@ function startUpstream() {
       return
     }
     json(response, 200, { id: 'chat_gateway', choices: [{ message: { role: 'assistant', content: 'gateway-ok' } }], usage: { prompt_tokens: 4, completion_tokens: 2 } })
-  })
-  return listen(server).then(() => server)
 }
 
 function requestJson(port, route, options = {}) {

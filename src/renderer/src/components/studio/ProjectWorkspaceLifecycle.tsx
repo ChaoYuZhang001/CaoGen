@@ -1,6 +1,8 @@
-import { useCallback, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
+import type { ProviderAuthorizationAccountView } from '../../../../shared/provider-authorization-types'
 import {
   MANAGED_PERSONAL_WORKSPACE_ID,
+  type ProjectConnectorMutation,
   type ProjectResource,
   type ProjectWorkspace
 } from '../../../../shared/types'
@@ -81,6 +83,47 @@ export default function ProjectWorkspaceLifecycle({
         />
       </header>
 
+      <ProjectLifecycleContent
+        actions={actions}
+        busy={busy}
+        deleteMode={deleteMode}
+        panel={panel}
+        project={project}
+        systemManaged={systemManaged}
+        onCloseDelete={() => setDeleteMode(null)}
+        onClosePanel={() => setPanel(null)}
+        onOpenResource={() => openPanel('resource')}
+      />
+    </section>
+  )
+}
+
+type ProjectLifecycleActions = ReturnType<typeof useProjectWorkspaceLifecycle>
+
+function ProjectLifecycleContent({
+  actions,
+  busy,
+  deleteMode,
+  onCloseDelete,
+  onClosePanel,
+  onOpenResource,
+  panel,
+  project,
+  systemManaged
+}: {
+  actions: ProjectLifecycleActions
+  busy: boolean
+  deleteMode: 'soft' | 'permanent' | null
+  onCloseDelete: () => void
+  onClosePanel: () => void
+  onOpenResource: () => void
+  panel: ProjectLifecyclePanel
+  project: ProjectWorkspace
+  systemManaged: boolean
+}): React.JSX.Element {
+  const editable = project.status === 'active' && !systemManaged
+  return (
+    <>
       {actions.error && <div className="notice notice-error pws-lifecycle-feedback" role="alert">{actions.error}</div>}
       {actions.announcement && <div className="pws-lifecycle-feedback pws-lifecycle-success" role="status" aria-live="polite">{actions.announcement}</div>}
       {project.status !== 'active' && (
@@ -88,28 +131,36 @@ export default function ProjectWorkspaceLifecycle({
           {project.status === 'archived' ? TEXT.archivedProjectNotice : TEXT.deletedProjectNotice}
         </p>
       )}
-
-      {panel === 'edit' && project.status === 'active' && !systemManaged && (
-        <ProjectEditForm project={project} busy={busy} onCancel={() => setPanel(null)} onSubmit={actions.updateProject} />
+      {panel === 'edit' && editable && (
+        <ProjectEditForm project={project} busy={busy} onCancel={onClosePanel} onSubmit={actions.updateProject} />
       )}
-      {panel === 'resource' && project.status === 'active' && !systemManaged && (
-        <ProjectResourceForm busy={busy} onCancel={() => setPanel(null)} onSubmit={actions.addResource} />
+      {panel === 'resource' && editable && (
+        <ProjectResourceForm busy={busy} onCancel={onClosePanel} onSubmit={actions.addResource} />
       )}
-
       <ProjectResourceList
         busy={busy}
-        editable={project.status === 'active' && !systemManaged}
+        editable={editable}
         resources={project.resources}
-        onAdd={() => openPanel('resource')}
+        onAdd={onOpenResource}
         onRemove={(id) => void actions.removeResource(id)}
+        onConnectorMutation={(id, mutation) => void actions.mutateConnector(id, mutation)}
       />
-
+      <ProjectKnowledgePanel
+        knowledge={actions.knowledge}
+        loading={actions.knowledgeLoading}
+        error={actions.knowledgeError}
+        onRefresh={() => void actions.refreshKnowledge()}
+        search={actions.knowledgeSearch}
+        searchLoading={actions.knowledgeSearchLoading}
+        searchError={actions.knowledgeSearchError}
+        onSearch={actions.searchKnowledge}
+      />
       {deleteMode && !systemManaged && (
         <ProjectDeleteDialog
           project={project}
           permanent={deleteMode === 'permanent'}
           busy={busy}
-          onCancel={() => setDeleteMode(null)}
+          onCancel={onCloseDelete}
           onConfirm={deleteMode === 'permanent' ? actions.purgeProject : actions.softDeleteProject}
         />
       )}
@@ -121,8 +172,122 @@ export default function ProjectWorkspaceLifecycle({
           onCopy={actions.copyManifest}
         />
       )}
-    </section>
+    </>
   )
+}
+
+function ProjectKnowledgePanel({
+  error,
+  knowledge,
+  loading,
+  onRefresh,
+  onSearch,
+  search,
+  searchError,
+  searchLoading
+}: {
+  error: string
+  knowledge: ProjectLifecycleActions['knowledge']
+  loading: boolean
+  onRefresh: () => void
+  onSearch: (query: string) => Promise<void>
+  search: ProjectLifecycleActions['knowledgeSearch']
+  searchError: string
+  searchLoading: boolean
+}): React.JSX.Element {
+  const titleId = useId()
+  const [query, setQuery] = useState('')
+  const submitSearch = (event: React.FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    void onSearch(query)
+  }
+  return (
+    <div className="pws-knowledge" aria-labelledby={titleId} aria-busy={loading}>
+      <div className="pws-resources-header">
+        <div className="pws-section-title"><h3 id={titleId}>项目知识</h3><span>{knowledge ? knowledge.sources.length + knowledge.connectors.length : 0}</span></div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRefresh} disabled={loading} data-project-action="refresh-knowledge">{loading ? '读取中...' : '刷新预览'}</button>
+      </div>
+      {error && <p className="pws-lifecycle-feedback notice notice-error" role="alert">{error}</p>}
+      {!error && !knowledge && !loading && <p className="pws-muted pws-resource-empty">暂无可读知识源</p>}
+      {knowledge && (
+        <>
+          <p className="pws-knowledge-meta">策略 {knowledge.policyDigest.slice(0, 19)} · revision {knowledge.projectRevision}</p>
+          <form className="pws-knowledge-search" onSubmit={submitSearch} aria-label="搜索项目知识">
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索项目知识文件"
+              aria-label="搜索项目知识文件"
+              maxLength={512}
+            />
+            <button type="submit" className="btn btn-primary btn-sm" disabled={searchLoading || !query.trim()} data-project-action="search-knowledge">
+              {searchLoading ? '搜索中...' : '搜索'}
+            </button>
+          </form>
+          {searchError && <p className="pws-lifecycle-feedback notice notice-error" role="alert">{searchError}</p>}
+          {search && (
+            <div className="pws-knowledge-search-results" role="region" aria-label="知识搜索结果">
+              <p className="pws-knowledge-meta">“{search.query}” · {search.results.length} 个命中 · {new Date(search.searchedAt).toLocaleTimeString('zh-CN')}</p>
+              {search.connectorErrors.length > 0 && (
+                <p className="pws-knowledge-meta" role="status">{search.connectorErrors.length} 个连接器未参与搜索：{search.connectorErrors.map((item) => `${item.resourceId}（${item.reason}）`).join('、')}</p>
+              )}
+              {search.results.length === 0 ? <p className="pws-muted pws-resource-empty">没有匹配的本地知识文件</p> : (
+                <div className="pws-knowledge-list" role="list">
+                  {search.results.map((result) => (
+                    <div className="pws-knowledge-row" key={result.evidenceId} role="listitem" data-knowledge-evidence-id={result.evidenceId}>
+                      <span className="pws-knowledge-kind">引用</span>
+                      <span className="pws-resource-copy">
+                        <strong>{basenameForDisplay(result.path)}</strong>
+                        <small>{result.snippet}</small>
+                        <small>{result.version.slice(0, 19)} · Evidence {result.evidenceId.slice(-16)}</small>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {knowledge.sources.length > 0 && (
+            <div className="pws-knowledge-list" role="list" aria-label="本地知识文件">
+              {knowledge.sources.map((source) => (
+                <div className="pws-knowledge-row" key={`${source.resourceId}:${source.path}`} role="listitem" data-knowledge-resource-id={source.resourceId}>
+                  <span className="pws-knowledge-kind">本地</span>
+                  <span className="pws-resource-copy">
+                    <strong>{basenameForDisplay(source.path)}</strong>
+                    <small>{source.bytes} bytes · sha256:{source.digest.slice(0, 12)} · {new Date(source.modifiedAt).toLocaleDateString('zh-CN')}{source.truncated ? ' · 已截断' : ''}</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {knowledge.connectors.length > 0 && (
+            <div className="pws-knowledge-list" role="list" aria-label="项目连接器知识源">
+              {knowledge.connectors.map((connector) => (
+                <div className="pws-knowledge-row" key={connector.resourceId} role="listitem" data-knowledge-connector-id={connector.resourceId}>
+                  <span className="pws-knowledge-kind">连接器</span>
+                  <span className="pws-resource-copy">
+                    <strong>{connector.label}</strong>
+                    <small>
+                      {connector.connectorId ?? 'generic'} · {connector.available ? '可用' : connector.reason ?? '不可用'} · refresh:{connector.refresh.status}
+                      {connector.autoRefresh?.intervalMs ? ` · 自动:${autoRefreshLabel(connector.autoRefresh.intervalMs)}${connector.autoRefresh.nextAt ? `/${new Date(connector.autoRefresh.nextAt).toLocaleString('zh-CN')}` : ''}` : ''}
+                      {' · '}cache:{connector.cache.status}{connector.cache.bytes !== undefined ? `/${connector.cache.bytes} bytes` : ''}
+                      {connector.revocation ? ` · revocation:${connector.revocation.status}/${connector.revocation.pausedRunIds.length} runs` : ''}
+                      {connector.refresh.latestCitation ? ` · ${connector.refresh.latestCitation.version}` : ''}
+                    </small>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function basenameForDisplay(path: string): string {
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
 }
 
 function ProjectActionBar({
@@ -166,12 +331,14 @@ function ProjectResourceList({
   editable,
   onAdd,
   onRemove,
+  onConnectorMutation,
   resources
 }: {
   busy: boolean
   editable: boolean
   onAdd: () => void
   onRemove: (id: string) => void
+  onConnectorMutation: (id: string, mutation: ProjectConnectorMutation) => void
   resources: ProjectResource[]
 }): React.JSX.Element {
   const titleId = useId()
@@ -183,7 +350,7 @@ function ProjectResourceList({
       </div>
       {resources.length === 0 ? <p className="pws-muted pws-resource-empty">{TEXT.noResources}</p> : (
         <div className="pws-resource-list" role="list">
-          {resources.map((resource) => <ProjectResourceRow key={resource.id} resource={resource} busy={busy} editable={editable} onRemove={onRemove} />)}
+          {resources.map((resource) => <ProjectResourceRow key={resource.id} resource={resource} busy={busy} editable={editable} onRemove={onRemove} onConnectorMutation={onConnectorMutation} />)}
         </div>
       )}
     </div>
@@ -193,11 +360,13 @@ function ProjectResourceList({
 function ProjectResourceRow({
   busy,
   editable,
+  onConnectorMutation,
   onRemove,
   resource
 }: {
   busy: boolean
   editable: boolean
+  onConnectorMutation: (id: string, mutation: ProjectConnectorMutation) => void
   onRemove: (id: string) => void
   resource: ProjectResource
 }): React.JSX.Element {
@@ -205,6 +374,39 @@ function ProjectResourceRow({
   const kind = resource.kind === 'directory' && resource.metadata?.resourceType === 'repository'
     ? 'repository'
     : resource.kind
+  const connector = resource.connector
+  const lifecycle = connector?.lifecycle ?? { enabled: true, refresh: { status: 'idle' as const } }
+  const connectorAvailable = connector?.authorization.status === 'active' && lifecycle.enabled
+  const supportsRead = connector?.dataDirection === 'read' || connector?.dataDirection === 'bidirectional'
+  const [bindingOpen, setBindingOpen] = useState(false)
+  const [accounts, setAccounts] = useState<Array<{ providerId: string; account: ProviderAuthorizationAccountView }>>([])
+  const [selectedBinding, setSelectedBinding] = useState('')
+  useEffect(() => {
+    if (!bindingOpen) return
+    let cancelled = false
+    void window.agentDesk.listProviders().then(async (providers) => {
+      const groups = await Promise.all(providers.map(async (provider) => {
+        try {
+          const listed = await window.agentDesk.listProviderAuthorizationAccounts(provider.id)
+          return listed.map((account) => ({ providerId: provider.id, account }))
+        } catch { return [] }
+      }))
+      if (!cancelled) setAccounts(groups.flat())
+    }).catch(() => { if (!cancelled) setAccounts([]) })
+    return () => { cancelled = true }
+  }, [bindingOpen])
+  const submitBinding = (): void => {
+    const [providerId, accountId] = selectedBinding.split('/', 2)
+    const match = accounts.find((entry) => entry.providerId === providerId && entry.account.id === accountId)
+    if (!match || match.account.requiresReauth) return
+    onConnectorMutation(resource.id, {
+      kind: 'bind_authorization',
+      principalId: match.account.id,
+      credentialRef: `oauth:${providerId}/${match.account.id}`,
+      subject: connector?.authorization.subject
+    })
+    setBindingOpen(false)
+  }
   return (
     <div
       className="pws-resource-row"
@@ -222,15 +424,65 @@ function ProjectResourceRow({
         <small>{resourceLocation(resource)}</small>
         {resource.connector && (
           <small>
-            v{resource.connector.version} · {resource.connector.dataDirection} · {resource.connector.authorization.subject}
-            {' · '}{resource.connector.authorization.status} · {resource.connector.capabilities.join(', ')}
+            {resource.connector.connectorId ?? 'generic'} · v{resource.connector.version} · {resource.connector.dataDirection} · {resource.connector.authorization.subject}
+            {' · '}{resource.connector.authorization.status} · {lifecycle.enabled ? 'enabled' : 'disabled'} · refresh:{lifecycle.refresh.status}
+            {lifecycle.autoRefresh?.intervalMs ? ` · 自动:${autoRefreshLabel(lifecycle.autoRefresh.intervalMs)}${lifecycle.autoRefresh.nextAt ? `/${new Date(lifecycle.autoRefresh.nextAt).toLocaleString('zh-CN')}` : ''}` : ' · 自动:关闭'}
+            {' · '}cache:{lifecycle.cache?.status ?? 'empty'}{lifecycle.cache?.bytes !== undefined ? `/${lifecycle.cache.bytes} bytes` : ''}
+            {lifecycle.revocation ? ` · revocation:${lifecycle.revocation.status}/${lifecycle.revocation.pausedRunIds.length} runs` : ''}
+            {lifecycle.refresh.latestCitation && ` · ${lifecycle.refresh.latestCitation.version} · ${new Date(lifecycle.refresh.latestCitation.retrievedAt).toLocaleDateString('zh-CN')}`}
           </small>
         )}
       </span>
       <span className={`pws-resource-egress pws-resource-egress-${resourceEgressPolicy(resource)}`}>
         {resourceDataClass(resource)} · {resourceEgressLabel(resource)}
       </span>
+      {editable && connector && (
+        <span className="pws-resource-controls" aria-label={`${label} 连接器控制`}>
+          {supportsRead && connectorAvailable && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onConnectorMutation(resource.id, { kind: 'request_refresh' })} disabled={busy || lifecycle.refresh.status === 'requested' || lifecycle.refresh.status === 'running'} data-resource-action="refresh">刷新</button>}
+          {supportsRead && (
+            <select
+              className="select"
+              value={lifecycle.autoRefresh?.intervalMs ?? 0}
+              onChange={(event) => onConnectorMutation(resource.id, { kind: 'set_auto_refresh', intervalMs: Number(event.target.value) as 0 | 900_000 | 3_600_000 | 21_600_000 | 86_400_000 })}
+              disabled={busy}
+              aria-label={`${label} 自动刷新周期`}
+              data-resource-action="auto-refresh"
+            >
+              <option value={0}>自动刷新:关闭</option>
+              <option value={900_000}>每 15 分钟</option>
+              <option value={3_600_000}>每 1 小时</option>
+              <option value={21_600_000}>每 6 小时</option>
+              <option value={86_400_000}>每 24 小时</option>
+            </select>
+          )}
+          {(lifecycle.cache?.status === 'ready' || lifecycle.cache?.status === 'purge_failed') && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onConnectorMutation(resource.id, { kind: 'purge_cache' })} disabled={busy} data-resource-action="purge-cache">清缓存</button>}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onConnectorMutation(resource.id, { kind: 'set_enabled', enabled: !lifecycle.enabled })} disabled={busy || (lifecycle.enabled === false && connector.authorization.status !== 'active')} data-resource-action="toggle-enabled">{lifecycle.enabled ? '停用' : '启用'}</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onConnectorMutation(resource.id, { kind: 'set_authorization', status: connector.authorization.status === 'active' ? 'revoked' : 'active' })} disabled={busy} data-resource-action="toggle-authorization">{connector.authorization.status === 'active' ? '撤销授权' : '恢复授权'}</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBindingOpen((value) => !value)} disabled={busy} data-resource-action="bind-authorization">更换账户</button>
+        </span>
+      )}
+      {editable && connector && bindingOpen && (
+        <span className="pws-resource-binding" data-resource-action="bind-authorization-form">
+          <select className="select" value={selectedBinding} onChange={(event) => setSelectedBinding(event.target.value)} aria-label={`${label} 授权账户`}>
+            <option value="">选择已授权账户</option>
+            {accounts.map(({ providerId, account }) => (
+              <option key={`${providerId}/${account.id}`} value={`${providerId}/${account.id}`} disabled={account.requiresReauth}>
+                {account.label} · {providerId}{account.requiresReauth ? ' · 需要重新授权' : ''}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-primary btn-sm" onClick={submitBinding} disabled={busy || !selectedBinding}>绑定</button>
+        </span>
+      )}
       {editable && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onRemove(resource.id)} disabled={busy} aria-label={TEXT.removeResource(label)} data-resource-action="remove">移除</button>}
     </div>
   )
+}
+
+function autoRefreshLabel(intervalMs: number): string {
+  if (intervalMs === 900_000) return '15 分钟'
+  if (intervalMs === 3_600_000) return '1 小时'
+  if (intervalMs === 21_600_000) return '6 小时'
+  if (intervalMs === 86_400_000) return '24 小时'
+  return '关闭'
 }

@@ -52,6 +52,7 @@ import {
   setupWorkflowEvidenceSchema,
   verifyWorkflowEvidence
 } from './workflow-evidence-store'
+import { redactSensitiveText } from '../security/secret-redaction'
 
 type SqlJsStatic = Awaited<ReturnType<typeof initSqlJs>>
 type SqlDatabase = InstanceType<SqlJsStatic['Database']>
@@ -498,7 +499,7 @@ function isSensitiveKey(key: string | undefined): boolean {
 }
 
 function sanitizeString(value: string): string {
-  return value
+  return redactSensitiveText(value)
     .replace(/([?&](?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password|authorization)=)[^&#\s]+/gi, '$1[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
     .replace(/\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
