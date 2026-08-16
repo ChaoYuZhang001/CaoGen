@@ -22,6 +22,7 @@
     "test:coding-standards:required": "node scripts/coding-standards-audit.mjs --required",
     "test:coding-standards:strict": "node scripts/coding-standards-audit.mjs --strict",
     "test:coding-standards:baseline": "node scripts/coding-standards-audit.mjs --write-baseline",
+    "test:office-render-ready": "node scripts/office-render-ready-smoke.mjs",
     "test:plan-contract": "node scripts/p0-p1-p2-contract-smoke.mjs",
     "test:native-engine-surface": "node scripts/native-engine-surface-smoke.mjs",
     "update:public-status": "node scripts/update-public-status.mjs",

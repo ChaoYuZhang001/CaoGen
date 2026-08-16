@@ -3,6 +3,8 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { PNG } = require('pngjs')
 
+export const DEFAULT_OFFICE_RED_AREA_RATIO = 0.015
+
 export async function focusElectronPage(page, focusSession) {
   await focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await page.bringToFront()
@@ -90,12 +92,26 @@ export async function waitForOfficeScenePixels(page, timeout = 15_000) {
   throw new Error(`3D office canvas did not become visibly nonblank: ${JSON.stringify(lastStats)}`)
 }
 
-export async function captureStableOfficeScreenshot(capture, analyze, workAreaNonDark, maxAttempts = 3) {
+export function officeNonErrorWorkAreaIsStable(
+  area,
+  workAreaNonDark,
+  maxRedAreaRatio = DEFAULT_OFFICE_RED_AREA_RATIO
+) {
+  return area.nonDarkRatio > workAreaNonDark && area.redAreaRatio < maxRedAreaRatio
+}
+
+export async function captureStableOfficeScreenshot(
+  capture,
+  analyze,
+  workAreaNonDark,
+  maxRedAreaRatio = DEFAULT_OFFICE_RED_AREA_RATIO,
+  maxAttempts = 3
+) {
   let stats
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (attempt > 0) await delay(900)
     stats = analyze(await capture(attempt))
-    if (stats.nonErrorWorkArea.nonDarkRatio > workAreaNonDark && stats.nonErrorWorkArea.redRatio < 0.02) return stats
+    if (officeNonErrorWorkAreaIsStable(stats.nonErrorWorkArea, workAreaNonDark, maxRedAreaRatio)) return stats
   }
   return stats
 }

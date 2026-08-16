@@ -132,7 +132,7 @@
     "scripts/deep-test.mjs": {
       "profile": "automation",
       "lines": 647,
-      "contentHash": "56f928dd8eeb7d7f4ae87830a384f875293ce686158b598d6121614fa9bd1e30",
+      "contentHash": "f8b494f95a2977e55aaacc76a20523764195e2c7f615249df792b651fde52488",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -622,7 +622,7 @@
     "scripts/orchestration-mock-e2e.mjs": {
       "profile": "automation",
       "lines": 1522,
-      "contentHash": "df4e26cc067b46776630de10c4256efacc5e3434ddbaa5139d6a677fa34bcbbf",
+      "contentHash": "aca360147dc032b3be629c4c63706d7e3ec4147cef2c3e98e378cc86848bd952",
       "oversizedFunctionCount": 3,
       "maxFunctionLines": 345,
       "complexFunctionCount": 4,
@@ -648,7 +648,7 @@
           "complexity": 104
         },
         "analyzePngRegion#1": {
-          "lines": 59,
+          "lines": 60,
           "complexity": 26
         }
       }

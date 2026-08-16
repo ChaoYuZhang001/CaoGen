@@ -160,7 +160,9 @@ jobs:
           name: caogen-release-macos-x64-deep-failure-${{ needs.candidate.outputs.commit }}
           if-no-files-found: warn
           retention-days: 7
-          path: test-results/caogen-deep/**
+          path: |
+            test-results/caogen-deep/**
+            test-results/orchestration-mock-e2e/**
       - name: Build, sign, notarize, install, and launch x64
         run: npm run dist:mac:release:x64
       - name: Upload x64 assets and evidence

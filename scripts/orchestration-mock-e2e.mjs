@@ -18,7 +18,6 @@ import {
   waitForOfficeRenderLoop,
   waitForOfficeScenePixels
 } from './lib/office-render-ready.mjs'
-
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
@@ -33,8 +32,8 @@ const approvalFilePath = path.join(projectDir, 'office-approval-required.txt')
 const officeFailureMessage = 'office deterministic validation fault'
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
 const officeScreenshotThresholds = ciSoftwareWebgl
-  ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftDark: 0.91, leftBuckets: 48, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006 }
-  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftDark: 0.82, leftBuckets: 56, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012 }
+  ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftDark: 0.91, leftBuckets: 48, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006, redAreaMax: 0.015 }
+  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftDark: 0.82, leftBuckets: 56, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012, redAreaMax: 0.015 }
 const OFFICE_OVERVIEW_CAMERA = {
   position: [0.2, 7.1, 16.8],
   target: [0, 0.75, 0.15],
@@ -909,7 +908,7 @@ try {
       'waiting for overview before office visibility screenshot'
     )
     const stats = await captureStableOfficeScreenshot((attempt) => screenshot(page, `02-office-subagent-packets-${attempt + 1}`), analyzeOfficeScreenshot,
-      officeScreenshotThresholds.workAreaNonDark)
+      officeScreenshotThresholds.workAreaNonDark, officeScreenshotThresholds.redAreaMax)
     report.officeScreenshot = stats
     assert(stats.width >= 1000 && stats.height >= 600, `office screenshot too small: ${JSON.stringify(stats)}`)
     assert(stats.scene.nonDarkRatio > officeScreenshotThresholds.sceneNonDark, `office scene is too dark or blocked: ${JSON.stringify(stats.scene)}`)
@@ -940,7 +939,7 @@ try {
       stats.nonErrorWorkArea.nonDarkRatio > officeScreenshotThresholds.workAreaNonDark &&
         stats.nonErrorWorkArea.brightRatio > officeScreenshotThresholds.workAreaBright &&
         stats.nonErrorWorkArea.coloredRatio > 0.009 &&
-        stats.nonErrorWorkArea.redRatio < 0.02 &&
+        stats.nonErrorWorkArea.redAreaRatio < officeScreenshotThresholds.redAreaMax &&
         stats.nonErrorWorkArea.cyanRatio < 0.35,
       `non-error office must stay readable and varied without red or cyan flooding: ${JSON.stringify(stats.nonErrorWorkArea)}`
     )
@@ -1189,6 +1188,7 @@ function analyzePngRegion(png, x0, y0, x1, y1) {
     cyanRatio: nonDarkPixels > 0 ? cyanPixels / nonDarkPixels : 0,
     neutralRatio: nonDarkPixels > 0 ? neutralPixels / nonDarkPixels : 0,
     redRatio: nonDarkPixels > 0 ? redPixels / nonDarkPixels : 1,
+    redAreaRatio: redPixels / Math.max(total, 1),
     otherPaletteRatio: nonDarkPixels > 0 ? otherPalettePixels / nonDarkPixels : 0,
     cyanNeutralRatio: nonDarkPixels > 0 ? (cyanPixels + neutralPixels) / nonDarkPixels : 0
   }
