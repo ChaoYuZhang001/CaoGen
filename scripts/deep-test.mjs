@@ -26,6 +26,7 @@ const commandDefinitions = [
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
   { name: 'Assistant/Studio performance required UI e2e', command: 'node', args: ['scripts/assistant-studio-performance-e2e.mjs'], category: 'ui' },
   { name: 'accessibility required UI e2e', command: 'node', args: ['scripts/accessibility-required.mjs'], category: 'ui' },
+  { name: 'i18n longest-string layout required UI e2e', command: 'node', args: ['scripts/i18n-layout-required.mjs'], category: 'ui' },
   { name: 'watercolor accessibility required asset gate', command: 'node', args: ['scripts/watercolor-accessibility-required.mjs'], category: 'static' },
   { name: 'Office render readiness smoke', command: 'node', args: ['scripts/office-render-ready-smoke.mjs'], category: 'smoke' },
   { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
