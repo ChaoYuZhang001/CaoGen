@@ -131,8 +131,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 652,
-      "contentHash": "130d059edfda23f4b67df20de053a294276e287fa24f8d55ba285c4a6f7ffdee",
+      "lines": 654,
+      "contentHash": "fc4913c2b28a68fb07c60716c862ac1925c1f1348aada08f9a88a213ccc7e960",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -1364,10 +1364,10 @@
     },
     "src/main/index.ts": {
       "profile": "product",
-      "lines": 496,
-      "contentHash": "c4838498bfeb54a643dee1ea5a1ae3cc760aea1e02bfec143c5577bcbfa0299f",
+      "lines": 510,
+      "contentHash": "64877db535d2497e7ed1669417aa35372e3ee940ce14a2f8c00e8c472f3d1c3c",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 85,
+      "maxFunctionLines": 86,
       "complexFunctionCount": 1,
       "maxComplexity": 28,
       "forbiddenSuppressionCount": 0,
@@ -1375,7 +1375,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "app.whenReady().then callback#1": {
-          "lines": 85,
+          "lines": 86,
           "complexity": 28
         }
       }

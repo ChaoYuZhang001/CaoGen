@@ -1,11 +1,17 @@
 import { app, type IpcMainInvokeEvent } from 'electron'
 import type { ProjectRefactorInput } from '../../shared/types'
-import { applyProjectRefactor, previewTypeScriptRename, rollbackProjectRefactor } from '../projectRefactor'
+import {
+  applyProjectRefactor,
+  dismissProjectRefactorRecovery,
+  getProjectRefactorRecovery,
+  previewTypeScriptRename,
+  rollbackProjectRefactor
+} from '../projectRefactor'
 import { sessionManager } from '../sessionManager'
 import { assertTrustedWorkflowLedgerSender } from './workflow-ledger-handlers'
 import { registerProjectRefactorReport } from '../task/workbench-report-artifacts'
 
-type ProjectRefactorAction = 'preview-rename' | 'apply' | 'rollback'
+type ProjectRefactorAction = 'preview-rename' | 'apply' | 'rollback' | 'recovery' | 'dismiss-recovery'
 
 export async function handleProjectRefactorIpc(
   event: IpcMainInvokeEvent,
@@ -20,11 +26,15 @@ export async function handleProjectRefactorIpc(
   if (!session) throw new Error('Session was not found')
   if (action === 'preview-rename') return previewTypeScriptRename(session.meta.cwd, sessionId, requiredInput(rawValue))
   if (action === 'apply') {
-    const result = await applyProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
+    const result = await applyProjectRefactor(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor preview ID'))
     return finalizeRefactorReport(sessionId, 'apply', result)
   }
-  const result = await rollbackProjectRefactor(sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
-  return finalizeRefactorReport(sessionId, 'rollback', result)
+  if (action === 'rollback') {
+    const result = await rollbackProjectRefactor(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
+    return finalizeRefactorReport(sessionId, 'rollback', result)
+  }
+  if (action === 'recovery') return getProjectRefactorRecovery(session.meta.cwd, sessionId)
+  return dismissProjectRefactorRecovery(session.meta.cwd, sessionId, requiredIdentifier(rawValue, 'Refactor operation ID'))
 }
 
 async function finalizeRefactorReport(
@@ -56,7 +66,7 @@ async function finalizeRefactorReport(
 }
 
 function requiredAction(value: unknown): ProjectRefactorAction {
-  if (value === 'preview-rename' || value === 'apply' || value === 'rollback') return value
+  if (value === 'preview-rename' || value === 'apply' || value === 'rollback' || value === 'recovery' || value === 'dismiss-recovery') return value
   throw new Error('Project refactor action is invalid')
 }
 

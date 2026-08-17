@@ -221,7 +221,9 @@ const commandDefinitions = [
   { name: 'file editor tabs smoke', command: 'node', args: ['scripts/file-editor-tabs-smoke.mjs'], category: 'smoke' },
   { name: 'file editor tabs Electron E2E', command: 'node', args: ['scripts/file-editor-tabs-e2e.mjs'], category: 'ui' },
   { name: 'project debugger smoke', command: 'node', args: ['scripts/project-debugger-smoke.mjs'], category: 'smoke' },
-  { name: 'project debugger Electron E2E', command: 'node', args: ['scripts/project-debug-panel-e2e.mjs'], category: 'ui' }
+  { name: 'project debugger Electron E2E', command: 'node', args: ['scripts/project-debug-panel-e2e.mjs'], category: 'ui' },
+  { name: 'project refactor smoke', command: 'node', args: ['scripts/project-refactor-smoke.mjs'], category: 'smoke' },
+  { name: 'project refactor Electron E2E', command: 'node', args: ['scripts/project-refactor-panel-e2e.mjs'], category: 'ui' }
 ]
 
 export const commands = commandDefinitions.map((item) => ({

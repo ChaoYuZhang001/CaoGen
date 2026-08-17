@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import type {
   ProjectRefactorApplyResult,
   ProjectRefactorPreview,
@@ -33,10 +33,12 @@ export function useProjectRefactor(): ProjectRefactorController {
   const [rolledBack, setRolledBack] = useState<ProjectRefactorRollbackResult | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
+  const [recoveryNoticeId, setRecoveryNoticeId] = useState<string | null>(null)
 
   useEffect(() => {
-    setPreview(null); setApplied(null); setRolledBack(null); setPending(false); setError('')
+    setPreview(null); setApplied(null); setRolledBack(null); setPending(false); setError(''); setRecoveryNoticeId(null)
   }, [activeId])
+  useProjectRefactorRecovery(activeId, setApplied, setRolledBack, setError, setRecoveryNoticeId)
 
   const previewRename = async (path: string, line: number, column: number, newName: string): Promise<void> => {
     if (!activeId || pending) return
@@ -76,7 +78,7 @@ export function useProjectRefactor(): ProjectRefactorController {
     setPending(true); setError('')
     try {
       const result = await window.agentDesk.applyProjectRefactor(sessionId, preview.previewId)
-      setApplied(result); setPreview(null); setRolledBack(null)
+      setApplied(result); setPreview(null); setRolledBack(null); setRecoveryNoticeId(null)
       await reloadAffectedFiles(sessionId, result.files, reopenPath)
     } catch (caught) {
       setError(errorMessage(caught))
@@ -92,7 +94,7 @@ export function useProjectRefactor(): ProjectRefactorController {
     setPending(true); setError('')
     try {
       const result = await window.agentDesk.rollbackProjectRefactor(sessionId, applied.operationId)
-      setRolledBack(result); setApplied(null)
+      setRolledBack(result); setApplied(null); setRecoveryNoticeId(null)
       await reloadAffectedFiles(sessionId, result.files, reopenPath)
     } catch (caught) {
       setError(errorMessage(caught))
@@ -122,8 +124,56 @@ export function useProjectRefactor(): ProjectRefactorController {
     previewRename,
     apply,
     rollback,
-    clear: () => { setPreview(null); setApplied(null); setRolledBack(null); setError('') }
+    clear: () => {
+      if (activeId && recoveryNoticeId) {
+        void window.agentDesk.dismissProjectRefactorRecovery(activeId, recoveryNoticeId).catch((caught) => setError(errorMessage(caught)))
+      }
+      setPreview(null); setApplied(null); setRolledBack(null); setRecoveryNoticeId(null); setError('')
+    }
   }
+}
+
+function useProjectRefactorRecovery(
+  activeId: string | null,
+  setApplied: Dispatch<SetStateAction<ProjectRefactorApplyResult | null>>,
+  setRolledBack: Dispatch<SetStateAction<ProjectRefactorRollbackResult | null>>,
+  setError: Dispatch<SetStateAction<string>>,
+  setRecoveryNoticeId: Dispatch<SetStateAction<string | null>>
+): void {
+  useEffect(() => {
+    if (!activeId) return undefined
+    let cancelled = false
+    void window.agentDesk.getProjectRefactorRecovery(activeId).then((recovery) => {
+      if (cancelled) return
+      if (recovery.status === 'blocked') {
+        setError(recovery.message ?? 'Interrupted refactor recovery is blocked')
+        return
+      }
+      if (!recovery.operationId) return
+      if (recovery.status === 'rollback_available') {
+        setApplied({
+          ok: true,
+          operationId: recovery.operationId,
+          kind: 'typescript-rename',
+          files: recovery.files,
+          appliedAt: recovery.occurredAt ?? new Date().toISOString()
+        })
+        return
+      }
+      if (recovery.status === 'auto_rolled_back') {
+        setRecoveryNoticeId(recovery.operationId)
+        setRolledBack({
+          ok: true,
+          operationId: recovery.operationId,
+          files: recovery.files,
+          rolledBackAt: recovery.occurredAt ?? new Date().toISOString()
+        })
+      }
+    }).catch((caught) => {
+      if (!cancelled) setError(errorMessage(caught))
+    })
+    return () => { cancelled = true }
+  }, [activeId, setApplied, setError, setRecoveryNoticeId, setRolledBack])
 }
 
 function errorMessage(error: unknown): string {

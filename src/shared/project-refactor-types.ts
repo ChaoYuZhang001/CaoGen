@@ -53,8 +53,20 @@ export interface ProjectRefactorRollbackResult {
   evidenceError?: string
 }
 
+export type ProjectRefactorRecoveryStatus = 'none' | 'rollback_available' | 'auto_rolled_back' | 'blocked'
+
+export interface ProjectRefactorRecovery {
+  status: ProjectRefactorRecoveryStatus
+  operationId?: string
+  files: string[]
+  occurredAt?: string
+  message?: string
+}
+
 export interface ProjectRefactorApi {
   previewTypeScriptRename(sessionId: string, input: ProjectRefactorInput): Promise<ProjectRefactorPreview>
   applyProjectRefactor(sessionId: string, previewId: string): Promise<ProjectRefactorApplyResult>
   rollbackProjectRefactor(sessionId: string, operationId: string): Promise<ProjectRefactorRollbackResult>
+  getProjectRefactorRecovery(sessionId: string): Promise<ProjectRefactorRecovery>
+  dismissProjectRefactorRecovery(sessionId: string, operationId: string): Promise<void>
 }
