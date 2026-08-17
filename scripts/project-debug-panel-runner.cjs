@@ -67,10 +67,13 @@ async function run() {
     const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     set.call(pathInput, 'src/index.js'); pathInput.dispatchEvent(new Event('input', { bubbles: true }));
     set.call(lineInput, '4'); lineInput.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('button[aria-label="添加断点"]')?.click();
+    lineInput.focus();
   })()`)
+  await waitForRenderer(win, `document.querySelector('button[aria-label="添加断点"]')?.disabled === false`)
+  await waitForRenderer(win, `document.activeElement?.getAttribute('aria-label') === '行号'`)
+  await pressKeyboardKey(win, 'Enter')
   await waitForRenderer(win, `document.querySelector('.debug-breakpoint-row')?.textContent.includes('src/index.js')`)
-  check('a project-relative line breakpoint can be configured',
+  check('Enter submits a project-relative line breakpoint from the keyboard',
     await rendererValue(win, `document.querySelector('.debug-breakpoint-row')?.textContent.includes(':4')`))
 
   await launchTarget(win, 'src/index.js')
@@ -85,7 +88,8 @@ async function run() {
     await rendererValue(win, `['继续','单步跳过','单步进入','单步跳出'].every((label) => !document.querySelector('button[aria-label="' + label + '"]')?.disabled)`))
   await capture(win, 'project-debug-paused-desktop.png')
 
-  await rendererValue(win, `document.querySelector('button[aria-label="继续"]')?.click()`)
+  await rendererValue(win, `document.querySelector('button[aria-label="继续"]')?.focus()`)
+  await pressKeyboardKey(win, 'ENTER')
   await waitForRenderer(win, `document.querySelector('[data-project-debug-status="stopped"]') !== null`, 20_000)
   check('continue completes the target and updates terminal state',
     await rendererValue(win, `document.querySelector('[data-project-debug-status="stopped"]') !== null`))
@@ -164,6 +168,18 @@ async function capture(win, name) {
   fs.writeFileSync(path.join(screenshotDir, name), (await win.capturePage()).toPNG())
 }
 
+async function pressKeyboardKey(win, keyCode) {
+  const key = keyCode === 'ENTER' ? 'Enter' : keyCode
+  await rendererValue(win, `(() => {
+    const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+    const event = new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, bubbles: true, cancelable: true });
+    const defaultAllowed = target.dispatchEvent(event);
+    if (defaultAllowed && target instanceof HTMLButtonElement && ${JSON.stringify(key)} === 'Enter') target.click();
+    if (defaultAllowed && target instanceof HTMLInputElement && ${JSON.stringify(key)} === 'Enter') target.form?.requestSubmit();
+  })()`)
+  await settleRenderer(win)
+}
+
 async function invoke(channel, ...args) {
   const handler = ipcMain._invokeHandlers?.get(channel)
   if (!handler) throw new Error(`IPC channel not registered: ${channel}`)
@@ -179,7 +195,19 @@ function waitForWindow() {
 function waitForRenderer(win, expression, timeoutMs = 10_000) {
   return waitFor(async () => {
     try { return await rendererValue(win, expression) } catch { return false }
-  }, timeoutMs)
+  }, timeoutMs, async () => {
+    try {
+      return await rendererValue(win, `JSON.stringify({
+        expression: ${JSON.stringify(expression)},
+        status: document.querySelector('[data-project-debug-status]')?.getAttribute('data-project-debug-status') || null,
+        error: document.querySelector('.debug-panel .notice-error')?.textContent || null,
+        breakpoints: [...document.querySelectorAll('.debug-breakpoint-row')].map((row) => row.textContent.trim()),
+        activeTarget: document.querySelector('.debug-target-active')?.textContent || null
+      })`)
+    } catch (error) {
+      return JSON.stringify({ expression, diagnosticError: String(error) })
+    }
+  })
 }
 
 function rendererValue(win, expression) {
@@ -192,7 +220,7 @@ async function settleRenderer(win) {
   await new Promise((resolve) => setTimeout(resolve, 180))
 }
 
-function waitFor(predicate, timeoutMs) {
+function waitFor(predicate, timeoutMs, diagnostic) {
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const poll = async () => {
@@ -200,7 +228,10 @@ function waitFor(predicate, timeoutMs) {
         const value = await predicate()
         if (value) return resolve(value)
       } catch { /* main and renderer state settle independently */ }
-      if (Date.now() - started > timeoutMs) return reject(new Error('project debug panel E2E wait timed out'))
+      if (Date.now() - started > timeoutMs) {
+        const detail = diagnostic ? await diagnostic() : ''
+        return reject(new Error(`project debug panel E2E wait timed out${detail ? `: ${detail}` : ''}`))
+      }
       setTimeout(() => void poll(), 80)
     }
     void poll()

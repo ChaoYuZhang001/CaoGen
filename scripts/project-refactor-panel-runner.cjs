@@ -59,7 +59,8 @@ async function run() {
     await rendererValue(win, `document.querySelector('.refactor-form')?.getAttribute('data-keyboard') !== 'disabled' || Boolean(document.querySelector('.refactor-form input'))`))
 
   await setRefactorInputs(win)
-  await rendererValue(win, `document.querySelector('.refactor-form')?.requestSubmit()`)
+  await waitForRenderer(win, `document.querySelector('.refactor-preview-button')?.disabled === false`)
+  await pressKeyboardKey(win, 'ENTER')
   await waitForRenderer(win, `document.querySelector('[data-project-refactor-preview]') !== null`, 20_000)
   check('cross-file rename preview renders before applying',
     await rendererValue(win, `document.querySelector('[data-project-refactor-preview]') !== null`))
@@ -93,7 +94,8 @@ async function run() {
   win.setSize(1200, 800)
   await waitForRenderer(win, `window.innerWidth >= 1100`)
 
-  await rendererValue(win, `document.querySelector('.refactor-summary button')?.click()`)
+  await rendererValue(win, `document.querySelector('.refactor-summary button')?.focus()`)
+  await pressKeyboardKey(win, 'ENTER')
   await waitForRenderer(win, `document.querySelector('[data-project-refactor-result="applied"]') !== null`, 20_000)
   check('apply control updates the result state',
     await rendererValue(win, `document.querySelector('[data-project-refactor-result="applied"]') !== null`))
@@ -104,7 +106,8 @@ async function run() {
   check('applied state uses an opaque operation ID without workspace paths',
     await rendererValue(win, `(() => { const value = document.querySelector('[data-project-refactor-result="applied"] code')?.textContent ?? ''; return /^[a-f0-9-]{36}$/i.test(value) && !/^[a-zA-Z]:[\\/]/.test(value) })()`))
 
-  await rendererValue(win, `document.querySelector('[data-project-refactor-result="applied"] button')?.click()`)
+  await rendererValue(win, `document.querySelector('[data-project-refactor-result="applied"] button')?.focus()`)
+  await pressKeyboardKey(win, 'ENTER')
   await waitForRenderer(win, `document.querySelector('[data-project-refactor-result="rolled-back"]') !== null`, 20_000)
   check('rollback control restores the result state',
     await rendererValue(win, `document.querySelector('[data-project-refactor-result="rolled-back"]') !== null`))
@@ -143,7 +146,20 @@ async function setRefactorInputs(win) {
     const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     const values = ['src/model.ts', '1', '17', 'computeTotal'];
     values.forEach((value, index) => { set.call(inputs[index], value); inputs[index].dispatchEvent(new Event('input', { bubbles: true })); });
+    inputs.at(-1)?.focus();
   })()`)
+}
+
+async function pressKeyboardKey(win, keyCode) {
+  const key = keyCode === 'ENTER' ? 'Enter' : keyCode
+  await rendererValue(win, `(() => {
+    const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+    const event = new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, bubbles: true, cancelable: true });
+    const defaultAllowed = target.dispatchEvent(event);
+    if (defaultAllowed && target instanceof HTMLButtonElement && ${JSON.stringify(key)} === 'Enter') target.click();
+    if (defaultAllowed && target instanceof HTMLInputElement && ${JSON.stringify(key)} === 'Enter') target.form?.requestSubmit();
+  })()`)
+  await settleRenderer(win)
 }
 
 async function capture(win, name) {

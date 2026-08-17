@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Braces, ChevronDown, ChevronRight, CircleAlert, Eye, File, FileText, Folder, FolderOpen, FolderTree, Info, Search, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Braces, CircleAlert, FolderTree, Info, Search, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import type { ProjectDiagnostic, ProjectSymbolLocation, ProjectTextSearchMatch } from '../../../../shared/types'
 import {
   buildProjectFileTree,
   filterProjectFileTree,
-  visibleProjectFileNodes,
-  type VisibleProjectFileNode
+  visibleProjectFileNodes
 } from './project-file-tree'
 import { editorLocationForOffset, editorOffsetForLocation, editorWordRange, replaceEditorWord } from './editor-language-actions'
+import {
+  FileTreeRow,
+  focusFileTreeEntry,
+  formatFileBytes,
+  handleFileTreeKeyDown,
+  moveFileBrowserModeFocus,
+  type FileBrowserMode
+} from './file-panel-tree'
 
 interface LanguageSymbolResult extends ProjectSymbolLocation {
   insertText?: string
 }
-
 function supportsTypeScriptLanguageServer(path: string | null | undefined): boolean {
   return Boolean(path && /\.(?:cjs|js|jsx|mjs|ts|tsx)$/i.test(path))
 }
@@ -43,65 +49,8 @@ function mergedDiagnostics(syntax: ProjectDiagnostic[], semantic: ProjectDiagnos
   })
 }
 
-function formatBytes(bytes: number | undefined): string {
-  if (bytes === undefined) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function isLikelyTextFile(path: string): boolean {
-  return /\.(cjs|css|csv|html?|js|json|jsx|md|mjs|scss|svg|toml|ts|tsx|txt|xml|ya?ml)$/i.test(path)
-}
-
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
-}
-
-function FileTreeRow({
-  item,
-  expanded,
-  active,
-  onToggle,
-  onOpen,
-  onPreview
-}: {
-  item: VisibleProjectFileNode
-  expanded: boolean
-  active: boolean
-  onToggle: (path: string) => void
-  onOpen: (path: string) => void
-  onPreview: (path: string) => void
-}): React.JSX.Element {
-  const { node, depth } = item
-  const directory = node.kind === 'directory'
-  const textFile = !directory && isLikelyTextFile(node.path)
-  const style = { '--file-tree-depth': depth } as CSSProperties
-  return (
-    <div className={`file-row-wrap ${active ? 'active' : ''}`}>
-      <button
-        className={`file-row file-tree-row ${active ? 'active' : ''} file-row-${node.kind}`}
-        style={style}
-        title={node.path}
-        aria-expanded={directory ? expanded : undefined}
-        onClick={() => directory ? onToggle(node.path) : onOpen(node.path)}
-      >
-        <span className="file-row-chevron" aria-hidden="true">
-          {directory ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
-        </span>
-        <span className="file-row-mark" aria-hidden="true">
-          {directory ? (expanded ? <FolderOpen size={14} /> : <Folder size={14} />) : textFile ? <FileText size={14} /> : <File size={14} />}
-        </span>
-        <span className="file-row-path">{node.name}</span>
-        {!directory && <span className="file-row-size">{formatBytes(node.size)}</span>}
-      </button>
-      {!directory && (
-        <button className="file-row-preview" title="Preview" onClick={() => onPreview(node.path)}>
-          <Eye size={13} aria-hidden="true" />
-        </button>
-      )}
-    </div>
-  )
 }
 
 function SearchResultRow({ match, active, onOpen }: {
@@ -149,6 +98,80 @@ function DiagnosticRow({ diagnostic, active, onOpen }: {
   )
 }
 
+function FileBrowserToolbar({
+  mode,
+  nameQuery,
+  searchDraft,
+  problemCount,
+  searchLoading,
+  setNameQuery,
+  setSearchDraft,
+  selectMode,
+  submitSearch,
+  t
+}: {
+  mode: FileBrowserMode
+  nameQuery: string
+  searchDraft: string
+  problemCount: number
+  searchLoading: boolean
+  setNameQuery: (value: string) => void
+  setSearchDraft: (value: string) => void
+  selectMode: (mode: FileBrowserMode) => void
+  submitSearch: () => void
+  t: ReturnType<typeof useT>
+}): React.JSX.Element {
+  return (
+    <div className="file-browser-toolbar">
+      <div className="file-browser-modes" role="tablist" aria-label={t('fileBrowserMode')}>
+        <FileBrowserModeButton mode="tree" active={mode === 'tree'} label={t('fileTreeMode')} selectMode={selectMode}>
+          <FolderTree size={14} aria-hidden="true" />
+        </FileBrowserModeButton>
+        <FileBrowserModeButton mode="search" active={mode === 'search'} label={t('fileContentSearchMode')} selectMode={selectMode}>
+          <Search size={14} aria-hidden="true" />
+        </FileBrowserModeButton>
+        <FileBrowserModeButton mode="problems" active={mode === 'problems'} label={t('fileProblemsMode')} selectMode={selectMode}>
+          <CircleAlert size={14} aria-hidden="true" />{problemCount > 0 ? <span className="file-problem-count">{problemCount}</span> : null}
+        </FileBrowserModeButton>
+      </div>
+      {mode === 'tree' ? (
+        <input className="input file-search" value={nameQuery} placeholder={t('fileSearchPlaceholder')}
+          onChange={(event) => setNameQuery(event.target.value)} />
+      ) : mode === 'search' ? (
+        <div className="file-content-search">
+          <input className="input" value={searchDraft} placeholder={t('fileContentSearchPlaceholder')}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') submitSearch() }} />
+          <button type="button" className="btn btn-ghost btn-icon-sm" title={t('fileContentSearchAction')}
+            aria-label={t('fileContentSearchAction')} disabled={searchLoading || !searchDraft.trim()} onClick={submitSearch}>
+            <Search size={14} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+function FileBrowserModeButton({
+  mode,
+  active,
+  label,
+  selectMode,
+  children
+}: {
+  mode: FileBrowserMode
+  active: boolean
+  label: string
+  selectMode: (mode: FileBrowserMode) => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button type="button" role="tab" title={label} aria-label={label} aria-selected={active}
+      tabIndex={active ? 0 : -1} data-file-browser-mode={mode} className={active ? 'active' : ''}
+      onClick={() => selectMode(mode)} onKeyDown={(event) => moveFileBrowserModeFocus(event, mode, selectMode)}>
+      {children}
+    </button>
+  )
+}
 export default function FilePanel(): React.JSX.Element {
   const t = useT()
   const activeId = useStore((s) => s.activeId)
@@ -199,6 +222,7 @@ export default function FilePanel(): React.JSX.Element {
   const [nameQuery, setNameQuery] = useState('')
   const [searchDraft, setSearchDraft] = useState('')
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
+  const [focusedTreePath, setFocusedTreePath] = useState('')
   const [pendingLocation, setPendingLocation] = useState<{ path: string; line: number; column: number } | null>(null)
   const [pendingCaret, setPendingCaret] = useState<number | null>(null)
   const [symbolMode, setSymbolMode] = useState<'completion' | 'definition' | null>(null)
@@ -223,6 +247,7 @@ export default function FilePanel(): React.JSX.Element {
     setNameQuery('')
     setSearchDraft('')
     setExpandedPaths(new Set())
+    setFocusedTreePath('')
     setHoverOpen(false)
     setSemanticDiagnostics([])
     setSemanticDiagnosticsError('')
@@ -272,6 +297,13 @@ export default function FilePanel(): React.JSX.Element {
     () => visibleProjectFileNodes(filteredTree, expandedPaths, Boolean(nameQuery.trim())),
     [expandedPaths, filteredTree, nameQuery]
   )
+  useEffect(() => {
+    setFocusedTreePath((current) => {
+      if (visibleEntries.some((item) => item.node.path === current)) return current
+      if (currentFilePath && visibleEntries.some((item) => item.node.path === currentFilePath)) return currentFilePath
+      return visibleEntries[0]?.node.path ?? ''
+    })
+  }, [currentFilePath, visibleEntries])
   const toggleDirectory = useCallback((path: string): void => {
     setExpandedPaths((current) => {
       const next = new Set(current)
@@ -287,7 +319,7 @@ export default function FilePanel(): React.JSX.Element {
     }
     void searchProjectFiles(searchDraft)
   }, [clearProjectFileSearch, searchDraft, searchProjectFiles])
-  const selectMode = useCallback((next: 'tree' | 'search' | 'problems'): void => {
+  const selectMode = useCallback((next: FileBrowserMode): void => {
     setMode(next)
     if (next === 'problems') void refreshProjectDiagnostics()
   }, [refreshProjectDiagnostics])
@@ -514,40 +546,18 @@ export default function FilePanel(): React.JSX.Element {
 
       <div className="file-panel-body">
         <aside className="file-list">
-          <div className="file-browser-toolbar">
-            <div className="file-browser-modes" role="tablist" aria-label={t('fileBrowserMode')}>
-              <button type="button" role="tab" title={t('fileTreeMode')} aria-label={t('fileTreeMode')} aria-selected={mode === 'tree'} className={mode === 'tree' ? 'active' : ''} onClick={() => selectMode('tree')}>
-                <FolderTree size={14} aria-hidden="true" />
-              </button>
-              <button type="button" role="tab" title={t('fileContentSearchMode')} aria-label={t('fileContentSearchMode')} aria-selected={mode === 'search'} className={mode === 'search' ? 'active' : ''} onClick={() => selectMode('search')}>
-                <Search size={14} aria-hidden="true" />
-              </button>
-              <button type="button" role="tab" title={t('fileProblemsMode')} aria-label={t('fileProblemsMode')} aria-selected={mode === 'problems'} className={mode === 'problems' ? 'active' : ''} onClick={() => selectMode('problems')}>
-                <CircleAlert size={14} aria-hidden="true" />{problemDiagnostics.length > 0 ? <span className="file-problem-count">{problemDiagnostics.length}</span> : null}
-              </button>
-            </div>
-            {mode === 'tree' ? (
-              <input
-                className="input file-search"
-                value={nameQuery}
-                placeholder={t('fileSearchPlaceholder')}
-                onChange={(event) => setNameQuery(event.target.value)}
-              />
-            ) : mode === 'search' ? (
-              <div className="file-content-search">
-                <input
-                  className="input"
-                  value={searchDraft}
-                  placeholder={t('fileContentSearchPlaceholder')}
-                  onChange={(event) => setSearchDraft(event.target.value)}
-                  onKeyDown={(event) => { if (event.key === 'Enter') submitSearch() }}
-                />
-                <button type="button" className="btn btn-ghost btn-icon-sm" title={t('fileContentSearchAction')} aria-label={t('fileContentSearchAction')} disabled={fileSearchLoading || !searchDraft.trim()} onClick={submitSearch}>
-                  <Search size={14} aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-          </div>
+          <FileBrowserToolbar
+            mode={mode}
+            nameQuery={nameQuery}
+            searchDraft={searchDraft}
+            problemCount={problemDiagnostics.length}
+            searchLoading={fileSearchLoading}
+            setNameQuery={setNameQuery}
+            setSearchDraft={setSearchDraft}
+            selectMode={selectMode}
+            submitSearch={submitSearch}
+            t={t}
+          />
           {mode === 'search' && fileSearchQuery && (
             <div className="file-search-summary" aria-live="polite">
               {fileSearchLoading
@@ -565,7 +575,8 @@ export default function FilePanel(): React.JSX.Element {
               {supportsTypeScriptLanguageServer(currentFilePath) ? <span className="file-semantic-source">{t('fileSemanticSource')}</span> : null}
             </div>
           )}
-          <div className="file-list-scroll">
+          <div className="file-list-scroll" role={mode === 'tree' ? 'tree' : undefined}
+            aria-label={mode === 'tree' ? t('fileTreeMode') : undefined}>
             {mode === 'problems' ? (
               (fileDiagnosticsLoading || semanticDiagnosticsLoading) && problemDiagnostics.length === 0 ? (
                 <div className="workspace-diff-empty">{t('fileProblemsLoading')}</div>
@@ -597,9 +608,21 @@ export default function FilePanel(): React.JSX.Element {
                   item={item}
                   expanded={expandedPaths.has(item.node.path) || Boolean(nameQuery.trim())}
                   active={item.node.path === currentFilePath}
+                  focused={item.node.path === focusedTreePath}
                   onToggle={toggleDirectory}
                   onOpen={(path) => void openFile(path)}
                   onPreview={(path) => void openPreview(path)}
+                  onFocus={setFocusedTreePath}
+                  onKeyDown={(event) => handleFileTreeKeyDown({
+                    item,
+                    event,
+                    expandedPaths,
+                    visibleEntries,
+                    toggleDirectory,
+                    openFile,
+                    focusTreeEntry: (path) => focusFileTreeEntry(path, setFocusedTreePath)
+                  })}
+                  previewLabel={t('preview')}
                 />
               ))
             )}
@@ -654,7 +677,7 @@ export default function FilePanel(): React.JSX.Element {
             </div>
             <div className="file-editor-meta">
               {currentFilePath
-                ? `${formatBytes(currentFileBytes)}${currentFileMtimeMs ? ` · ${new Date(currentFileMtimeMs).toLocaleString()}` : ''}`
+                ? `${formatFileBytes(currentFileBytes)}${currentFileMtimeMs ? ` · ${new Date(currentFileMtimeMs).toLocaleString()}` : ''}`
                 : ''}
             </div>
             <button

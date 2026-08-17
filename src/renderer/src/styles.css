@@ -4929,7 +4929,7 @@ textarea {
 
 @media (max-width: 760px) {
   .test-panel-body {
-    grid-template-rows: minmax(72px, 26%) minmax(0, 1fr);
+    grid-template-rows: minmax(72px, 22%) minmax(0, 1fr);
   }
 
   .test-section-label {

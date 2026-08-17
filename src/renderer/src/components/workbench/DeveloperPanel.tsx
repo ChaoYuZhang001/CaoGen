@@ -1,5 +1,5 @@
 import { Bug, FilePenLine, FileText, FlaskConical } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useT } from '../../i18n'
 import FilePanel from './FilePanel'
 import TestPanel from './TestPanel'
@@ -7,6 +7,7 @@ import DebugPanel from './DebugPanel'
 import RefactorPanel from './RefactorPanel'
 
 type DeveloperView = 'files' | 'tests' | 'debug' | 'refactor'
+const DEVELOPER_VIEWS: DeveloperView[] = ['files', 'tests', 'debug', 'refactor']
 
 export default function DeveloperPanel(): React.JSX.Element {
   const t = useT()
@@ -14,19 +15,25 @@ export default function DeveloperPanel(): React.JSX.Element {
   const [testsVisited, setTestsVisited] = useState(false)
   const [debugVisited, setDebugVisited] = useState(false)
   const [refactorVisited, setRefactorVisited] = useState(false)
+  const selectView = (next: DeveloperView): void => {
+    if (next === 'tests') setTestsVisited(true)
+    if (next === 'debug') setDebugVisited(true)
+    if (next === 'refactor') setRefactorVisited(true)
+    setView(next)
+  }
   return (
     <div className="developer-panel">
       <div className="developer-panel-tabs" role="tablist" aria-label={t('deskFiles')}>
-        <DeveloperTab active={view === 'files'} label={t('deskFiles')} onClick={() => setView('files')}>
+        <DeveloperTab active={view === 'files'} label={t('deskFiles')} view="files" onSelect={selectView}>
           <FileText size={14} aria-hidden="true" />
         </DeveloperTab>
-        <DeveloperTab active={view === 'tests'} label={t('deskTests')} onClick={() => { setTestsVisited(true); setView('tests') }}>
+        <DeveloperTab active={view === 'tests'} label={t('deskTests')} view="tests" onSelect={selectView}>
           <FlaskConical size={14} aria-hidden="true" />
         </DeveloperTab>
-        <DeveloperTab active={view === 'debug'} label={t('deskDebug')} onClick={() => { setDebugVisited(true); setView('debug') }}>
+        <DeveloperTab active={view === 'debug'} label={t('deskDebug')} view="debug" onSelect={selectView}>
           <Bug size={14} aria-hidden="true" />
         </DeveloperTab>
-        <DeveloperTab active={view === 'refactor'} label={t('deskRefactor')} onClick={() => { setRefactorVisited(true); setView('refactor') }}>
+        <DeveloperTab active={view === 'refactor'} label={t('deskRefactor')} view="refactor" onSelect={selectView}>
           <FilePenLine size={14} aria-hidden="true" />
         </DeveloperTab>
       </div>
@@ -55,14 +62,33 @@ export default function DeveloperPanel(): React.JSX.Element {
 function DeveloperTab(props: {
   active: boolean
   label: string
-  onClick(): void
+  view: DeveloperView
+  onSelect(view: DeveloperView): void
   children: ReactNode
 }): React.JSX.Element {
   return (
-    <button type="button" role="tab" aria-selected={props.active}
-      className={props.active ? 'developer-panel-tab-active' : ''} onClick={props.onClick}>
+    <button id={`developer-panel-tab-${props.view}`} type="button" role="tab" aria-selected={props.active}
+      tabIndex={props.active ? 0 : -1} data-developer-view={props.view}
+      className={props.active ? 'developer-panel-tab-active' : ''} onClick={() => props.onSelect(props.view)}
+      onKeyDown={(event) => handleDeveloperTabKeyDown(event, props.view, props.onSelect)}>
       {props.children}
       <span>{props.label}</span>
     </button>
   )
+}
+
+function handleDeveloperTabKeyDown(
+  event: KeyboardEvent<HTMLButtonElement>,
+  current: DeveloperView,
+  onSelect: (view: DeveloperView) => void
+): void {
+  let next: DeveloperView | undefined
+  if (event.key === 'Home') next = DEVELOPER_VIEWS[0]
+  else if (event.key === 'End') next = DEVELOPER_VIEWS.at(-1)
+  else if (event.key === 'ArrowRight') next = DEVELOPER_VIEWS[(DEVELOPER_VIEWS.indexOf(current) + 1) % DEVELOPER_VIEWS.length]
+  else if (event.key === 'ArrowLeft') next = DEVELOPER_VIEWS[(DEVELOPER_VIEWS.indexOf(current) - 1 + DEVELOPER_VIEWS.length) % DEVELOPER_VIEWS.length]
+  if (!next) return
+  event.preventDefault()
+  onSelect(next)
+  requestAnimationFrame(() => document.getElementById(`developer-panel-tab-${next}`)?.focus())
 }

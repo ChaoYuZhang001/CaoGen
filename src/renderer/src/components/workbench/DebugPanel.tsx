@@ -97,16 +97,16 @@ function DebugSetup({
       </div>
       <div className="debug-setup-column debug-breakpoints">
         <div className="test-section-label">{t('projectDebugBreakpoints')}</div>
-        <div className="debug-breakpoint-form">
+        <form className="debug-breakpoint-form" onSubmit={(event) => { event.preventDefault(); onAddBreakpoint() }}>
           <input aria-label={t('projectDebugBreakpointPath')} placeholder={t('projectDebugBreakpointPath')}
             value={breakpointPath} disabled={active} onChange={(event) => onBreakpointPathChange(event.target.value)} />
           <input className="debug-line-input" aria-label={t('projectDebugBreakpointLine')} type="number" min="1"
             value={breakpointLine} disabled={active} onChange={(event) => onBreakpointLineChange(event.target.value)} />
-          <button type="button" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugAddBreakpoint')}
+          <button type="submit" className="btn btn-ghost btn-icon-sm" aria-label={t('projectDebugAddBreakpoint')}
             title={t('projectDebugAddBreakpoint')} disabled={active || !breakpointPath.trim()} onClick={onAddBreakpoint}>
             <Plus size={14} aria-hidden="true" />
           </button>
-        </div>
+        </form>
         {debug.breakpoints.length === 0 && <DebugEmpty text={t('projectDebugNoBreakpoints')} />}
         <div className="debug-breakpoint-list">
           {debug.breakpoints.map((breakpoint, index) => (

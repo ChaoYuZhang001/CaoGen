@@ -72,7 +72,14 @@ try {
   equal(projectTree[0].children[0].path, 'src/components', 'tree nests child directories')
   equal(projectTree[0].children[0].children[0].path, 'src/components/App.tsx', 'tree nests files at the correct depth')
   equal(tree.visibleProjectFileNodes(projectTree, new Set()).length, 3, 'collapsed tree only shows roots')
-  equal(tree.visibleProjectFileNodes(projectTree, new Set(['src', 'src/components'])).length, 6, 'expanded tree shows descendants')
+  const expandedPaths = new Set(['src', 'src/components'])
+  const expandedTree = tree.visibleProjectFileNodes(projectTree, expandedPaths)
+  equal(expandedTree.length, 6, 'expanded tree shows descendants')
+  equal(tree.nextProjectFileTreePath(expandedTree, 'src', 'ArrowRight', expandedPaths), 'src/components', 'ArrowRight enters the first expanded child')
+  equal(tree.nextProjectFileTreePath(expandedTree, 'src/components/App.tsx', 'ArrowLeft', expandedPaths), 'src/components', 'ArrowLeft returns from a file to its parent')
+  equal(tree.nextProjectFileTreePath(expandedTree, 'src/components', 'ArrowLeft', expandedPaths), null, 'ArrowLeft leaves an expanded directory for the caller to collapse')
+  equal(tree.nextProjectFileTreePath(expandedTree, 'src', 'End', expandedPaths), 'README.md', 'End focuses the final visible tree item')
+  equal(tree.nextProjectFileTreePath(expandedTree, 'README.md', 'Home', expandedPaths), 'src', 'Home focuses the first visible tree item')
   const filteredTree = tree.filterProjectFileTree(projectTree, 'app.tsx')
   equal(filteredTree.length, 1, 'filter keeps only matching ancestry')
   equal(tree.visibleProjectFileNodes(filteredTree, new Set(), true).map((item) => item.node.path).join(','), 'src,src/components,src/components/App.tsx', 'filtered tree reveals matching ancestry')
@@ -91,11 +98,19 @@ try {
     path.join(repoRoot, 'src/renderer/src/components/workbench/FilePanel.tsx'),
     'utf8'
   )
+  const treePanelSource = readFileSync(
+    path.join(repoRoot, 'src/renderer/src/components/workbench/file-panel-tree.tsx'),
+    'utf8'
+  )
   check('file reads reject stale Session or request results',
     storeSource.includes('requestId !== fileRequestSeq || s.activeId !== id'))
   check('file tabs expose keyboard save, close, and cycling',
     panelSource.includes("event.key === 'Tab'") && panelSource.includes("event.key.toLowerCase() === 's'") &&
       panelSource.includes("event.key.toLowerCase() === 'w'"))
+  check('file tree exposes roving treeitem focus and directional navigation',
+    treePanelSource.includes('role="treeitem"') && treePanelSource.includes('data-file-tree-path') &&
+      treePanelSource.includes('nextProjectFileTreePath') && treePanelSource.includes("event.key === 'Enter'") &&
+      panelSource.includes('handleFileTreeKeyDown') && panelSource.includes('focusedTreePath'))
   check('dirty tab close is guarded by an explicit confirmation',
     panelSource.includes("window.confirm(t('closeDirtyFileConfirm'"))
   check('TypeScript actions prefer semantic IPC with project-index fallback',

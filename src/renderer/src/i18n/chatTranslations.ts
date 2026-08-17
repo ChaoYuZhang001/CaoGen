@@ -16,7 +16,7 @@ export const CHAT_TRANSLATIONS = {
   compactChatDensity: { zh: '紧凑消息密度', en: 'Compact message density' },
   comfortableChatDensity: { zh: '舒适', en: 'Comfortable' },
   compactChatDensityValue: { zh: '紧凑', en: 'Compact' },
-  resizeToolPanel: { zh: '拖拽调整工具面板宽度', en: 'Drag to resize tool panel' },
+  resizeToolPanel: { zh: '调整工具面板大小', en: 'Resize tool panel' },
   collapseToolPanel: { zh: '收回工具面板', en: 'Collapse tool panel' },
   deskRailLabel: { zh: '工作区控制条', en: 'Workspace controls' },
   toggleDeskSummary: { zh: '切换结果', en: 'Toggle results' },

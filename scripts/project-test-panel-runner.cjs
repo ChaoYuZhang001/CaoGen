@@ -77,9 +77,14 @@ async function run() {
     await rendererValue(win, `document.querySelector('[data-project-test-result="failed"]') !== null`))
   check('failing result preserves exit code 7',
     await rendererValue(win, `document.querySelector('.test-result-summary')?.textContent.includes('7')`))
-  check('stderr tab exposes bounded failure output',
-    await rendererValue(win, `(() => { const tabs = document.querySelectorAll('.test-output-tabs button'); tabs[1]?.click(); return true })()`)
-      && await waitForRenderer(win, `document.querySelector('.test-output')?.textContent.includes('panel-failure')`))
+  await rendererValue(win, `(() => {
+    const tab = document.querySelector('#project-test-output-tab-stdout');
+    tab?.focus();
+    tab?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+  })()`)
+  await waitForRenderer(win, `document.querySelector('#project-test-output-tab-stderr')?.getAttribute('aria-selected') === 'true'`)
+  check('ArrowRight moves output tab selection, focus, and bounded failure output',
+    await rendererValue(win, `document.activeElement?.id === 'project-test-output-tab-stderr' && document.querySelector('.test-output')?.textContent.includes('panel-failure')`))
   await capture(win, 'project-test-panel-desktop.png')
 
   win.setSize(760, 700)

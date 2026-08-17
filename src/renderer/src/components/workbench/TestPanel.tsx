@@ -1,4 +1,5 @@
 import { FlaskConical, Play, RefreshCw, Square } from 'lucide-react'
+import type { KeyboardEvent } from 'react'
 import type {
   ProjectTestRunResult
 } from '../../../../shared/types'
@@ -119,20 +120,37 @@ function TestResult(props: {
       <div className="test-output-tabs" role="tablist" aria-label={t('projectTestsOutput')}>
         {(['stdout', 'stderr'] as const).map((name) => (
           <button
+            id={`project-test-output-tab-${name}`}
             type="button"
             role="tab"
             aria-selected={stream === name}
+            aria-controls="project-test-output-panel"
+            tabIndex={stream === name ? 0 : -1}
             className={stream === name ? 'test-output-tab-active' : ''}
             key={name}
             onClick={() => onStream(name)}
+            onKeyDown={(event) => handleOutputTabKeyDown(event, name, onStream)}
           >
             {t(name === 'stdout' ? 'projectTestsStdout' : 'projectTestsStderr')}
           </button>
         ))}
       </div>
-      <pre className="test-output">{output || t('projectTestsOutputEmpty')}</pre>
+      <pre id="project-test-output-panel" className="test-output" role="tabpanel"
+        aria-labelledby={`project-test-output-tab-${stream}`}>{output || t('projectTestsOutputEmpty')}</pre>
     </div>
   )
+}
+
+function handleOutputTabKeyDown(
+  event: KeyboardEvent<HTMLButtonElement>,
+  current: ProjectTestOutputStream,
+  onStream: (stream: ProjectTestOutputStream) => void
+): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const next: ProjectTestOutputStream = event.key === 'ArrowLeft' || event.key === 'Home' ? 'stdout' : 'stderr'
+  onStream(next)
+  requestAnimationFrame(() => document.getElementById(`project-test-output-tab-${next}`)?.focus())
 }
 
 function TestEmpty({ text, icon = false }: { text: string; icon?: boolean }): React.JSX.Element {

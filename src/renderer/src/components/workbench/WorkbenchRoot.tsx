@@ -106,6 +106,27 @@ function workbenchDimensions(sideWidth: number, dockHeight: number): React.CSSPr
   } as React.CSSProperties
 }
 
+function resizeWorkbenchFromKeyboard(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  current: number,
+  orientation: 'horizontal' | 'vertical',
+  min: number,
+  max: number,
+  apply: (value: number) => void
+): void {
+  const step = event.shiftKey ? 40 : 16
+  let next: number | null = null
+  if (event.key === 'Home') next = min
+  else if (event.key === 'End') next = max
+  else if (orientation === 'vertical' && event.key === 'ArrowLeft') next = current + step
+  else if (orientation === 'vertical' && event.key === 'ArrowRight') next = current - step
+  else if (orientation === 'horizontal' && event.key === 'ArrowUp') next = current + step
+  else if (orientation === 'horizontal' && event.key === 'ArrowDown') next = current - step
+  if (next === null) return
+  event.preventDefault()
+  apply(clamp(next, min, max))
+}
+
 function WorkbenchRoot(): React.JSX.Element {
   const t = useT()
   const [routineEditor, setRoutineEditor] = useState<RoutineEditorState | null>(null)
@@ -342,10 +363,18 @@ function WorkbenchRoot(): React.JSX.Element {
         <div
           className="workbench-dock-gutter no-drag"
           role="separator"
+          tabIndex={0}
           aria-orientation="horizontal"
+          aria-valuemin={DOCK_MIN_HEIGHT}
+          aria-valuemax={DOCK_MAX_HEIGHT}
+          aria-valuenow={dockHeight}
           aria-label={t('resizeToolPanel')}
           title={t('resizeToolPanel')}
           onPointerDown={(event) => startWorkbenchDockResize(event, dockHeight, setDockHeight, patchLayout)}
+          onKeyDown={(event) => resizeWorkbenchFromKeyboard(
+            event, dockHeight, 'horizontal', DOCK_MIN_HEIGHT, DOCK_MAX_HEIGHT,
+            (value) => { setDockHeight(value); patchLayout({ workbenchDockHeight: value }) }
+          )}
           style={{ display: terminalOpen ? undefined : 'none' }}
         />
         <section
@@ -373,29 +402,13 @@ function WorkbenchRoot(): React.JSX.Element {
           </Suspense>
         </section>
       </section>
-      <div
-        className="workbench-side-gutter no-drag"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('resizeToolPanel')}
-        title={t('resizeToolPanel')}
+      <WorkbenchSidePanel
+        activePanelId={activePanelId}
+        open={sideOpen}
+        sideWidth={sideWidth}
+        onCollapse={collapseSidePanel}
         onPointerDown={(event) => startWorkbenchSideResize(event, sideWidth, setSideWidth, patchLayout)}
-        style={{ display: sideOpen ? undefined : 'none' }}
-      >
-        <button
-          type="button"
-          className="workbench-side-collapse"
-          aria-label={t('collapseToolPanel')}
-          title={t('collapseToolPanel')}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={collapseSidePanel}
-        >
-          ›
-        </button>
-      </div>
-      <section
-        className={`workbench-pane workbench-side ${activePanelId === 'files' ? 'workbench-side-files' : ''}`}
-        style={{ display: sideOpen ? 'flex' : 'none' }}
+        onResize={(value) => { setSideWidth(value); patchLayout({ workbenchSideWidth: value }) }}
       >
         <Suspense fallback={<div className="workbench-panel-loading" />}>
           {PANEL_REGISTRY.filter((def) => def.id !== 'terminal').map((def) => {
@@ -415,7 +428,7 @@ function WorkbenchRoot(): React.JSX.Element {
             )
           })}
         </Suspense>
-      </section>
+      </WorkbenchSidePanel>
       {routineEditor && (routineEditor.mode === 'create' || selectedRoutine) && (
         <RoutineEditor
           routine={routineEditor.mode === 'edit' ? selectedRoutine : null}
@@ -423,6 +436,47 @@ function WorkbenchRoot(): React.JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+function WorkbenchSidePanel({
+  activePanelId,
+  open,
+  sideWidth,
+  onCollapse,
+  onPointerDown,
+  onResize,
+  children
+}: {
+  activePanelId: PanelId | null
+  open: boolean
+  sideWidth: number
+  onCollapse: () => void
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void
+  onResize: (value: number) => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  const t = useT()
+  return (
+    <>
+      <div className="workbench-side-gutter no-drag" role="separator" tabIndex={0} aria-orientation="vertical"
+        aria-valuemin={SIDE_MIN_WIDTH} aria-valuemax={SIDE_MAX_WIDTH} aria-valuenow={sideWidth}
+        aria-label={t('resizeToolPanel')} title={t('resizeToolPanel')} onPointerDown={onPointerDown}
+        onKeyDown={(event) => resizeWorkbenchFromKeyboard(
+          event, sideWidth, 'vertical', SIDE_MIN_WIDTH, SIDE_MAX_WIDTH, onResize
+        )}
+        style={{ display: open ? undefined : 'none' }}
+      >
+        <button type="button" className="workbench-side-collapse" aria-label={t('collapseToolPanel')}
+          title={t('collapseToolPanel')} onPointerDown={(event) => event.stopPropagation()} onClick={onCollapse}>
+          ›
+        </button>
+      </div>
+      <section className={`workbench-pane workbench-side ${activePanelId === 'files' ? 'workbench-side-files' : ''}`}
+        style={{ display: open ? 'flex' : 'none' }}>
+        {children}
+      </section>
+    </>
   )
 }
 
@@ -507,6 +561,7 @@ function DeskControlRail({
   const t = useT()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const drawerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!drawerOpen) return
@@ -515,7 +570,10 @@ function DeskControlRail({
       setDrawerOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setDrawerOpen(false)
+      if (event.key === 'Escape') {
+        setDrawerOpen(false)
+        triggerRef.current?.focus()
+      }
     }
     document.addEventListener('mousedown', onPointerDown, true)
     document.addEventListener('keydown', onKeyDown)
@@ -524,6 +582,29 @@ function DeskControlRail({
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [drawerOpen])
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus())
+  }, [drawerOpen])
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape'].includes(event.key)) return
+    event.preventDefault()
+    if (event.key === 'Escape') {
+      setDrawerOpen(false)
+      triggerRef.current?.focus()
+      return
+    }
+    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    if (items.length === 0) return
+    const current = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement))
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? items.length - 1
+        : event.key === 'ArrowDown' ? (current + 1) % items.length
+          : (current - 1 + items.length) % items.length
+    items[next]?.focus()
+  }
 
   return (
     <aside className="desk-rail no-drag" aria-label={t('deskRailLabel')}>
@@ -539,6 +620,7 @@ function DeskControlRail({
 
       <div className="desk-rail-drawer-anchor" ref={drawerRef}>
         <button
+          ref={triggerRef}
           type="button"
           className={`desk-rail-button ${drawerOpen ? 'desk-rail-button-active' : ''}`}
           aria-label={t('openDeskTools')}
@@ -550,7 +632,8 @@ function DeskControlRail({
           <HeaderIcon name="tools" />
         </button>
         {drawerOpen && (
-          <div className="desk-tool-drawer" role="menu" aria-label={t('deskToolDrawer')}>
+          <div className="desk-tool-drawer" role="menu" aria-label={t('deskToolDrawer')}
+            onKeyDown={handleMenuKeyDown}>
             {tools.map((tool) => (
               <button
                 key={tool.key}
@@ -558,6 +641,7 @@ function DeskControlRail({
                 className={`desk-tool-item ${tool.active ? 'desk-tool-item-active' : ''}`}
                 role="menuitem"
                 onClick={() => {
+                  triggerRef.current?.focus()
                   setDrawerOpen(false)
                   tool.onSelect()
                 }}

@@ -246,10 +246,10 @@
     },
     "scripts/file-editor-tabs-runner.cjs": {
       "profile": "automation",
-      "lines": 457,
-      "contentHash": "489dbf8bcbc7f51e78734fbff9a8f16547b0a73fe70e172af93c8dbbf800bee0",
+      "lines": 520,
+      "contentHash": "ab62423fd8d553cb9a8586a93d07781c3cadab201db69c9e7110b904e90701f7",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 173,
+      "maxFunctionLines": 170,
       "complexFunctionCount": 1,
       "maxComplexity": 21,
       "forbiddenSuppressionCount": 0,
@@ -257,7 +257,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "run#1": {
-          "lines": 173,
+          "lines": 170,
           "complexity": 21
         }
       }
@@ -4224,19 +4224,19 @@
     },
     "src/renderer/src/components/workbench/FilePanel.tsx": {
       "profile": "product",
-      "lines": 777,
-      "contentHash": "85038cadfd79bf98a1a216b80201ba2233b7b91cabf2da958ba7deabdeb5be78",
+      "lines": 800,
+      "contentHash": "b40a05f421f452788a87dc0648b4c1f652a0c1b8ac9df073395dc484fa3066c8",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 626,
       "complexFunctionCount": 2,
-      "maxComplexity": 73,
+      "maxComplexity": 68,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "FilePanel#1": {
           "lines": 626,
-          "complexity": 73
+          "complexity": 68
         },
         "useCallback callback#8": {
           "lines": 82,
@@ -4374,19 +4374,19 @@
     },
     "src/renderer/src/components/workbench/WorkbenchRoot.tsx": {
       "profile": "product",
-      "lines": 584,
-      "contentHash": "e5560639d99a6fd4ac5d2cda8d4c0f25d43c03ac8c8e655877dd09c09ebf6e4b",
+      "lines": 668,
+      "contentHash": "25f7649951b8ef6e63a86bcca2da3f9584c92ed7f7f24bf89ab082419326625b",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 319,
+      "maxFunctionLines": 311,
       "complexFunctionCount": 1,
-      "maxComplexity": 19,
+      "maxComplexity": 16,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "WorkbenchRoot#1": {
-          "lines": 319,
-          "complexity": 19
+          "lines": 311,
+          "complexity": 16
         }
       }
     },

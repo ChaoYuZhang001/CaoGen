@@ -50,12 +50,7 @@ async function run() {
   await selectSession(win, alpha.id)
   await openFiles(win)
 
-  await openFile(win, 'src/a.ts')
-  check('project browser renders hierarchical directory rows with basename labels',
-    await rendererValue(win, `document.querySelector('.file-row-directory[title="src"] .file-row-path')?.textContent === 'src'`))
-  check('opening the first file creates one active tab', await tabState(win, 'src/a.ts') === 'active')
-  await setEditorText(win, 'export const a = 2\n')
-  check('typing marks the active tab dirty', await tabDirty(win, 'src/a.ts'))
+  await verifyWorkbenchKeyboard(win)
 
   await openFile(win, 'src/b.ts')
   check('opening another file keeps both tabs', await tabCount(win) === 2)
@@ -172,6 +167,8 @@ async function run() {
   await closeTab(win, 'src/semantic.ts')
   await selectFileBrowserMode(win, 'tree')
 
+  await verifyToolDrawerKeyboard(win)
+
   await settleRenderer(win)
   const desktop = await layoutState(win)
   check('multi-tab editor fits and fills the desktop workbench panel',
@@ -204,6 +201,51 @@ async function run() {
   app.exit(0)
 }
 
+async function verifyWorkbenchKeyboard(win) {
+  const widthBeforeKeyboardResize = await rendererValue(win, `Number(document.querySelector('.workbench-side-gutter')?.getAttribute('aria-valuenow'))`)
+  await rendererValue(win, `document.querySelector('.workbench-side-gutter')?.focus()`)
+  await key(win, 'ArrowLeft')
+  check('vertical workbench separator supports keyboard resizing',
+    await rendererValue(win, `Number(document.querySelector('.workbench-side-gutter')?.getAttribute('aria-valuenow')) > ${widthBeforeKeyboardResize}`))
+  await rendererValue(win, `document.querySelector('[data-developer-view="files"]')?.focus()`)
+  await key(win, 'ArrowRight')
+  await waitForRenderer(win, `document.querySelector('[data-developer-view="tests"]')?.getAttribute('aria-selected') === 'true'`)
+  check('ArrowRight moves the Code workspace tab and roving focus to Tests', await rendererValue(win, `document.activeElement?.getAttribute('data-developer-view') === 'tests'`))
+  await key(win, 'ArrowLeft')
+  await waitForRenderer(win, `document.querySelector('[data-developer-view="files"]')?.getAttribute('aria-selected') === 'true'`)
+  check('ArrowLeft returns the Code workspace tab and focus to Files', await rendererValue(win, `document.activeElement?.getAttribute('data-developer-view') === 'files'`))
+  check('project browser renders hierarchical directory rows with basename labels', await rendererValue(win, `document.querySelector('.file-row-directory[title="src"] .file-row-path')?.textContent === 'src'`))
+  await rendererValue(win, `document.querySelector('[data-file-browser-mode="tree"]')?.focus()`)
+  await key(win, 'ArrowRight')
+  await waitForRenderer(win, `document.querySelector('[data-file-browser-mode="search"]')?.getAttribute('aria-selected') === 'true'`)
+  check('file browser tabs support ArrowRight selection and roving focus', await rendererValue(win, `document.activeElement?.getAttribute('data-file-browser-mode') === 'search'`))
+  await key(win, 'ArrowLeft')
+  await waitForRenderer(win, `document.querySelector('[data-file-browser-mode="tree"]')?.getAttribute('aria-selected') === 'true'`)
+  await rendererValue(win, `document.querySelector('[data-file-tree-path="src"]')?.focus()`)
+  await key(win, 'ArrowLeft')
+  await waitForRenderer(win, `document.querySelector('[data-file-tree-path="src"]')?.getAttribute('aria-expanded') === 'false'`)
+  await key(win, 'ArrowRight')
+  await waitForRenderer(win, `document.querySelector('[data-file-tree-path="src"]')?.getAttribute('aria-expanded') === 'true'`)
+  await key(win, 'ArrowDown')
+  check('file tree arrows collapse, expand, and enter the first child', await rendererValue(win, `document.activeElement?.getAttribute('data-file-tree-path')?.startsWith('src/') === true`))
+  await rendererValue(win, `document.querySelector('[data-file-tree-path="src/a.ts"]')?.focus()`)
+  await key(win, 'Enter')
+  await waitForRenderer(win, `document.querySelector('.file-editor-textarea')?.getAttribute('data-file-editor-path') === 'src/a.ts'`)
+  check('Enter opens the focused file tree item as the only active tab',
+    await tabState(win, 'src/a.ts') === 'active' && await tabCount(win) === 1)
+  await setEditorText(win, 'export const a = 2\n')
+  check('typing marks the active tab dirty', await tabDirty(win, 'src/a.ts'))
+}
+
+async function verifyToolDrawerKeyboard(win) {
+  await rendererValue(win, `document.querySelector('.desk-rail-drawer-anchor .desk-rail-button')?.click()`)
+  await waitForRenderer(win, `document.activeElement?.getAttribute('role') === 'menuitem'`)
+  await key(win, 'End')
+  check('tool drawer supports Home/End and arrow-style menu focus', await rendererValue(win, `document.activeElement === document.querySelector('.desk-tool-item:last-child')`))
+  await key(win, 'Escape')
+  check('Escape closes the tool drawer and restores trigger focus', await rendererValue(win, `document.querySelector('.desk-tool-drawer') === null && document.activeElement === document.querySelector('.desk-rail-drawer-anchor .desk-rail-button')`))
+}
+
 async function createSession(providerId, title) {
   return invoke('sessions:create', {
     cwd: projectDir,
@@ -227,6 +269,9 @@ async function selectSession(win, sessionId) {
 async function openFiles(win) {
   await rendererValue(win, `document.querySelector('[data-experience-mode-option="studio"]')?.click()`)
   await waitForRenderer(win, `document.querySelector('.experience-pane')?.getAttribute('data-experience-mode') === 'studio'`)
+  await waitForRenderer(win, `document.querySelector('[data-studio-projection-tab="session"]') !== null`)
+  await rendererValue(win, `document.querySelector('[data-studio-projection-tab="session"]')?.click()`)
+  await waitForRenderer(win, `document.querySelector('[data-studio-projection-tab="session"]')?.getAttribute('aria-selected') === 'true'`)
   await rendererValue(win, `document.querySelector('[aria-label="打开工具抽屉"]')?.click()`)
   await waitForRenderer(win, `document.querySelector('.desk-tool-drawer') !== null`)
   await rendererValue(win, `[...document.querySelectorAll('.desk-tool-item')].find((button) => button.textContent.trim() === '文件')?.click()`)
@@ -417,7 +462,22 @@ function waitForWindow() {
 function waitForRenderer(win, expression, timeoutMs = 10_000) {
   return waitFor(async () => {
     try { return await rendererValue(win, expression) } catch { return false }
-  }, timeoutMs)
+  }, timeoutMs, async () => {
+    try {
+      return await rendererValue(win, `JSON.stringify({
+        expression: ${JSON.stringify(expression)},
+        url: location.href,
+        activeElement: document.activeElement?.outerHTML?.slice(0, 240) || null,
+        developerTabs: [...document.querySelectorAll('[data-developer-view]')].map((tab) => ({
+          view: tab.getAttribute('data-developer-view'),
+          selected: tab.getAttribute('aria-selected'),
+          tabIndex: tab.tabIndex
+        }))
+      })`)
+    } catch (error) {
+      return JSON.stringify({ expression, diagnosticError: String(error) })
+    }
+  })
 }
 
 function rendererValue(win, expression) { return win.webContents.executeJavaScript(expression, true) }
@@ -428,7 +488,7 @@ async function settleRenderer(win) {
   await new Promise((resolve) => setTimeout(resolve, 180))
 }
 
-function waitFor(predicate, timeoutMs) {
+function waitFor(predicate, timeoutMs, diagnostic) {
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const poll = async () => {
@@ -438,7 +498,10 @@ function waitFor(predicate, timeoutMs) {
       } catch {
         // Main and renderer state settle independently.
       }
-      if (Date.now() - started > timeoutMs) return reject(new Error('file editor E2E wait timed out'))
+      if (Date.now() - started > timeoutMs) {
+        const detail = diagnostic ? await diagnostic() : ''
+        return reject(new Error(`file editor E2E wait timed out${detail ? `: ${detail}` : ''}`))
+      }
       setTimeout(() => void poll(), 80)
     }
     void poll()
