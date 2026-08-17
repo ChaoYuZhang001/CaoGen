@@ -669,7 +669,7 @@ try {
 
   await check(cdp, 'tool panel layout controls resize and collapse', async () => {
     const before = await toolPanelState(cdp)
-    const drag = await dragByAriaLabel(cdp, '拖拽调整工具面板宽度', -80, 0, {
+    const drag = await dragByAriaLabel(cdp, '调整工具面板大小', -80, 0, {
       yRatio: 0.25,
       orientation: 'vertical'
     })
