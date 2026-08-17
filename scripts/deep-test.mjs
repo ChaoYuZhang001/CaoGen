@@ -179,6 +179,7 @@ const commandDefinitions = [
   { name: 'routineStore smoke', command: 'node', args: ['scripts/routine-store-smoke.mjs'], category: 'smoke' },
   { name: 'routineRunner smoke', command: 'node', args: ['scripts/routine-runner-smoke.mjs'], category: 'smoke' },
   { name: 'routineExecutor smoke', command: 'node', args: ['scripts/routine-executor-smoke.mjs'], category: 'smoke' },
+  { name: 'Routine canonical workflow required', command: 'node', args: ['scripts/routine-workflow-required.mjs'], category: 'system' },
   { name: 'openai P1 tools smoke', command: 'node', args: ['scripts/openai-p1-tools-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestions smoke', command: 'node', args: ['scripts/start-suggestions-smoke.mjs'], category: 'smoke' },
   { name: 'startSuggestion send smoke', command: 'node', args: ['scripts/start-suggestion-send-smoke.mjs'], category: 'smoke' },

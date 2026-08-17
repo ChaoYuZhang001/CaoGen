@@ -178,6 +178,8 @@
     "test:chat-ergonomics:e2e": "node scripts/chat-ergonomics-e2e.mjs",
     "test:composer-attachments": "node scripts/composer-attachments-smoke.mjs",
     "test:composer-attachments:e2e": "node scripts/composer-attachments-e2e.mjs",
+    "test:routine-workflow": "node scripts/routine-workflow-required.mjs",
+    "test:routine-workflow:required": "npm run test:routine-workflow",
     "test:completion-gap": "node scripts/completion-gap-runner.mjs",
     "test:provider-restart-recheck": "node scripts/provider-restart-recheck.mjs",
     "test:provider-presets": "node scripts/provider-presets-smoke.mjs",
