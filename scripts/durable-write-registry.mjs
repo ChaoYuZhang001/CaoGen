@@ -158,6 +158,11 @@ export const DURABLE_WRITE_REGISTRY = [
     'caogen.session-deletion-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Records the frozen Session identity and resumable deletion phases before destructive boundaries.'
   ),
+  journal(
+    'src/main/projectRefactorJournal.ts',
+    'caogen.project-refactor-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists digest-bound TypeScript refactor snapshots before mutation and supports bounded startup compensation or rollback.'
+  ),
   domain(
     'src/main/data-lifecycle/workflow-project-purge.ts',
     'workflow ledger SQLite plus artifact content', '9', 'delegated_atomic', 'implemented_unverified',
