@@ -217,7 +217,11 @@ const commandDefinitions = [
   { name: 'OpenAI mock e2e', command: 'node', args: ['scripts/openai-mock-e2e.mjs'], category: 'system' },
   { name: 'orchestration mock e2e', command: 'node', args: ['scripts/orchestration-mock-e2e.mjs'], category: 'ui' },
   { name: 'X1/S3 e2e', command: 'node', args: ['scripts/x1-s3-e2e.mjs'], category: 'ui' },
-  { name: 'page operations smoke', command: 'node', args: ['scripts/page-operation-smoke.mjs'], category: 'ui' }
+  { name: 'page operations smoke', command: 'node', args: ['scripts/page-operation-smoke.mjs'], category: 'ui' },
+  { name: 'file editor tabs smoke', command: 'node', args: ['scripts/file-editor-tabs-smoke.mjs'], category: 'smoke' },
+  { name: 'file editor tabs Electron E2E', command: 'node', args: ['scripts/file-editor-tabs-e2e.mjs'], category: 'ui' },
+  { name: 'project debugger smoke', command: 'node', args: ['scripts/project-debugger-smoke.mjs'], category: 'smoke' },
+  { name: 'project debugger Electron E2E', command: 'node', args: ['scripts/project-debug-panel-e2e.mjs'], category: 'ui' }
 ]
 
 export const commands = commandDefinitions.map((item) => ({

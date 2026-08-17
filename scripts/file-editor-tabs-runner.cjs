@@ -92,6 +92,7 @@ async function run() {
   await setEditorText(win, 'export const b = 2\n')
   await key(win, 's', { ctrlKey: true })
   await waitFor(() => fs.readFileSync(path.join(projectDir, 'src', 'b.ts'), 'utf8') === 'export const b = 2\n', 10_000)
+  await waitForRenderer(win, `document.querySelector('[data-file-tab-active="true"]')?.getAttribute('data-file-tab-dirty') !== 'true'`)
   check('Ctrl+S saves through the production file Effect path', !await tabDirty(win, 'src/b.ts'))
 
   await selectFileBrowserMode(win, 'search')
@@ -286,6 +287,7 @@ async function setEditorText(win, value) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   })()`)
   await waitForRenderer(win, `document.querySelector('.file-editor-textarea')?.value === ${JSON.stringify(value)}`)
+  await waitForRenderer(win, `document.querySelector('[data-file-tab-active="true"]')?.getAttribute('data-file-tab-dirty') === 'true'`)
 }
 
 async function setEditorSelection(win, position) {
@@ -321,15 +323,16 @@ function tabDirty(win, filePath) {
 
 async function key(win, keyValue, modifiers = {}) {
   await rendererValue(win, `(() => {
-    const target = document.activeElement instanceof HTMLElement ? document.activeElement : window;
-    target.dispatchEvent(new KeyboardEvent('keydown', {
+    const target = ${modifiers.ctrlKey && (keyValue === 's' || keyValue === 'Tab') ? 'window' : '(document.activeElement instanceof HTMLElement ? document.activeElement : window)'};
+    const event = new KeyboardEvent('keydown', {
       key: ${JSON.stringify(keyValue)},
       code: ${JSON.stringify(modifiers.code || '')},
       bubbles: true,
       cancelable: true,
       ctrlKey: ${Boolean(modifiers.ctrlKey)},
       shiftKey: ${Boolean(modifiers.shiftKey)}
-    }));
+    });
+    target.dispatchEvent(event);
   })()`)
   await settleRenderer(win)
 }
