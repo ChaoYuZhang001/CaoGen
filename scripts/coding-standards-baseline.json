@@ -1177,8 +1177,8 @@
     },
     "src/main/fileOps.ts": {
       "profile": "product",
-      "lines": 510,
-      "contentHash": "bd8f4b0b1a9e9e39ea61323ce4415fcce9b97875873ec9b555a901ba803f1775",
+      "lines": 515,
+      "contentHash": "075dde344bc512e76ef28fe6ee050bc7ac2a52a3eac0143c423c4ca38270880e",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 100,
       "complexFunctionCount": 2,
@@ -1188,7 +1188,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "listProjectFiles#1": {
-          "lines": 63,
+          "lines": 68,
           "complexity": 16
         },
         "searchProjectText#1": {

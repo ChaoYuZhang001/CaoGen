@@ -70,6 +70,17 @@ try {
   assert(boundedSearch.truncated, 'bounded search should report truncated results')
   assert(boundedSearch.matches.every((match) => match.snippet.length <= 40))
 
+  const largeListingDir = path.join(projectDir, 'large-tree')
+  mkdirSync(largeListingDir, { recursive: true })
+  for (let index = 0; index < 5_050; index += 1) {
+    writeFileSync(path.join(largeListingDir, `file-${String(index).padStart(4, '0')}.txt`), String(index))
+  }
+  const largeListing = await fileOps.listProjectFiles(projectDir)
+  assertOk(largeListing, 'large repository listing should complete')
+  assert(largeListing.truncated, 'large repository listing should report its bounded result')
+  assert(largeListing.entries.length === 5_000, 'large repository listing should honor the default entry budget')
+  assert(largeListing.entries.some((entry) => entry.path === 'large-tree' && entry.kind === 'directory'), 'large repository listing should retain the parent directory')
+
   const invalidSearch = await fileOps.searchProjectText(projectDir, '\n')
   assert(!invalidSearch.ok, 'searchProjectText should reject an empty single-line query')
 

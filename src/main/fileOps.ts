@@ -230,10 +230,15 @@ export async function listProjectFiles(
 
     const entries: ProjectFileEntry[] = []
     const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }]
+    let queueIndex = 0
     let truncated = false
 
-    while (queue.length > 0) {
-      const current = queue.shift() as { dir: string; depth: number }
+    // Use a cursor instead of Array.shift(): large repositories can enqueue
+    // thousands of directories, and shifting would repeatedly move the
+    // remaining queue entries (turning a breadth-first walk into O(n²)).
+    while (queueIndex < queue.length) {
+      const current = queue[queueIndex] as { dir: string; depth: number }
+      queueIndex += 1
       const children = await readSortedDir(current.dir)
 
       for (const child of children) {
