@@ -15,11 +15,11 @@ import { CONTROL_ROOM_LAYOUT } from './kit/controlRoomLayout'
 import OfficeScene from './kit/OfficeScene'
 import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
 import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQuality'
-import WorkstationPro, { activityOf } from './kit/WorkstationPro'
+import WorkstationPro from './kit/WorkstationPro'
 import OfficeBootCharacter from './kit/OfficeBootCharacter'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
-import { buildOfficeModel } from './model'
+import { buildOfficeModel, officeActivityForSessionId } from './model'
 import type { OfficeRealtimeSummary, OfficeSessionActivity } from './model'
 import OfficeFailoverSignals from './OfficeFailoverSignals'
 import { useOfficeBootStages } from './useOfficeBootStages'
@@ -478,7 +478,7 @@ export default function OfficeView(): React.JSX.Element {
       visibleIds.reduce(
         (acc, id) => {
           acc.total += 1
-          acc[activityOf(sessions[id])] += 1
+          acc[officeActivityForSessionId(id, sessions)] += 1
           return acc
         },
         { total: 0, idle: 0, working: 0, awaiting: 0, completed: 0, error: 0 }
@@ -535,7 +535,7 @@ export default function OfficeView(): React.JSX.Element {
       const session = sessions[id]
       const position = positions[i]
       if (!session || !position) return
-      const activity = activityOf(session)
+      const activity = officeActivityForSessionId(session.meta.id, sessions)
       const home: [number, number, number] = [position[0], 0, position[2] + 0.64]
       const homeLookAt: [number, number, number] = [position[0], 0, position[2] - 0.48]
       const providerName = providerNameOf(session.meta.providerId)
@@ -645,12 +645,12 @@ export default function OfficeView(): React.JSX.Element {
   )
   const activeOfficeIndex = activeOfficeId ? visibleIds.indexOf(activeOfficeId) : -1
   const activeOfficeSession = activeOfficeId ? sessions[activeOfficeId] : undefined
-  const activeOfficeActivity = activeOfficeSession ? activityOf(activeOfficeSession) : undefined
+  const activeOfficeActivity = activeOfficeSession ? officeActivityForSessionId(activeOfficeSession.meta.id, sessions) : undefined
   const activeOfficeSignal = activeOfficeId ? officeModel.sessions[activeOfficeId]?.signal : undefined
   const faultHitTargets = visibleIds
     .map((id, i) => ({
       id,
-      activity: activityOf(sessions[id]),
+      activity: officeActivityForSessionId(id, sessions),
       x: positions[i]?.[0] ?? 0,
       y: 0.9,
       z: (positions[i]?.[2] ?? 0) + 0.54
@@ -1136,7 +1136,7 @@ export default function OfficeView(): React.JSX.Element {
                     sessionId={id}
                     position={positions[i]}
                     active={id === activeOfficeId}
-                    activity={activityOf(sessions[id])}
+                    activity={officeActivityForSessionId(id, sessions)}
                     title={sessions[id].meta.title}
                     costUsd={sessions[id].meta.costUsd}
                     brandName={

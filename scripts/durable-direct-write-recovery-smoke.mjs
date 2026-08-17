@@ -69,6 +69,7 @@ try {
   await check('Active Session Registry rejects empty and duplicate recovery identities', verifyAmbiguousActiveSessionIdentity)
   await check('Active Session Registry blocks the whole batch after a semantic recovery failure', verifySemanticActiveSessionFailure)
   await check('Active Session Registry disposes a prepared Engine when a later factory fails', verifyActiveSessionFactoryFailureIsolation)
+  await check('Active Session Registry delegates restored Engine startup without dropping sessions', verifyDeferredActiveSessionStart)
   await check('Active Session Registry preserves externally blocked recovery records', verifyExternallyBlockedActiveSession)
   await check('Active Session Registry preserves blocked records with a different authoritative SDK identity', verifyBlockedActiveSessionSdkMismatch)
   await check('Active Session Registry quarantine blocks pending strict and dispatch non-strict writes', verifyActiveSessionWriteQuarantine)
@@ -595,6 +596,47 @@ async function verifyActiveSessionFactoryFailureIsolation() {
   assert.equal(existsSync(path.join(root, 'projects.json')), false)
   assert.match(registry.activeSessionRegistryWriteQuarantineReason(), /injected second Engine factory failure/)
   assert.equal(readFileSync(file, 'utf8'), before)
+}
+
+async function verifyDeferredActiveSessionStart() {
+  const root = path.join(tempRoot, 'active-session-deferred-start')
+  const file = path.join(root, 'active-sessions.json')
+  const records = [
+    activeSessionFixture(root, {
+      id: 'deferred-idle', sdkSessionId: 'sdk-deferred-idle', engine: 'deferred-start-fixture', status: 'idle'
+    }),
+    activeSessionFixture(root, {
+      id: 'deferred-running', sdkSessionId: 'sdk-deferred-running', engine: 'deferred-start-fixture', status: 'running'
+    })
+  ]
+  mkdirSync(root, { recursive: true })
+  writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, sessions: records }, null, 2)}\n`, 'utf8')
+  let startCount = 0
+  loadEngineModule().registerEngine({
+    kind: 'deferred-start-fixture',
+    label: 'Deferred start fixture',
+    available: () => true,
+    create(meta) {
+      return fakeEngine(meta, { start: () => { startCount += 1 } })
+    }
+  })
+
+  const delegated = []
+  const registry = loadActiveSessionModule(root)
+  const sessions = new Map()
+  const result = await registry.restoreActiveSessionRegistry(new Set(), sessions, new Map(), () => {}, {
+    startRestoredEngine(record, engine) {
+      delegated.push(`${record.id}:${record.status}`)
+      if (record.status === 'running') return engine.start()
+    }
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(result.registryChanged, true)
+  assert.equal(result.artifactsCanBePruned, true)
+  assert.deepEqual(delegated, ['deferred-idle:idle', 'deferred-running:running'])
+  assert.equal(sessions.size, 2)
+  assert.equal(startCount, 1)
 }
 
 async function verifyExternallyBlockedActiveSession() {

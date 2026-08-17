@@ -94,6 +94,7 @@ import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome
 import { createResourceCatalogSlice, type ResourceCatalogSlice } from './store/resource-catalog'
 import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
+import { mergeHydratedSessionPermissions, SessionTranscriptHydrator } from './store/session-transcript-hydrator'
 import { createTerminalActions } from './store/terminal-actions'
 import { createBrowserActions } from './store/browser-actions'
 import {
@@ -161,6 +162,7 @@ async function sendQuickbarPayload(
  */
 const pendingEvents = new Map<string, Array<{ seq: number; event: AgentEvent; eventId?: string }>>()
 const appliedEventIds = new Map<string, string[]>()
+const transcriptHydrator = new SessionTranscriptHydrator()
 const PENDING_EVENTS_CAP = 200
 const APPLIED_EVENT_IDS_CAP = 256
 
@@ -1316,6 +1318,7 @@ export const useStore = create<AppStore>((set, get) => {
       window.agentDesk.listSessions(),
       window.agentDesk.getSettings()
     ])
+    const initialActiveId = get().activeId ?? metas[0]?.id ?? null
     set((s) => {
       const sessions = { ...s.sessions }
       const order = [...s.order]
@@ -1325,7 +1328,7 @@ export const useStore = create<AppStore>((set, get) => {
           order.push(meta.id)
         }
       }
-      const activeId = s.activeId ?? order[0] ?? null
+      const activeId = s.activeId ?? initialActiveId ?? order[0] ?? null
       return {
         hydrated: true,
         sessions,
@@ -1336,35 +1339,18 @@ export const useStore = create<AppStore>((set, get) => {
       }
     })
     // 渲染进程重载会丢掉未决权限请求 + 聊天记录;从主进程补回
-    const transcriptHydration = Promise.all(
-      metas.map(async (meta) => {
-        const [permissionsResult, transcriptResult] = await Promise.allSettled([
-          window.agentDesk.listPendingPermissions(meta.id),
-          window.agentDesk.getTranscript(meta.id)
-        ])
-        if (permissionsResult.status === 'rejected') {
-          console.warn(`Failed to restore pending permissions for ${meta.id}`, permissionsResult.reason)
-        }
-        if (transcriptResult.status === 'rejected') {
-          console.warn(`Failed to restore transcript for ${meta.id}`, transcriptResult.reason)
-        }
-        const reqs = permissionsResult.status === 'fulfilled' ? permissionsResult.value : []
-        const transcript = transcriptResult.status === 'fulfilled' ? transcriptResult.value : []
-        if (reqs.length === 0 && transcript.length === 0) return
+    const transcriptHydration = transcriptHydrator.hydrateEager(metas, initialActiveId, {
+      listPendingPermissions: (sessionId) => window.agentDesk.listPendingPermissions(sessionId),
+      apply: (meta, permissions, transcript) => {
+        if (permissions.length === 0 && transcript.length === 0) return
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          let next = session
-          if (reqs.length > 0) {
-            const known = new Set(session.pendingPermissions.map((p) => p.requestId))
-            const merged = [...session.pendingPermissions, ...reqs.filter((r) => !known.has(r.requestId))]
-            next = { ...next, pendingPermissions: merged }
-          }
-          if (transcript.length > 0) next = replayTranscript(next, transcript)
-          return { sessions: { ...s.sessions, [meta.id]: next } }
+          const next = transcript.length > 0 ? replayTranscript(session, transcript) : session
+          return { sessions: { ...s.sessions, [meta.id]: mergeHydratedSessionPermissions(next, permissions) } }
         })
-      })
-    )
+      }
+    })
     const secondaryLabels = ['history', 'providers', 'projects', 'canonical projects', 'task recovery', 'workflow attention']
     const secondaryResults = await Promise.allSettled([
       window.agentDesk.listHistory().then((history) => set({ history })),
@@ -1422,12 +1408,12 @@ export const useStore = create<AppStore>((set, get) => {
     })
     // init 到达意味着 sdkSessionId 已确定,转录文件已可读;触发回放(仅 resume 会话需要)
     if (event.kind === 'init' && event.sdkSessionId) {
-      void window.agentDesk.getTranscript(sessionId).then((transcript) => {
+      void transcriptHydrator.load(sessionId).then((transcript) => {
         if (transcript.length === 0) return
         set((s) => {
           const session = s.sessions[sessionId]
           if (!session) return s
-          return { sessions: { ...s.sessions, [sessionId]: replaceTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [sessionId]: replayTranscript(session, transcript) } }
         })
       })
     }
@@ -1517,12 +1503,12 @@ export const useStore = create<AppStore>((set, get) => {
     // drain 只做 reduce,不会触发 handleEvent 里的 init→转录回放副作用,
     // 导致恢复的会话聊天记录空白。此处注册完成后主动补拉一次转录。
     if (opts.resumeSdkSessionId || opts.forkFromSdkSessionId) {
-      const transcript = await window.agentDesk.getTranscript(meta.id)
+      const transcript = await transcriptHydrator.load(meta.id)
       if (transcript.length > 0) {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
         })
       }
     }
@@ -1571,12 +1557,12 @@ export const useStore = create<AppStore>((set, get) => {
           activeId: meta.id
         }
       })
-      const transcript = await window.agentDesk.getTranscript(meta.id)
+      const transcript = await transcriptHydrator.load(meta.id)
       if (transcript.length > 0) {
         set((s) => {
           const session = s.sessions[meta.id]
           if (!session) return s
-          return { sessions: { ...s.sessions, [meta.id]: replaceTranscript(session, transcript) } }
+          return { sessions: { ...s.sessions, [meta.id]: replayTranscript(session, transcript) } }
         })
       }
       const [history, projects, taskSnapshots] = await Promise.all([
@@ -1751,6 +1737,14 @@ export const useStore = create<AppStore>((set, get) => {
             }
           : s.workbench
     }))
+    void transcriptHydrator.load(id).then((transcript) => {
+      if (transcript.length === 0) return
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return s
+        return { sessions: { ...s.sessions, [id]: replayTranscript(session, transcript) } }
+      })
+    }).catch(() => undefined)
   },
 
   async sendMessage(input, sessionId) {

@@ -167,8 +167,35 @@ export function officeActivityOf(session: SessionState): OfficeSessionActivity {
   return 'idle'
 }
 
-export function officeWatercolorStateOf(session: SessionState): WatercolorCharacterState {
+function parentSubagentResult(session: SessionState, parent?: SessionState): 'done' | 'error' | undefined {
+  if (!parent || !session.meta.parentSessionId) return undefined
+  return Object.values(parent.childResults).find((result) => result.childSessionId === session.meta.id)?.status
+}
+
+export function officeActivityForSession(
+  session: SessionState,
+  parent?: SessionState
+): OfficeSessionActivity {
+  if (session.pendingPermissions.length > 0) return 'awaiting'
+  const result = parentSubagentResult(session, parent)
+  if (result) return result === 'error' ? 'error' : 'completed'
+  return officeActivityOf(session)
+}
+
+export function officeActivityForSessionId(
+  sessionId: string,
+  sessions: Readonly<Record<string, SessionState>>
+): OfficeSessionActivity {
+  const session = sessions[sessionId]
+  if (!session) return 'idle'
+  const parent = session.meta.parentSessionId ? sessions[session.meta.parentSessionId] : undefined
+  return officeActivityForSession(session, parent)
+}
+
+export function officeWatercolorStateOf(session: SessionState, parent?: SessionState): WatercolorCharacterState {
   if (session.pendingPermissions.length > 0) return 'awaiting-approval'
+  const result = parentSubagentResult(session, parent)
+  if (result) return result === 'error' ? 'blocked' : 'delivering'
   if (session.meta.status === 'error') return 'blocked'
   if (session.meta.status === 'running' || session.meta.status === 'starting') {
     if (isWorkflowAcceptanceRepairWorkItemId(session.meta.workItemId)) return 'repairing'
@@ -643,7 +670,10 @@ export function buildOfficeModel(
     const signal = sessionSignal(session, gitStatuses[sessionId])
     bySession[sessionId] = {
       sessionId,
-      characterState: officeWatercolorStateOf(session),
+    characterState: officeWatercolorStateOf(
+      session,
+      session.meta.parentSessionId ? sessions[session.meta.parentSessionId] : undefined
+    ),
       tasks,
       taskStats,
       currentTask: active,

@@ -21,10 +21,13 @@ try {
     '--lib', 'ES2022,DOM',
     '--skipLibCheck',
     'src/renderer/src/store/composer-draft-persistence.ts',
-    'src/renderer/src/store/session-close-state.ts'
+    'src/renderer/src/store/session-close-state.ts',
+    'src/renderer/src/store/session-transcript-hydrator.ts',
+    'src/renderer/src/env.d.ts'
   ], { cwd: repoRoot, stdio: 'inherit' })
   const persistence = await import(pathToFileURL(findCompiled(outDir, 'composer-draft-persistence.js')).href)
   const sessionClose = await import(pathToFileURL(findCompiled(outDir, 'session-close-state.js')).href)
+  const transcriptHydration = await import(pathToFileURL(findCompiled(outDir, 'session-transcript-hydrator.js')).href)
   const storage = memoryStorage()
 
   equal(persistence.readComposerDraft(storage, 'alpha'), '', 'missing draft reads empty')
@@ -72,6 +75,42 @@ try {
   assert.deepEqual(restored, beforeClose, 'failed active close restores session order and complete UI state')
   checks.push('failed active close restores session order and complete UI state')
 
+  const transcriptRequests = []
+  globalThis.window = {
+    agentDesk: {
+      getTranscript: (sessionId) => {
+        transcriptRequests.push(sessionId)
+        return Promise.resolve([{ seq: transcriptRequests.length, event: { kind: 'status', status: 'idle' } }])
+      }
+    }
+  }
+  const hydrator = new transcriptHydration.SessionTranscriptHydrator()
+  const firstTranscript = hydrator.load('selected')
+  equal(hydrator.load('selected'), firstTranscript, 'concurrent transcript hydration shares one request')
+  await firstTranscript
+  await hydrator.load('selected')
+  equal(transcriptRequests.filter((id) => id === 'selected').length, 2, 'settled transcript hydration releases its cache')
+  const hydratedIds = []
+  await hydrator.hydrateEager([
+    { id: 'selected', status: 'idle' },
+    { id: 'running', status: 'running' },
+    { id: 'starting', status: 'starting' },
+    { id: 'dormant', status: 'idle' }
+  ], 'selected', {
+    listPendingPermissions: async () => [],
+    apply: (meta) => hydratedIds.push(meta.id)
+  })
+  assert.deepEqual(hydratedIds.sort(), ['running', 'selected', 'starting'],
+    'cold start hydrates only selected or active transcripts')
+  checks.push('cold start hydrates only selected or active transcripts')
+  const permissions = transcriptHydration.mergeHydratedSessionPermissions(
+    { pendingPermissions: [{ requestId: 'known' }] },
+    [{ requestId: 'known' }, { requestId: 'new' }]
+  )
+  assert.deepEqual(permissions.pendingPermissions.map((item) => item.requestId), ['known', 'new'],
+    'pending permission hydration remains idempotent')
+  checks.push('pending permission hydration remains idempotent')
+
   const composer = readFileSync('src/renderer/src/components/Composer.tsx', 'utf8')
   const autosize = readFileSync('src/renderer/src/components/useAutosizeTextarea.ts', 'utf8')
   const disclosure = readFileSync('src/renderer/src/components/DisclosureChevron.tsx', 'utf8')
@@ -106,6 +145,9 @@ try {
   check('active session close leaves the renderer on an immediately editable surface',
     store.indexOf('set((s) => removeClosingSession', store.indexOf('async closeSession(id)')) <
       store.indexOf('await window.agentDesk.closeSession(id)', store.indexOf('async closeSession(id)')))
+  check('cold start hydrates only visible or running transcripts and loads others on selection',
+    store.includes('transcriptHydrator.hydrateEager(metas, initialActiveId') &&
+      store.includes('void transcriptHydrator.load(id).then((transcript) =>'))
   check('accepted sends clear the persisted session draft', composer.includes("setText('')") && hook.includes('writeComposerDraft(storage, sessionId, next)'))
   check('user and assistant messages expose copy actions', (message.match(/kind="message"/g) ?? []).length === 2)
   check('assistant copy excludes thinking and tool blocks', message.includes("filter((block) => block.type === 'text')"))

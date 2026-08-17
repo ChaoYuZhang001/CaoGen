@@ -149,6 +149,8 @@ function verifyProductionWiring() {
   assertIncludes(coordinator, 'tryReserve(parentSessionId')
   assertIncludes(manager, 'reserveTaskCapacity: () => this.agentCapacity.tryReserve(parentSessionId)')
   assertIncludes(manager, 'this.agentCapacity.scheduleDrain()')
+  assertIncludes(manager, 'startRestoredEngine: (record, engine) => this.sessionStarts.restore(record, engine)')
+  assertIncludes(manager, 'await this.sessionStarts.ensure(id, session)')
   assertIncludes(panel, 'MAX_DIRECT_SUBAGENT_TASKS')
   assertEqual(panel.includes('终极目标 33 路模板'), false)
   assertIncludes(manager, 'this.subagentOrchestration.handleEvent(sessionId, event)')

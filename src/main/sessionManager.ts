@@ -14,11 +14,8 @@ import { checkpointRestoreEffectBoundary } from './checkpoint-effect-boundary'
 import { normalizeStableMessagePayload } from './stable-message-payload'
 import { withSessionOperationQueue } from './session-operation-queue'
 import {
-  cleanupTranscripts,
-  readTranscriptEntries,
-  restoreTranscriptIfMissing,
-  shouldPersistConversationLedgerEvent,
-  transcriptForkSeedEntries
+  cleanupTranscripts, readTranscriptEntries, restoreTranscriptIfMissing,
+  shouldPersistConversationLedgerEvent, transcriptForkSeedEntries
 } from './transcript'
 import { touchProject } from './projects'
 import { inspectManagedWorktreeRegistryRecord, managedWorktreeRecordForSession } from './worktrees'
@@ -75,12 +72,7 @@ import { SubagentOrchestrationCoordinator } from './task/subagent-orchestration-
 import { DIRECT_SUBAGENT_LIMIT_MESSAGE, MAX_DIRECT_SUBAGENT_TASKS } from '../shared/agent-capacity-policy'
 import { AgentCapacityCoordinator } from './agent/agent-capacity-coordinator'
 import { provisionDagChildSession } from './agent/dag-child-provisioner'
-import {
-  createTaskRun,
-  createSessionTaskRun,
-  isTaskRunTerminal,
-  transitionTaskRun
-} from './task/task-run'
+import { createTaskRun, createSessionTaskRun, isTaskRunTerminal, transitionTaskRun } from './task/task-run'
 import { recoverTaskExecutionState } from './task/task-execution'
 import { taskRuntimeRegistry } from './task/task-runtime-registry'
 import { reconcileSnapshotWithReceipts } from './task/task-recovery'
@@ -110,6 +102,7 @@ import { TaskDagFinalizationCoordinator } from './task/dag-finalization-coordina
 import { requirePlanningTaskStrategy } from './task/task-strategy'
 import { redactSensitiveValue } from './security/secret-redaction'
 import { TaskPlanSessionCoordinator } from './task/task-plan-session-coordinator'
+import { SessionStartCoordinator } from './session-start-coordinator'
 import { approvedTaskPlanToDag, taskDagToPlanDraft } from './task/task-plan-dag'
 import { ModelCrossValidationRuntime } from './model/cross-validation-runtime'
 import type {
@@ -191,6 +184,7 @@ type CheckpointOperationAttempt<T extends { error?: string }> = {
 }
 class SessionManager {
   private readonly sessions = new Map<string, Engine>()
+  private readonly sessionStarts = new SessionStartCoordinator((id) => this.sessions.get(id))
   private readonly taskPlans = new TaskPlanSessionCoordinator(
     (id) => this.sessions.get(id), () => app.getPath('userData'))
   private readonly taskRuns = taskRuntimeRegistry
@@ -1057,9 +1051,9 @@ class SessionManager {
     if (runGateError) return rejectSessionSend(session, runGateError)
     if (!sendableSession(session)) return false
     try {
-      await this.supervisor.authorizeSend(session, nextRun, {
-        supervisorControlReplay: options.supervisorControlReplay
-      })
+      await this.supervisor.authorizeSend(session, nextRun,
+        { supervisorControlReplay: options.supervisorControlReplay })
+      await this.sessionStarts.ensure(id, session)
     } catch (error) {
       session.rejectSend(supervisorSendError(error))
       return false
@@ -1449,6 +1443,7 @@ class SessionManager {
     this.supervisor.releaseSession(id, run?.id)
     this.stopEnginePowerBlocker(id)
     this.sessions.delete(id)
+    this.sessionStarts.forget(id)
     this.snapshotCounts.delete(id)
     this.recentEventIds.delete(id)
     this.persistActiveSessions()
@@ -1496,6 +1491,7 @@ class SessionManager {
       this.workflow.persistShutdownSnapshot(id, this.workflow.captureSnapshot(id, 'shutdown', 0, 'status'))))
     await flushTaskSnapshotMutations()
     this.sessions.clear()
+    this.sessionStarts.clear()
     this.notifications.clear()
     this.taskRuns.clear()
     this.recentEventIds.clear()
@@ -2584,7 +2580,10 @@ class SessionManager {
       this.sessions,
       this.snapshotCounts,
       (sessionId, event, seq, identity) => this.dispatch(sessionId, event, seq, identity),
-      { preserveRegistrySessionIds }
+      {
+        preserveRegistrySessionIds,
+        startRestoredEngine: (record, engine) => this.sessionStarts.restore(record, engine)
+      }
     )
     if (result.registryChanged) this.persistActiveSessions()
     return result

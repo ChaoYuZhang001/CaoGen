@@ -174,6 +174,22 @@ async function phaseRestore() {
   check('CG-WF-010A restored transcript contains marker', JSON.stringify(transcript).includes(marker))
   check('CG-WF-010A restored history contains marker', sessionsJsonText().includes(marker))
 
+  await withMockResponsesServer(async (baseUrl) => {
+    await invoke('providers:update', state.providerId, { baseUrl })
+    const completedBefore = transcript.filter((entry) => entry.event.kind === 'turn-result').length
+    const accepted = await invoke('sessions:send', state.sessionId, {
+      text: `continue after restart ${marker}`,
+      messageId: 'completion-gap-restored-send'
+    })
+    check('CG-FW-006 restored idle Engine accepts first send', accepted === true)
+    const resumedTranscript = await waitFor(async () => {
+      const entries = await invoke('sessions:transcript', state.sessionId)
+      const completed = entries.filter((entry) => entry.event.kind === 'turn-result').length
+      return completed > completedBefore ? entries : undefined
+    }, 8000, 'restored idle Engine did not complete the first send')
+    check('CG-FW-006 restored idle Engine reaches Provider', JSON.stringify(resumedTranscript).includes(`restored ${marker}`))
+  })
+
   const readBack = await invoke('files:intelligence', 'read', state.sessionId, 'marker.txt')
   check('CG-WF-010B file IPC reads after restart', readBack.ok && readBack.content.includes(marker))
   const writeBack = await invoke('files:write', state.sessionId, 'restored.txt', 'after restart')

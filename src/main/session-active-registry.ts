@@ -18,13 +18,13 @@ import {
   activeSessionRegistryDocument
 } from './active-session-registry-format'
 import type { Engine } from './engine'
-import { createEngine } from './engine'
 import { touchProject } from './projects'
 import { sessionMetaForRecovery } from './session-create-lifecycle'
 import {
-  bindLegacyUnscopedSessionForRecovery,
-  resolveDigitalWorkerSessionScope
-} from './digital-worker/session-binding'
+  prepareActiveSessionEngines,
+  startActiveSessionEngines,
+  type PreparedActiveSession
+} from './session-active-registry-restore'
 
 export interface ActiveSessionRecoveryPlan {
   records: SessionMeta[]
@@ -41,6 +41,11 @@ export interface ActiveSessionRegistryRestoreResult {
 
 export interface ActiveSessionRegistryRestoreOptions {
   preserveRegistrySessionIds?: ReadonlySet<string>
+  /**
+   * Allows the owner to keep an otherwise restorable session dormant until its
+   * first operation. The default remains eager startup for isolated callers.
+   */
+  startRestoredEngine?: (record: SessionMeta, engine: Engine) => void | Promise<void>
 }
 
 export class ActiveSessionRegistryWriteQuarantinedError extends Error {
@@ -92,36 +97,9 @@ export async function restoreActiveSessionRegistry(
     return { registryChanged: false, artifactsCanBePruned: false }
   }
 
-  const prepared: Array<{
-    meta: SessionMeta
-    engine: Engine
-    projectPath?: string
-    bufferedEvents: Array<{ event: AgentEvent; seq: number; identity?: AgentEventIdentity }>
-  }> = []
+  const prepared: PreparedActiveSession[] = []
   try {
-    const metas = plan.restorable.map((record) => {
-      const meta = bindLegacyUnscopedSessionForRecovery(restoredSessionMeta(record))
-      resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
-      return {
-        meta,
-        sdkSessionId: record.sdkSessionId,
-        projectPath: !meta.unassigned && !meta.projectId ? meta.sourceCwd ?? meta.cwd : undefined
-      }
-    })
-    for (const item of metas) {
-      const bufferedEvents: Array<{ event: AgentEvent; seq: number; identity?: AgentEventIdentity }> = []
-      prepared.push({
-        meta: item.meta,
-        projectPath: item.projectPath,
-        bufferedEvents,
-        engine: createEngine(
-          item.meta.engine,
-          item.meta,
-          (event, seq, identity) => bufferedEvents.push({ event, seq, identity }),
-          item.sdkSessionId
-        )
-      })
-    }
+    prepareActiveSessionEngines(plan.restorable, prepared)
   } catch (error) {
     await disposePreparedEngines(prepared)
     quarantineActiveSessionRegistryWrites(
@@ -153,11 +131,7 @@ export async function restoreActiveSessionRegistry(
       emit(item.meta.id, buffered.event, buffered.seq, buffered.identity)
     }
   }
-  for (const item of prepared) {
-    void item.engine.start().catch((error) => {
-      console.error(`[caogen] active session Engine 启动失败 (${item.meta.id}):`, error)
-    })
-  }
+  startActiveSessionEngines(prepared, options.startRestoredEngine)
   const artifactsCanBePruned = activeSessionArtifactsCanBePruned(plan)
   return {
     registryChanged: prepared.length > 0 || plan.registryReconciled,
@@ -254,16 +228,6 @@ function sameSessionPlacement(left: SessionMeta, right: SessionMeta): boolean {
     left.baseBranch === right.baseBranch &&
     left.baseSha === right.baseSha &&
     left.worktreeState === right.worktreeState
-}
-
-function restoredSessionMeta(record: SessionMeta): SessionMeta {
-  return {
-    ...record,
-    status: 'starting',
-    lastError: record.status === 'running' || record.status === 'starting'
-      ? '应用上次退出时该任务尚未完成；会话已恢复，请确认当前文件状态后继续。'
-      : record.lastError
-  }
 }
 
 function readActiveSessionRegistry(): { records: SessionMeta[]; error?: string } {

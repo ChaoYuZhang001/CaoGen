@@ -2493,26 +2493,26 @@
     },
     "src/main/session-active-registry.ts": {
       "profile": "product",
-      "lines": 382,
-      "contentHash": "86bda387f97c2364f5ccbbde9186eb63df32becaa0406fa51106b8c192592c30",
+      "lines": 346,
+      "contentHash": "4f64db07c27702c5b8084d81a58cfa7572faeb608682a406863886d05a4aee03",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 102,
+      "maxFunctionLines": 71,
       "complexFunctionCount": 1,
-      "maxComplexity": 19,
+      "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "restoreActiveSessionRegistry#1": {
-          "lines": 102,
-          "complexity": 19
+          "lines": 71,
+          "complexity": 17
         }
       }
     },
     "src/main/sessionManager.ts": {
       "profile": "product",
-      "lines": 2706,
-      "contentHash": "bcde8db754537c86ca891761ac6151cf23ddcbca1ab6662f692523fd0bbb19fa",
+      "lines": 2705,
+      "contentHash": "e66c2b62dd653808b1a0bb62f48c613645d16457cfe99145387896fee7aedf2a",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 102,
       "complexFunctionCount": 5,
@@ -3555,7 +3555,7 @@
     "src/renderer/src/components/office/OfficeView.tsx": {
       "profile": "product",
       "lines": 1288,
-      "contentHash": "67ce18d817dbd306e0b95f38db2ec40e296731f3752acfffe206d46a961851be",
+      "contentHash": "c251189c076ce99d44b4bd77cfab52d643d27f40e14ba0014240b0d3f9c29114",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 896,
       "complexFunctionCount": 1,
@@ -3836,8 +3836,8 @@
     },
     "src/renderer/src/components/office/model.ts": {
       "profile": "product",
-      "lines": 688,
-      "contentHash": "99feb8a8e14578660cdf6e7cafc799a70e4afc2ae8e01062b57a5d9a65cc8842",
+      "lines": 718,
+      "contentHash": "bf60a6bf438fd63955c6f01168f436de48d5d01061389b0e43e481ff73884847",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 102,
       "complexFunctionCount": 3,
@@ -4507,10 +4507,10 @@
     },
     "src/renderer/src/store.ts": {
       "profile": "product",
-      "lines": 3809,
-      "contentHash": "045414f4a68b1088fef287d758a00edd25e124ddf4d495ab35ba78a7bec77145",
+      "lines": 3803,
+      "contentHash": "e47dac410dc470df82bb3ec300b82a2d556ed02034acc44c0672d6a322dc528f",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2560,
+      "maxFunctionLines": 2552,
       "complexFunctionCount": 1,
       "maxComplexity": 58,
       "forbiddenSuppressionCount": 0,
@@ -4522,7 +4522,7 @@
           "complexity": 58
         },
         "create callback#1": {
-          "lines": 2560,
+          "lines": 2552,
           "complexity": 1
         }
       }
