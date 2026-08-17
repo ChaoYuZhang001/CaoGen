@@ -376,6 +376,8 @@
     "test:effective-memory-prompt:required": "node scripts/effective-memory-prompt-smoke.mjs",
     "test:learning-approval-panel:required": "node scripts/learning-approval-panel-smoke.mjs",
     "test:model-router": "node scripts/model-router-smoke.mjs",
+    "test:routing-performance": "node scripts/routing-performance-required.mjs",
+    "test:routing-performance:required": "npm run test:routing-performance",
     "test:provider-default-session-routing": "node scripts/provider-default-session-routing-smoke.mjs",
     "test:routing-commercial-neutrality:required": "node scripts/routing-commercial-neutrality-smoke.mjs --required",
     "test:local-provider-parity": "node scripts/local-provider-parity-smoke.mjs",

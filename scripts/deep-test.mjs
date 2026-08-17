@@ -199,6 +199,7 @@ const commandDefinitions = [
   { name: 'provider profile Electron E2E', command: 'node', args: ['scripts/provider-profile-e2e.mjs'], category: 'system' },
   { name: 'modelStats smoke', command: 'node', args: ['scripts/model-stats-smoke.mjs'], category: 'smoke' },
   { name: 'modelRouter smoke', command: 'node', args: ['scripts/model-router-smoke.mjs'], category: 'smoke' },
+  { name: 'routing performance required', command: 'node', args: ['scripts/routing-performance-required.mjs'], category: 'performance' },
   { name: 'routing visibility smoke', command: 'node', args: ['scripts/routing-visibility-smoke.mjs'], category: 'smoke' },
   { name: 'provider health history smoke', command: 'node', args: ['scripts/provider-health-history-smoke.mjs'], category: 'smoke' },
   { name: 'provider key failover smoke', command: 'node', args: ['scripts/provider-key-failover-smoke.mjs'], category: 'smoke' },
