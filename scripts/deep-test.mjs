@@ -25,6 +25,8 @@ const commandDefinitions = [
   { name: 'coding standards required', command: 'node', args: ['scripts/coding-standards-audit.mjs', '--required'], category: 'static' },
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
   { name: 'Assistant/Studio performance required UI e2e', command: 'node', args: ['scripts/assistant-studio-performance-e2e.mjs'], category: 'ui' },
+  { name: 'accessibility required UI e2e', command: 'node', args: ['scripts/accessibility-required.mjs'], category: 'ui' },
+  { name: 'watercolor accessibility required asset gate', command: 'node', args: ['scripts/watercolor-accessibility-required.mjs'], category: 'static' },
   { name: 'Office render readiness smoke', command: 'node', args: ['scripts/office-render-ready-smoke.mjs'], category: 'smoke' },
   { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },
