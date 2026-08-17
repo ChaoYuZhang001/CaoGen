@@ -91,8 +91,7 @@ async function run() {
 
   await setEditorText(win, 'export const b = 2\n')
   await key(win, 's', { ctrlKey: true })
-  await waitFor(() => fs.readFileSync(path.join(projectDir, 'src', 'b.ts'), 'utf8') === 'export const b = 2\n', 10_000)
-  await waitForRenderer(win, `document.querySelector('[data-file-tab-active="true"]')?.getAttribute('data-file-tab-dirty') !== 'true'`)
+  await waitFor(() => fs.readFileSync(path.join(projectDir, 'src', 'b.ts'), 'utf8') === 'export const b = 2\n', 10_000); await waitForRenderer(win, `document.querySelector('[data-file-tab-active="true"]')?.getAttribute('data-file-tab-dirty') !== 'true'`)
   check('Ctrl+S saves through the production file Effect path', !await tabDirty(win, 'src/b.ts'))
 
   await selectFileBrowserMode(win, 'search')

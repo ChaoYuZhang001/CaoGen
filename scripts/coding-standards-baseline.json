@@ -131,8 +131,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 648,
-      "contentHash": "664236a6d171579830c1a268d64b7f2704dff5bba092bf8de0b4250bad985cfc",
+      "lines": 652,
+      "contentHash": "130d059edfda23f4b67df20de053a294276e287fa24f8d55ba285c4a6f7ffdee",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -246,8 +246,8 @@
     },
     "scripts/file-editor-tabs-runner.cjs": {
       "profile": "automation",
-      "lines": 455,
-      "contentHash": "1a0be863443a9c6132e864f40bffb9f2d39b114357a5fdc1f673c67f6eaafbc1",
+      "lines": 457,
+      "contentHash": "489dbf8bcbc7f51e78734fbff9a8f16547b0a73fe70e172af93c8dbbf800bee0",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 173,
       "complexFunctionCount": 1,
