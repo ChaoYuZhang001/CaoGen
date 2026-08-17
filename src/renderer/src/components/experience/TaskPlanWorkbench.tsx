@@ -3,6 +3,7 @@ import type { TaskPlanStateView } from '../../../../shared/types'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import TaskPlanEditor from './TaskPlanEditor'
+import { DisclosureChevron } from '../DisclosureChevron'
 import {
   emptyPlanForm,
   planFormFromVersion,
@@ -134,7 +135,7 @@ function TaskPlanSummary({ t, state, executionStatus, expanded, onToggle }: Task
     <div className="task-plan-summary">
       <button type="button" className="task-plan-toggle" aria-expanded={expanded}
         title={expanded ? t('taskPlanCollapse') : t('taskPlanExpand')} onClick={onToggle}>
-        {expanded ? '⌄' : '›'}
+        <DisclosureChevron expanded={expanded} />
       </button>
       <strong>{t('taskPlanTitle')}</strong>
       <span className="task-plan-version">v{current?.version ?? 0}{digest ? ` · ${digest}` : ''}</span>

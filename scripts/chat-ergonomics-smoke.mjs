@@ -20,9 +20,11 @@ try {
     '--moduleResolution', 'NodeNext',
     '--lib', 'ES2022,DOM',
     '--skipLibCheck',
-    'src/renderer/src/store/composer-draft-persistence.ts'
+    'src/renderer/src/store/composer-draft-persistence.ts',
+    'src/renderer/src/store/session-close-state.ts'
   ], { cwd: repoRoot, stdio: 'inherit' })
   const persistence = await import(pathToFileURL(findCompiled(outDir, 'composer-draft-persistence.js')).href)
+  const sessionClose = await import(pathToFileURL(findCompiled(outDir, 'session-close-state.js')).href)
   const storage = memoryStorage()
 
   equal(persistence.readComposerDraft(storage, 'alpha'), '', 'missing draft reads empty')
@@ -51,13 +53,36 @@ try {
   assert.doesNotThrow(() => persistence.writeComposerDraft(throwingStorage(), 'safe', 'draft'), 'storage failures never block typing')
   checks.push('storage failures never block typing')
 
+  const beforeClose = {
+    sessions: { alpha: { title: 'Alpha' }, beta: { title: 'Beta' } },
+    order: ['alpha', 'beta'],
+    activeId: 'beta',
+    showNewSession: false,
+    newSessionProjectId: 'project-1',
+    showTaskRecovery: true,
+    view: 'office'
+  }
+  const closing = sessionClose.captureClosingSession(beforeClose, 'beta')
+  const removed = { ...beforeClose, ...sessionClose.removeClosingSession(beforeClose, 'beta', closing.wasActive) }
+  equal(removed.activeId, 'alpha', 'active close immediately selects another editable session')
+  const restored = {
+    ...removed,
+    ...sessionClose.restoreClosingSession(removed, 'beta', closing, (_id, session) => session)
+  }
+  assert.deepEqual(restored, beforeClose, 'failed active close restores session order and complete UI state')
+  checks.push('failed active close restores session order and complete UI state')
+
   const composer = readFileSync('src/renderer/src/components/Composer.tsx', 'utf8')
+  const autosize = readFileSync('src/renderer/src/components/useAutosizeTextarea.ts', 'utf8')
+  const disclosure = readFileSync('src/renderer/src/components/DisclosureChevron.tsx', 'utf8')
+  const headerIcons = readFileSync('src/renderer/src/components/ChatHeaderIcons.tsx', 'utf8')
   const hook = readFileSync('src/renderer/src/components/composer/useSessionComposerDraft.ts', 'utf8')
   const message = readFileSync('src/renderer/src/components/MessageItem.tsx', 'utf8')
   const markdown = readFileSync('src/renderer/src/components/Markdown.tsx', 'utf8')
   const copy = readFileSync('src/renderer/src/components/CopyButton.tsx', 'utf8')
   const styles = readFileSync('src/renderer/src/styles.css', 'utf8')
   const chatView = readFileSync('src/renderer/src/components/ChatView.tsx', 'utf8')
+  const sidebar = readFileSync('src/renderer/src/components/Sidebar.tsx', 'utf8')
   const openai = readFileSync('src/main/openaiEngine.ts', 'utf8')
   const anthropic = readFileSync('src/main/anthropicEngine.ts', 'utf8')
   const checkpoint = readFileSync('src/main/provider-chat-checkpoint.ts', 'utf8')
@@ -68,6 +93,19 @@ try {
   )
 
   check('Composer draft is keyed by active session', composer.includes('useSessionComposerDraft(activeId)') && hook.includes('draft.sessionId === sessionId'))
+  check('Composer height follows controlled text and viewport changes',
+    composer.includes('useAutosizeTextarea(textareaRef, text)') &&
+      autosize.includes("element.style.height = '0px'") &&
+      autosize.includes("element.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden'"))
+  check('Composer send and settings controls use the shared Lucide icon system',
+    composer.includes('<ArrowUp') && headerIcons.includes('settings: Settings') &&
+      !composer.includes("uploadingAttachment ? '…' : '↑'"))
+  check('expand and collapse affordances share one disclosure component',
+    disclosure.includes('<ChevronRight') && disclosure.includes("expanded ? 'is-expanded' : ''") &&
+      sidebar.includes('<DisclosureChevron') && !sidebar.includes("collapsed ? '▸' : '▾'"))
+  check('active session close leaves the renderer on an immediately editable surface',
+    store.indexOf('set((s) => removeClosingSession', store.indexOf('async closeSession(id)')) <
+      store.indexOf('await window.agentDesk.closeSession(id)', store.indexOf('async closeSession(id)')))
   check('accepted sends clear the persisted session draft', composer.includes("setText('')") && hook.includes('writeComposerDraft(storage, sessionId, next)'))
   check('user and assistant messages expose copy actions', (message.match(/kind="message"/g) ?? []).length === 2)
   check('assistant copy excludes thinking and tool blocks', message.includes("filter((block) => block.type === 'text')"))

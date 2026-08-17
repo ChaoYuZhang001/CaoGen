@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect } from 'react'
+import { Menu, X } from 'lucide-react'
 import type { ExperienceMode } from '../store/experience-mode'
 import { useStore } from '../store'
 import { useT } from '../i18n'
@@ -57,9 +58,7 @@ function MobileSidebarControls({
         aria-expanded={open}
         onClick={onToggle}
       >
-        <span />
-        <span />
-        <span />
+        {open ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
       </button>
       {open && (
         <button type="button" className="mobile-sidebar-backdrop" aria-label={closeLabel} onClick={onClose} />

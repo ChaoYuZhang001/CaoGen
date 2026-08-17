@@ -187,11 +187,11 @@ report.checks.push({
 })
 
 const remotePort = await findFreePort(9860)
-const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, mainEntry], {
+const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', mainEntry], {
   cwd: repoRoot,
   env: {
     ...process.env,
-    CAOGEN_USER_DATA_DIR: userDataDir,
+    CAOGEN_USER_DATA_DIR: userDataDir, CAOGEN_OFFICE_PERFORMANCE_TEST: '1',
     OPENAI_API_KEY: '',
     ANTHROPIC_API_KEY: '',
     ANTHROPIC_AUTH_TOKEN: ''
@@ -304,7 +304,7 @@ try {
         targetViolations: [],
         regressionViolations: []
       }
-      scenario.characterViolations = evaluateWatercolorScenario(scenario)
+      scenario.characterViolations = evaluateDigitalWorkerScenario(scenario)
       scenario.targetViolations = evaluateScenario(scenario, scenario.target, 'target')
       scenario.regressionViolations = evaluateScenario(
         scenario,
@@ -515,19 +515,19 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
           measurement.snapshotDurationsMs.push(performance.now() - snapshotStartedAt)
           const snapshotObservedAt = snapshotStartedAt - startedAt
           const assetsReady = office?.getAttribute('data-office-scene-assets-ready') === '1'
-          const characterCount = Number(office?.getAttribute('data-office-watercolor-characters') ?? 0)
-          const oneCharacterPerAgent = office?.getAttribute('data-office-one-watercolor-character-per-agent') === '1'
-          const watercolorReady = snapshot?.watercolor?.characters === agents && characterCount === agents && oneCharacterPerAgent
+          const characterCount = Number(office?.getAttribute('data-office-visible-digital-workers') ?? 0)
+          const oneCharacterPerAgent = office?.getAttribute('data-office-one-digital-worker-per-agent') === '1'
+          const workersReady = snapshot?.workers?.characters === agents && characterCount === agents && oneCharacterPerAgent
           if (measurement.sceneAssetsReadyMs === null && assetsReady) {
             measurement.sceneAssetsReadyMs = snapshotObservedAt
           }
-          if (measurement.charactersReadyMs === null && watercolorReady) {
+          if (measurement.charactersReadyMs === null && workersReady) {
             measurement.charactersReadyMs = snapshotObservedAt
             measurement.observed = {
-              watercolorCharacters: characterCount,
-              renderedWatercolorCharacters: snapshot.watercolor.characters,
-              roles: snapshot.watercolor.roles,
-              states: snapshot.watercolor.states,
+              digitalWorkers: characterCount,
+              renderedDigitalWorkers: snapshot.workers.characters,
+              roles: snapshot.workers.roles,
+              states: snapshot.workers.states,
               sceneAssetsReady: assetsReady
             }
           }
@@ -796,8 +796,8 @@ async function readOfficeSemantics(page) {
     const number = (name) => Number(office.getAttribute(name) ?? 0)
     return {
       sessions: number('data-office-sessions'),
-      watercolorCharacters: number('data-office-watercolor-characters'),
-      oneWatercolorCharacterPerAgent: number('data-office-one-watercolor-character-per-agent'),
+      digitalWorkers: number('data-office-visible-digital-workers'),
+      oneDigitalWorkerPerAgent: number('data-office-one-digital-worker-per-agent'),
       sceneAssetsReady: number('data-office-scene-assets-ready'),
       walkers: number('data-office-walkers'),
       clickableWorkstations: number('data-office-clickable-workstations'),
@@ -873,7 +873,7 @@ async function verifyRenderPause(page) {
         awaySessions: office?.getAttribute('data-office-away-sessions') ?? '',
         cameraPreset: office?.getAttribute('data-office-active-camera-preset') ?? '',
         selectedSession: office?.getAttribute('data-office-selected-session') ?? '',
-        oneRobotPerAgent: office?.getAttribute('data-office-one-robot-per-agent') ?? ''
+        oneDigitalWorkerPerAgent: office?.getAttribute('data-office-one-digital-worker-per-agent') ?? ''
       }
     })
   const semanticsBefore = await readSemantics()
@@ -1139,7 +1139,7 @@ function evaluateLoadPhases(measurement, budget) {
     ['basicNonblankMs', 'basic nonblank', budget.basicNonblankMsMaximum, true],
     ['interactiveReadyMs', 'interactive ready', budget.interactiveReadyMsMaximum, true],
     ['sceneAssetsReadyMs', 'business scene assets ready', budget.sceneAssetsReadyMsMaximum, true],
-    ['charactersReadyMs', 'watercolor characters ready', budget.charactersReadyMsMaximum, true]
+    ['charactersReadyMs', '3D digital workers ready', budget.charactersReadyMsMaximum, true]
   ]
   for (const [field, label, maximum, expected] of checks) {
     if (!expected) continue
@@ -1167,14 +1167,14 @@ function evaluateLoadPhases(measurement, budget) {
   ) {
     violations.push(`${prefix}nonblank timing precedes Canvas mount`)
   }
-  if (measurement.observed?.watercolorCharacters !== measurement.expectedAgents) {
+  if (measurement.observed?.digitalWorkers !== measurement.expectedAgents) {
     violations.push(
-      `${prefix}observed ${measurement.observed?.watercolorCharacters ?? 'missing'} watercolor characters, expected ${measurement.expectedAgents}`
+      `${prefix}observed ${measurement.observed?.digitalWorkers ?? 'missing'} digital workers, expected ${measurement.expectedAgents}`
     )
   }
-  if (measurement.observed?.renderedWatercolorCharacters !== measurement.expectedAgents) {
+  if (measurement.observed?.renderedDigitalWorkers !== measurement.expectedAgents) {
     violations.push(
-      `${prefix}scene probe observed ${measurement.observed?.renderedWatercolorCharacters ?? 'missing'} watercolor characters, expected ${measurement.expectedAgents}`
+      `${prefix}scene probe observed ${measurement.observed?.renderedDigitalWorkers ?? 'missing'} digital workers, expected ${measurement.expectedAgents}`
     )
   }
   if (measurement.observed?.sceneAssetsReady !== true) violations.push(`${prefix}business scene assets were not ready`)
@@ -1248,17 +1248,17 @@ function evaluateScenario(scenario, budget, label) {
   return violations
 }
 
-function evaluateWatercolorScenario(scenario) {
+function evaluateDigitalWorkerScenario(scenario) {
   const violations = []
-  const watercolor = scenario.renderer?.watercolor
-  if (!watercolor) return ['renderer did not report Office watercolor character counts']
-  if (scenario.semantics.watercolorCharacters !== scenario.agents) {
-    violations.push(`semantic watercolor count ${scenario.semantics.watercolorCharacters} does not match ${scenario.agents} agents`)
+  const workers = scenario.renderer?.workers
+  if (!workers) return ['renderer did not report Office digital worker counts']
+  if (scenario.semantics.digitalWorkers !== scenario.agents) {
+    violations.push(`semantic digital worker count ${scenario.semantics.digitalWorkers} does not match ${scenario.agents} agents`)
   }
-  if (scenario.semantics.oneWatercolorCharacterPerAgent !== 1) violations.push('Office did not prove one watercolor character per agent')
+  if (scenario.semantics.oneDigitalWorkerPerAgent !== 1) violations.push('Office did not prove one 3D digital worker per agent')
   if (scenario.semantics.sceneAssetsReady !== 1) violations.push('business scene assets were not ready during measurement')
-  if (watercolor.characters !== scenario.agents) {
-    violations.push(`rendered watercolor count ${watercolor.characters} does not match ${scenario.agents} agents`)
+  if (workers.characters !== scenario.agents) {
+    violations.push(`rendered digital worker count ${workers.characters} does not match ${scenario.agents} agents`)
   }
   if (scenario.semantics.visibleRobots !== 0 || scenario.semantics.oneRobotPerAgent !== 0) {
     violations.push('legacy robot render semantics must stay at zero')
@@ -1319,7 +1319,7 @@ function evaluateCommandCenterContract(value) {
   }
 
   return {
-    name: '3D command center assets, watercolor characters, and draw-call contract',
+    name: '3D command center workers, profile assets, and draw-call contract',
     status: violations.length > 0 ? (value.required ? 'fail' : 'warn') : 'pass',
     metrics: {
       officeChunkBytes: value.artifacts.officeChunkBytes,
@@ -1352,7 +1352,7 @@ function renderMarkdown(value) {
   const rows = value.scenarios.map((scenario) => {
     const regression = scenario.regressionViolations.length > 0 ? scenario.regressionViolations.join('; ') : 'none'
     const target = scenario.targetViolations.length > 0 ? scenario.targetViolations.join('; ') : 'met'
-    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.watercolor?.characters ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
+    return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.workers?.characters ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
   })
   const formatLoadMs = (duration) => (Number.isFinite(duration) ? duration.toFixed(1) : 'n/a')
   const loadRows = value.scenarios.flatMap((scenario) =>
@@ -1388,14 +1388,14 @@ function renderMarkdown(value) {
 - GPU: ${value.scenarios[0]?.renderer.webgl.renderer ?? 'unknown'}
 - Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups
 - Office chunk: ${value.artifacts.officeChunkBytes} bytes
-- Watercolor assets: ${value.artifacts.watercolorAssetCount} files / ${value.artifacts.watercolorAssetBytes} bytes
+- Profile watercolor assets: ${value.artifacts.watercolorAssetCount} files / ${value.artifacts.watercolorAssetBytes} bytes
 - Command center draw calls: ${commandCenter?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${commandCenter?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.commandCenterTargets.twelveAgentBaselineMedianDrawCalls}
-- Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; watercolor characters <=${value.loadPhaseTargets.charactersReadyMsMaximum}ms; business assets <=${value.loadPhaseTargets.sceneAssetsReadyMsMaximum}ms
+- Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; 3D digital workers <=${value.loadPhaseTargets.charactersReadyMsMaximum}ms; business assets <=${value.loadPhaseTargets.sceneAssetsReadyMsMaximum}ms
 - Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}
 - Hidden/unfocused render pause: ${pause}
 - Unmount cleanup: ${value.unmount ? JSON.stringify(value.unmount) : 'not measured'}
 
-| Agents | Requested | Effective | Watercolor characters | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |
+| Agents | Requested | Effective | 3D digital workers | DPR | Shadows | Contact shadows | Renderer passes/frame | First nonblank ms | Median frame ms | P95 frame ms | Median FPS | Median calls | Median triangles | Regression violations | Target status |
 |---:|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|
 ${rows.join('\n')}
 
@@ -1403,7 +1403,7 @@ ${rows.join('\n')}
 
 \`renderer-cold-prefetched\` is the first measured renderer reload and includes the product's post-paint Office prefetch. \`renderer-cache-warm-prefetched\` repeats that path with browser resource-cache reuse. \`warm-remount\` reopens Office in the same renderer context after a real unmount.
 
-| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Business assets ms | Watercolor characters ms | Interactive ms | Contract |
+| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Business assets ms | 3D workers ms | Interactive ms | Contract |
 |---:|---|---|---:|---:|---:|---:|---:|---:|---|
 ${loadRows.join('\n')}
 

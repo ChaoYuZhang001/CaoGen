@@ -411,6 +411,16 @@ textarea {
   background: var(--bg-card);
 }
 
+.disclosure-chevron {
+  flex: 0 0 auto;
+  transform: rotate(0deg);
+  transition: transform 140ms ease;
+}
+
+.disclosure-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+
 .workbench-split .chat-title {
   max-width: 38vw;
 }
@@ -2275,6 +2285,9 @@ textarea {
   font-size: 14px;
   line-height: 1.5;
   font-family: inherit;
+  max-height: min(50vh, 460px);
+  overflow-y: hidden;
+  box-sizing: border-box;
 }
 
 .welcome-composer-bar {
@@ -5946,6 +5959,12 @@ textarea {
   border-radius: 14px;
   background: var(--bg-raised);
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.14);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.composer-row:focus-within {
+  border-color: var(--text-faint);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18), 0 1px 5px rgba(0, 0, 0, 0.08);
 }
 
 .composer-error {
@@ -6194,7 +6213,9 @@ textarea {
   border-radius: 0;
   background: transparent;
   outline: none;
-  max-height: 200px;
+  max-height: min(50vh, 460px);
+  overflow-y: hidden;
+  box-sizing: border-box;
   line-height: 1.5;
 }
 
@@ -6242,6 +6263,16 @@ textarea {
   border-radius: 50%;
   font-size: 18px;
   line-height: 1;
+  border: 0;
+  transition: background-color 140ms ease, opacity 140ms ease, transform 110ms ease-out;
+}
+
+.composer-send:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.composer-send-spinner {
+  animation: welcome-send-spin 700ms linear infinite;
 }
 
 .status-bar {

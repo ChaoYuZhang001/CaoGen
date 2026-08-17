@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Search } from 'lucide-react'
+import { Ellipsis, Plus, Search, X } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
@@ -21,6 +21,8 @@ import { isTaskSnapshotRecoverable } from './TaskRecoveryItem'
 import { useSidebarResize } from './useSidebarResize'
 import { ExperiencePreferenceSuggestion } from './ExperiencePreferenceSuggestion'
 import { recommendExperiencePreferences } from '../store/experience-recommendation'
+import { DisclosureChevron } from './DisclosureChevron'
+import { restoreComposerFocus, SidebarPanelIcon } from './SidebarControls'
 import {
   buildSidebarProjectGroups,
   sidebarEntryPath,
@@ -28,7 +30,6 @@ import {
   type ProjectGroup,
   type SidebarEntry
 } from './sidebar-project-groups'
-
 const STATUS_LABEL_KEY: Record<SessionStatus, string> = {
   starting: 'statusStarting',
   running: 'statusRunning',
@@ -144,7 +145,6 @@ function Sidebar({
   const settings = useStore((s) => s.settings)
   const layout = settings.layout
   const updateSettings = useStore((s) => s.updateSettings)
-
   const [editing, setEditing] = useState<EditingTarget | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
   const [menu, setMenu] = useState<MenuState | null>(null)
@@ -346,6 +346,7 @@ function Sidebar({
         if (!window.confirm(message)) return
         if (entry.kind === 'active') void closeSession(entry.id)
         else void deleteHistoryEntry(entry.id)
+        restoreComposerFocus()
       }
     })
     return items
@@ -470,7 +471,7 @@ function Sidebar({
           aria-haspopup="menu"
           onClick={(e) => showButtonMenu(e, entry)}
         >
-          ⋯
+          <Ellipsis size={16} aria-hidden="true" />
         </button>
       </div>
     )
@@ -513,7 +514,7 @@ function Sidebar({
           aria-haspopup="menu"
           onClick={(e) => showButtonMenu(e, ref)}
         >
-          ⋯
+          <Ellipsis size={16} aria-hidden="true" />
         </button>
       </div>
     )
@@ -529,10 +530,10 @@ function Sidebar({
         <div className="sidebar-group-row">
           <button
             className="sidebar-group-head"
-            title={group.path || group.label}
+            title={group.path || group.label} aria-expanded={!collapsed}
             onClick={() => setCollapsedProjects((state) => ({ ...state, [group.key]: !collapsed }))}
           >
-            <span className="sidebar-group-caret">{collapsed ? '▸' : '▾'}</span>
+            <DisclosureChevron expanded={!collapsed} className="sidebar-group-caret" />
             <span className="sidebar-group-title">{group.label}</span>
             <span className="sidebar-group-count">{group.entries.length}</span>
           </button>
@@ -548,7 +549,7 @@ function Sidebar({
                 else setShowNewSession(true, group.projectId)
               }}
             >
-              +
+              <Plus size={15} aria-hidden="true" />
             </button>
           )}
           {(group.workspace || group.legacyProject) && (
@@ -560,7 +561,7 @@ function Sidebar({
               aria-haspopup="menu"
               onClick={(event) => showProjectButtonMenu(event, group)}
             >
-              ⋯
+              <Ellipsis size={16} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -639,7 +640,7 @@ function Sidebar({
           title={layout.sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')}
           onClick={() => patchLayout({ sidebarCollapsed: !layout.sidebarCollapsed })}
         >
-          {layout.sidebarCollapsed ? '›' : '‹'}
+          <SidebarPanelIcon collapsed={layout.sidebarCollapsed} />
         </button>
         <button
           type="button"
@@ -647,7 +648,7 @@ function Sidebar({
           aria-label={t('closeSession')}
           onClick={closeMobile}
         >
-          ×
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
 
@@ -753,10 +754,10 @@ function Sidebar({
         {archivedProjectGroups.length > 0 && (
           <section className="sidebar-section sidebar-archived-projects-section">
             <button
-              className="sidebar-section-toggle"
+              className="sidebar-section-toggle" aria-expanded={archivedProjectsOpen || Boolean(query.trim())}
               onClick={() => setArchivedProjectsOpen((value) => !value)}
             >
-              <span>{archivedProjectsOpen || query.trim() ? '▾' : '▸'}</span>
+              <DisclosureChevron expanded={archivedProjectsOpen || Boolean(query.trim())} />
               <span>{t('archivedProjects')}</span>
               <span className="sidebar-group-count">{archivedProjectGroups.length}</span>
             </button>
@@ -767,8 +768,8 @@ function Sidebar({
 
         {archivedHistory.length > 0 && (
           <section className="sidebar-section">
-            <button className="sidebar-section-toggle" onClick={() => setArchiveOpen((value) => !value)}>
-              <span>{archiveExpanded ? '▾' : '▸'}</span>
+            <button className="sidebar-section-toggle" aria-expanded={archiveExpanded} onClick={() => setArchiveOpen((value) => !value)}>
+              <DisclosureChevron expanded={archiveExpanded} />
               <span>{t('archived')}</span>
               <span className="sidebar-group-count">{archivedHistory.length}</span>
             </button>
@@ -803,7 +804,7 @@ function Sidebar({
         <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
         <button
           type="button"
-          className="sidebar-nav-item"
+          className="sidebar-nav-item" data-sidebar-action="settings"
           onClick={() => {
             closeMobile()
             setShowSettings(true)
@@ -842,5 +843,4 @@ function Sidebar({
     </aside>
   )
 }
-
 export default memo(Sidebar)

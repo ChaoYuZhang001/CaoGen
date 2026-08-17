@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
+import WorkstationOperatorRig from './WorkstationOperatorRig'
 import CompactWorkstationShell from './CompactWorkstationShell'
 import Desk from './Desk'
 import OfficeChair from './OfficeChair'
@@ -13,12 +14,7 @@ import { providerLogoFor } from './ProviderLogos'
 import type { ProviderLogoSpec } from './ProviderLogos'
 import { officeActivityOf, type OfficeSessionActivity, type OfficeSessionSignal, type OfficeTask, type OfficeTaskStats } from '../model'
 import { hasOfficeFailoverSignal } from '../providerModelFailover'
-import {
-  stableWatercolorRole,
-  type WatercolorCharacterRole,
-  type WatercolorCharacterState
-} from '../../../../../shared/watercolor-character'
-import WatercolorCharacterRig from './WatercolorCharacterRig'
+import { stableWatercolorRole, type WatercolorCharacterRole, type WatercolorCharacterState } from '../../../../../shared/watercolor-character'
 import type { Group, MeshStandardMaterial } from 'three'
 import type { OfficeHairStyle, OfficeOutfitPalette } from '../../../../../shared/types'
 
@@ -40,6 +36,7 @@ export interface WorkstationProProps {
   vendorKey?: string
   showBadge?: boolean
   liveliness?: number
+  loadCharacterAssets?: boolean
   watercolorRole?: WatercolorCharacterRole
   watercolorState?: WatercolorCharacterState
   outfitPalette?: OfficeOutfitPalette
@@ -691,10 +688,8 @@ export default function WorkstationPro({
   modelName,
   showBadge = true,
   liveliness = 1,
+  loadCharacterAssets = true,
   watercolorRole,
-  watercolorState,
-  outfitPalette = 'role-default',
-  hairStyle = 'role-default',
   operatorAway = false,
   currentTask,
   taskStats,
@@ -723,11 +718,13 @@ export default function WorkstationPro({
             ? 1
             : 0.08
   const showOperator = !operatorAway
-  const watercolorOperator = {
-    role: watercolorRole ?? stableWatercolorRole(sessionId),
-    state: watercolorState ?? 'idle'
-  } as const
+  const characterRole = watercolorRole ?? stableWatercolorRole(sessionId)
   const resolvedDetail: WorkstationDetail = active ? 'full' : (detail ?? 'compact')
+
+  const phase = useMemo(
+    () => (position[0] * 1.7 + position[2] * 0.9) % (Math.PI * 2),
+    [position]
+  )
 
   const cursorOver = (e: { stopPropagation: () => void }): void => {
     e.stopPropagation()
@@ -768,14 +765,11 @@ export default function WorkstationPro({
         />
 
         {showOperator && (
-          <WatercolorCharacterRig
-            role={watercolorOperator.role}
-            state={watercolorOperator.state}
-            compact
-            scale={0.9}
-            liveliness={liveliness}
-            outfitPalette={outfitPalette}
-            hairStyle={hairStyle}
+          <WorkstationOperatorRig
+            sessionId={sessionId} role={characterRole} activity={activity} liveliness={liveliness}
+            providerName={brandName} providerBaseUrl={providerBaseUrl} modelName={modelName}
+            loadModel={loadCharacterAssets} detailLevel="low"
+            position={[0, 0, 0.52]} rotation={[0, Math.PI, 0]} scale={1.2} phase={phase}
           />
         )}
 
@@ -921,13 +915,11 @@ export default function WorkstationPro({
             activity={activity}
           />
 
-          {/* 未离席时显示水墨员工；离席时由 AgentWalkers 接管同一身份。 */}
-          <WatercolorCharacterRig
-            role={watercolorOperator.role}
-            state={watercolorOperator.state}
-            liveliness={liveliness}
-            outfitPalette={outfitPalette}
-            hairStyle={hairStyle}
+          <WorkstationOperatorRig
+            sessionId={sessionId} role={characterRole} activity={activity} liveliness={liveliness}
+            providerName={brandName} providerBaseUrl={providerBaseUrl} modelName={modelName}
+            loadModel={loadCharacterAssets} detailLevel="full"
+            position={[0, 0, 0.52]} rotation={[0, Math.PI, 0]} scale={1.2} phase={phase}
           />
           <OperatorContactLinks accent={stationAccent} activity={activity} />
           <OperatorFocusLinks accent={stationAccent} activity={activity} />

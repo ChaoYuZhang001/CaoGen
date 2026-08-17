@@ -1,11 +1,12 @@
 import {
-  ArrowRight, Bug, ChevronDown, ChevronRight, CornerDownRight, CornerUpRight,
+  ArrowRight, Bug, CornerDownRight, CornerUpRight,
   Pause, Play, Plus, RefreshCw, Square, Trash2
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ProjectDebugState, ProjectDebugVariable } from '../../../../shared/types'
 import { useT } from '../../i18n'
 import { useProjectDebugger } from './useProjectDebugger'
+import { DisclosureChevron } from '../DisclosureChevron'
 
 export default function DebugPanel(): React.JSX.Element {
   const t = useT()
@@ -220,7 +221,7 @@ function DebugVariableRow({ variable, sessionId }: { variable: ProjectDebugVaria
     <div className="debug-variable-tree">
       <button type="button" className="debug-variable-row" disabled={!variable.expandable} onClick={() => void toggle()}>
         <span className="debug-variable-chevron">
-          {variable.expandable && (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)}
+          {variable.expandable && <DisclosureChevron expanded={expanded} size={12} />}
         </span>
         <strong>{variable.name}</strong>
         <span className="debug-variable-value">{variable.value}</span>

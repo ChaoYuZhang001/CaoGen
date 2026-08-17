@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import type * as React from 'react'
+import { Ellipsis, Plus } from 'lucide-react'
 import { useT } from '../i18n'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
+import { DisclosureChevron } from './DisclosureChevron'
 
 export type SidebarProjectSort = 'recent' | 'name'
 
@@ -68,7 +70,7 @@ export default function SidebarProjectSections(props: SidebarProjectSectionsProp
             aria-expanded={projectsExpanded}
             onClick={() => setProjectsOpen((value) => !value)}
           >
-            <span className={`sidebar-projects-caret ${projectsExpanded ? 'is-expanded' : ''}`}>›</span>
+            <DisclosureChevron expanded={projectsExpanded} className="sidebar-projects-caret" />
             <span className="sidebar-projects-title">{t('projects')}</span>
             <span className="sidebar-projects-count">{props.projectCount}</span>
           </button>
@@ -81,7 +83,7 @@ export default function SidebarProjectSections(props: SidebarProjectSectionsProp
               aria-haspopup="menu"
               onClick={showMenu}
             >
-              ⋯
+              <Ellipsis size={16} aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -90,7 +92,7 @@ export default function SidebarProjectSections(props: SidebarProjectSectionsProp
               title={t('newProject')}
               onClick={props.onNewProject}
             >
-              +
+              <Plus size={15} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -100,8 +102,9 @@ export default function SidebarProjectSections(props: SidebarProjectSectionsProp
       {props.showConversation && (
         <section className="sidebar-section sidebar-conversations-section">
           <div className="sidebar-project-group sidebar-unassigned-group" data-project-id="unassigned">
-            <button className="sidebar-group-head" onClick={props.onToggleConversation}>
-              <span className="sidebar-group-caret">{props.conversationCollapsed ? '▸' : '▾'}</span>
+            <button className="sidebar-group-head" aria-expanded={!props.conversationCollapsed}
+              onClick={props.onToggleConversation}>
+              <DisclosureChevron expanded={!props.conversationCollapsed} className="sidebar-group-caret" />
               <span className="sidebar-group-title">{props.conversationLabel}</span>
               <span className="sidebar-group-count">{props.conversationCount}</span>
             </button>

@@ -11,7 +11,9 @@ if (!existsSync(mainEntry)) throw new Error('Built Electron main entry not found
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-composer-attachments-e2e-'))
 const statePath = path.join(tempRoot, 'state.json')
 const runner = path.join(repoRoot, 'scripts', 'composer-attachments-runner.cjs')
-const electron = path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+const electron = process.platform === 'win32'
+  ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+  : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'composer-attachments-e2e', runId)
 

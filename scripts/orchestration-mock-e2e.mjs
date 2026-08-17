@@ -33,7 +33,7 @@ const officeFailureMessage = 'office deterministic validation fault'
 const ciSoftwareWebgl = process.env.CAOGEN_CI_SOFTWARE_WEBGL === '1'
 const officeScreenshotThresholds = ciSoftwareWebgl
   ? { sceneNonDark: 0.1, sceneColored: 0.004, sceneBuckets: 96, leftNonDark: 0.42, leftPalette: 0.0015, centralNonDark: 0.12, workAreaNonDark: 0.2, workAreaBright: 0.006, redAreaMax: 0.015 }
-  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 150, leftNonDark: 0.5, leftPalette: 0.002, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012, redAreaMax: 0.015 }
+  : { sceneNonDark: 0.2, sceneColored: 0.006, sceneBuckets: 128, leftNonDark: 0.5, leftPalette: 0.002, centralNonDark: 0.18, workAreaNonDark: 0.35, workAreaBright: 0.012, redAreaMax: 0.015 }
 const OFFICE_OVERVIEW_CAMERA = {
   position: [0.2, 7.1, 16.8],
   target: [0, 0.75, 0.15],
@@ -312,11 +312,15 @@ try {
             subagentPackets: Number(wrap?.getAttribute('data-office-subagent-packets') ?? 0),
             walkers: Number(wrap?.getAttribute('data-office-walkers') ?? 0),
             awaySessions: Number(wrap?.getAttribute('data-office-away-sessions') ?? 0),
-            deskRobots: Number(wrap?.getAttribute('data-office-desk-robots') ?? 0),
-            visibleRobots: Number(wrap?.getAttribute('data-office-visible-robots') ?? 0),
-            oneRobotPerAgent: Number(wrap?.getAttribute('data-office-one-robot-per-agent') ?? 0),
-            watercolorCharacters: Number(wrap?.getAttribute('data-office-watercolor-characters') ?? 0),
-            oneWatercolorCharacterPerAgent: Number(wrap?.getAttribute('data-office-one-watercolor-character-per-agent') ?? 0),
+            deskWorkers: Number(wrap?.getAttribute('data-office-desk-workers') ?? 0),
+            visibleDigitalWorkers: Number(wrap?.getAttribute('data-office-visible-digital-workers') ?? 0),
+            oneDigitalWorkerPerAgent: Number(wrap?.getAttribute('data-office-one-digital-worker-per-agent') ?? 0),
+            articulatedCharacters: Number(wrap?.getAttribute('data-office-articulated-characters') ?? 0),
+            groundedCharacterRigs: Number(wrap?.getAttribute('data-office-grounded-character-rigs') ?? 0),
+            lowPolyDigitalWorkers: Number(wrap?.getAttribute('data-office-low-poly-digital-workers') ?? 0),
+            humanProportionWorkers: Number(wrap?.getAttribute('data-office-human-proportion-workers') ?? 0),
+            roleAccentedWorkers: Number(wrap?.getAttribute('data-office-role-accented-workers') ?? 0),
+            cameraFacingCharacterSprites: Number(wrap?.getAttribute('data-office-camera-facing-character-sprites') ?? -1),
             assistantWalkers: Number(wrap?.getAttribute('data-office-assistant-walkers') ?? 0),
             approvalWalkers: Number(wrap?.getAttribute('data-office-approval-walkers') ?? 0),
             projectWalkers: Number(wrap?.getAttribute('data-office-project-walkers') ?? 0),
@@ -358,13 +362,7 @@ try {
             wallOccluders: Number(wrap?.getAttribute('data-office-wall-occluders') ?? -1),
             longLightOccluders: Number(wrap?.getAttribute('data-office-long-light-occluders') ?? -1),
             presentationBackdrop: Number(wrap?.getAttribute('data-office-presentation-backdrop') ?? 0),
-            industrialRobots: Number(wrap?.getAttribute('data-office-industrial-robots') ?? 0),
-            humanoidRobotSilhouettes: Number(wrap?.getAttribute('data-office-humanoid-robot-silhouettes') ?? 0),
-            humanoidFaceVisors: Number(wrap?.getAttribute('data-office-humanoid-face-visors') ?? 0),
-            humanoidShellPanels: Number(wrap?.getAttribute('data-office-humanoid-shell-panels') ?? 0),
             humanoidArticulatedJoints: Number(wrap?.getAttribute('data-office-humanoid-articulated-joints') ?? 0),
-            humanoidBackShells: Number(wrap?.getAttribute('data-office-humanoid-back-shells') ?? 0),
-            humanoidNeutralShells: Number(wrap?.getAttribute('data-office-humanoid-neutral-shells') ?? 0),
             faultBeacons: Number(wrap?.getAttribute('data-office-fault-beacons') ?? 0),
             maintenanceUnits: Number(wrap?.getAttribute('data-office-maintenance-units') ?? 0),
             diagnosticBeams: Number(wrap?.getAttribute('data-office-diagnostic-beams') ?? 0),
@@ -418,11 +416,15 @@ try {
         value.packets >= 3 &&
         value.walkers >= value.waitingApprovalSessions &&
         value.awaySessions >= value.waitingApprovalSessions &&
-        value.deskRobots === 0 &&
-        value.visibleRobots === 0 &&
-        value.oneRobotPerAgent === 0 &&
-        value.watercolorCharacters === value.sessions &&
-        value.oneWatercolorCharacterPerAgent === 1 &&
+        value.deskWorkers === value.sessions - value.awaySessions &&
+        value.visibleDigitalWorkers === value.sessions &&
+        value.oneDigitalWorkerPerAgent === 1 &&
+        value.articulatedCharacters === value.sessions &&
+        value.groundedCharacterRigs === value.sessions &&
+        value.lowPolyDigitalWorkers === value.sessions &&
+        value.humanProportionWorkers === value.sessions &&
+        value.roleAccentedWorkers === value.sessions &&
+        value.cameraFacingCharacterSprites === 0 &&
         value.assistantWalkers >= Math.min(value.idleSessions, 1) &&
         value.approvalWalkers >= Math.min(value.waitingApprovalSessions, 1) &&
         value.videoWalkers >= Math.min(value.completedSessions, 1) &&
@@ -465,13 +467,7 @@ try {
         value.wallOccluders === 0 &&
         value.longLightOccluders === 0 &&
         value.presentationBackdrop === 1 &&
-        value.industrialRobots === 0 &&
-        value.humanoidRobotSilhouettes === 0 &&
-        value.humanoidFaceVisors === 0 &&
-        value.humanoidShellPanels === 0 &&
-        value.humanoidArticulatedJoints === 0 &&
-        value.humanoidBackShells === 0 &&
-        value.humanoidNeutralShells === 0 &&
+        value.humanoidArticulatedJoints >= value.sessions * 8 &&
         value.faultBeacons === value.failedSessions &&
         value.maintenanceUnits === value.failedSessions &&
         value.diagnosticBeams === value.failedSessions * 2 &&
@@ -492,9 +488,9 @@ try {
         value.deepseekLogoSkins >= value.deepseekSessions &&
         value.deepseekSessions >= 1 &&
         value.abstractLogoSkins === 0 &&
-        value.providerLogoBadges >= value.deskRobots * 3 + value.walkers * 2 &&
-        value.providerLogoTextureBadges >= value.deskRobots * 3 + value.walkers * 2 &&
-        value.providerLogoWordmarkBadges >= value.deskRobots * 2 + value.walkers &&
+        value.providerLogoBadges >= value.deskWorkers * 3 + value.walkers * 2 &&
+        value.providerLogoTextureBadges >= value.deskWorkers * 3 + value.walkers * 2 &&
+        value.providerLogoWordmarkBadges >= value.deskWorkers * 2 + value.walkers &&
         value.clickableWorkstations === value.sessions &&
         value.clickableWalkers === value.walkers &&
         value.selectedSession.length > 0 &&
@@ -526,11 +522,15 @@ try {
         attrs.idleSessions + attrs.runningSessions + attrs.waitingApprovalSessions + attrs.completedSessions + attrs.failedSessions === attrs.sessions &&
         attrs.walkers >= attrs.waitingApprovalSessions &&
         attrs.awaySessions >= attrs.waitingApprovalSessions &&
-        attrs.deskRobots === 0 &&
-        attrs.visibleRobots === 0 &&
-        attrs.oneRobotPerAgent === 0 &&
-        attrs.watercolorCharacters === attrs.sessions &&
-        attrs.oneWatercolorCharacterPerAgent === 1 &&
+        attrs.deskWorkers === attrs.sessions - attrs.awaySessions &&
+        attrs.visibleDigitalWorkers === attrs.sessions &&
+        attrs.oneDigitalWorkerPerAgent === 1 &&
+        attrs.articulatedCharacters === attrs.sessions &&
+        attrs.groundedCharacterRigs === attrs.sessions &&
+        attrs.lowPolyDigitalWorkers === attrs.sessions &&
+        attrs.humanProportionWorkers === attrs.sessions &&
+        attrs.roleAccentedWorkers === attrs.sessions &&
+        attrs.cameraFacingCharacterSprites === 0 &&
         attrs.assistantWalkers >= Math.min(attrs.idleSessions, 1) &&
         attrs.approvalWalkers >= Math.min(attrs.waitingApprovalSessions, 1) &&
         attrs.videoWalkers >= Math.min(attrs.completedSessions, 1) &&
@@ -573,13 +573,7 @@ try {
         attrs.wallOccluders === 0 &&
         attrs.longLightOccluders === 0 &&
         attrs.presentationBackdrop === 1 &&
-        attrs.industrialRobots === 0 &&
-        attrs.humanoidRobotSilhouettes === 0 &&
-        attrs.humanoidFaceVisors === 0 &&
-        attrs.humanoidShellPanels === 0 &&
-        attrs.humanoidArticulatedJoints === 0 &&
-        attrs.humanoidBackShells === 0 &&
-        attrs.humanoidNeutralShells === 0 &&
+        attrs.humanoidArticulatedJoints >= attrs.sessions * 8 &&
         attrs.faultBeacons === attrs.failedSessions &&
         attrs.maintenanceUnits === attrs.failedSessions &&
         attrs.diagnosticBeams === attrs.failedSessions * 2 &&
@@ -600,9 +594,9 @@ try {
         attrs.deepseekLogoSkins >= attrs.deepseekSessions &&
         attrs.deepseekSessions >= 1 &&
         attrs.abstractLogoSkins === 0 &&
-        attrs.providerLogoBadges >= attrs.deskRobots * 3 + attrs.walkers * 2 &&
-        attrs.providerLogoTextureBadges >= attrs.deskRobots * 3 + attrs.walkers * 2 &&
-        attrs.providerLogoWordmarkBadges >= attrs.deskRobots * 2 + attrs.walkers &&
+        attrs.providerLogoBadges >= attrs.deskWorkers * 3 + attrs.walkers * 2 &&
+        attrs.providerLogoTextureBadges >= attrs.deskWorkers * 3 + attrs.walkers * 2 &&
+        attrs.providerLogoWordmarkBadges >= attrs.deskWorkers * 2 + attrs.walkers &&
         attrs.clickableWorkstations === attrs.sessions &&
         attrs.clickableWalkers === attrs.walkers &&
         attrs.selectedSession.length > 0 &&
@@ -899,7 +893,7 @@ try {
     const stats = await waitForOfficeScenePixels(page)
     report.officeCanvas = stats
   })
-  await check('3D office screenshot keeps robots visible without wall or light obstruction', async () => {
+  await check('3D office screenshot keeps articulated workers visible without wall or light obstruction', async () => {
     await page.click('[data-office-camera-preset="overview"]')
     await waitForValue(
       () => page.evaluate(() => ({ preset: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? '', settled: document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-camera-settled') ?? '' })),
@@ -970,7 +964,7 @@ try {
     )
     report.officeSelectedSessionOpenSmoke = { selected: before.selected, officeGone: opened.officeGone }
   })
-  await check('3D office light theme keeps watercolor characters readable', async () => {
+  await check('3D office light theme keeps articulated characters readable', async () => {
     await page.evaluate(async () => {
       await window.agentDesk.updateSettings({ theme: 'light' })
     })
@@ -1010,7 +1004,7 @@ try {
     assert(stats.scene.nonDarkRatio > 0.55, `light office scene is too dark: ${JSON.stringify(stats.scene)}`)
     assert(
       stats.robotWorkArea.uniqueColorBuckets >= 80 && stats.robotWorkArea.coloredRatio > 0.009,
-      `light office watercolor characters lack visual separation: ${JSON.stringify(stats.robotWorkArea)}`
+      `light office articulated characters lack visual separation: ${JSON.stringify(stats.robotWorkArea)}`
     )
   })
 } catch (error) {

@@ -33,7 +33,7 @@ export interface OfficePerformanceSnapshot {
     meshes: number
     lights: number
   }
-  watercolor: {
+  workers: {
     characters: number
     roles: string[]
     states: string[]
@@ -145,9 +145,9 @@ export default function OfficePerformanceProbe(): null {
         const fullWorkstationRootIds = new Set<string>()
         const compactWorkstationRootIds = new Set<string>()
         const robots: OfficeRobotLodRoot[] = []
-        const watercolorRoles = new Set<string>()
-        const watercolorStates = new Set<string>()
-        let watercolorCharacters = 0
+        const workerRoles = new Set<string>()
+        const workerStates = new Set<string>()
+        let workerCharacters = 0
         scene.traverse((object) => {
           const item = object as SceneObject
           objects += 1
@@ -156,10 +156,10 @@ export default function OfficePerformanceProbe(): null {
         })
         scene.traverseVisible((object) => {
           const item = object as SceneObject
-          if (item.userData.officeWatercolorCharacter === true) {
-            watercolorCharacters += 1
-            watercolorRoles.add(String(item.userData.officeWatercolorRole ?? ''))
-            watercolorStates.add(String(item.userData.officeWatercolorState ?? ''))
+          if (item.userData.officeDigitalWorkerCharacter === true) {
+            workerCharacters += 1
+            workerRoles.add(String(item.userData.officeDigitalWorkerRole ?? ''))
+            workerStates.add(String(item.userData.officeDigitalWorkerState ?? ''))
           }
           const robotLod = item.userData.officeRobotLod
           if (robotLod === 'full' || robotLod === 'low') {
@@ -195,10 +195,10 @@ export default function OfficePerformanceProbe(): null {
             programs: gl.info.programs?.length ?? 0
           },
           scene: { objects, meshes, lights },
-          watercolor: {
-            characters: watercolorCharacters,
-            roles: [...watercolorRoles].filter(Boolean).sort(),
-            states: [...watercolorStates].filter(Boolean).sort()
+          workers: {
+            characters: workerCharacters,
+            roles: [...workerRoles].filter(Boolean).sort(),
+            states: [...workerStates].filter(Boolean).sort()
           },
           lod: {
             fullRobots: fullRobotRootIds.size,

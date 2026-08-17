@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BriefcaseBusiness, CalendarRange, Flag, Link2, Plus, RefreshCw, Trash2, Users } from 'lucide-react'
+import { DisclosureChevron } from '../DisclosureChevron'
 import type {
   ProjectDependency,
   ProjectMilestone,
@@ -43,6 +44,7 @@ export function ProjectPortfolioView({ active, refreshToken, onSelectProject }: 
     <section className="pws-portfolio" data-project-portfolio aria-busy={loading}>
       <header className="pws-portfolio-header">
         <button type="button" className="pws-portfolio-title" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+          <DisclosureChevron expanded={expanded} />
           <BriefcaseBusiness size={18} aria-hidden="true" />
           <span><strong>Portfolio</strong><small>{snapshot ? `${snapshot.projects.length} 个项目 · ${snapshot.dependencies.length} 条依赖 · ${snapshot.milestones.length} 个里程碑` : '跨项目计划'}</small></span>
         </button>

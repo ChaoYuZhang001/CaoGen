@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Download, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, RefreshCw } from 'lucide-react'
 import type {
   ProviderUsageAggregate,
   ProviderUsageBucket,
@@ -12,6 +12,7 @@ import { formatCost, formatDuration, formatTokens } from '../../format'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import ProviderBillingReconciliation from './ProviderBillingReconciliation'
+import { DisclosureChevron } from '../DisclosureChevron'
 
 type UsageRange = 'today' | '24h' | '7d' | '30d'
 type UsageView = 'requests' | 'providers' | 'models' | 'credentials'
@@ -575,7 +576,7 @@ function RequestSummaryRow({ request, providerName, language, expanded, onToggle
 }): React.JSX.Element {
   const t = useT()
   return <tr className={expanded ? 'is-expanded' : ''}>
-    <td><button type="button" className="provider-usage-row-toggle" aria-expanded={expanded} aria-label={expanded ? t('providerUsageCollapseRequest') : t('providerUsageExpandRequest')} onClick={onToggle}>{expanded ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}{formatUsageTime(request.startedAt, language)}</button></td>
+    <td><button type="button" className="provider-usage-row-toggle" aria-expanded={expanded} aria-label={expanded ? t('providerUsageCollapseRequest') : t('providerUsageExpandRequest')} onClick={onToggle}><DisclosureChevron expanded={expanded} size={13} />{formatUsageTime(request.startedAt, language)}</button></td>
     <td title={providerName}>{providerName}</td>
     <td title={request.model}>{request.model}</td>
     <td>{request.usage ? formatTokens(request.usage.inputTokens) : '-'}</td>

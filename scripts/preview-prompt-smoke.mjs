@@ -120,6 +120,11 @@ try {
   assert(currentUnitPrompt.includes('当前单元: Budget'), 'current-unit prompt should include the selected title')
   assert(currentUnitPrompt.includes('当前序号: 2/2'), 'current-unit prompt should include position and total')
   assert(currentUnitPrompt.includes('单元类型: sheet'), 'current-unit prompt should include the unit kind')
+  assert(
+    currentUnitPrompt.includes('当前定位: locator={"page":2') &&
+      currentUnitPrompt.includes('office:sheet:2:Budget'),
+    'current-unit prompt should include a stable locator independently of annotation hydration'
+  )
   assert(currentUnitPrompt.includes('Model\t3.2'), 'current-unit prompt should include selected sheet content')
   assert(!currentUnitPrompt.includes('CaoGen\t9'), 'current-unit prompt should exclude other sheet bodies')
   recordPrompt('office current sheet', currentUnitPrompt, ['当前单元: Budget', '当前序号: 2/2', 'Model\t3.2'], ['CaoGen\t9'])

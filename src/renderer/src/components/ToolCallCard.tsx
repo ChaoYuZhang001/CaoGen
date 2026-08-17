@@ -3,6 +3,7 @@ import type { AssistantBlock } from '../../../shared/types'
 import { useStore, type ToolResultInfo } from '../store'
 import { useT } from '../i18n'
 import DiffView from './DiffView'
+import { DisclosureChevron } from './DisclosureChevron'
 
 type ToolUseBlock = Extract<AssistantBlock, { type: 'tool_use' }>
 
@@ -186,7 +187,7 @@ export default function ToolCallCard({
           {status === 'running' && <span className="spinner" />}
           {statusLabel}
         </span>
-        <span className="tool-chevron">{expanded ? '▾' : '▸'}</span>
+        <DisclosureChevron expanded={expanded} className="tool-chevron" />
       </button>
       {expanded && (
         <div className="tool-body">

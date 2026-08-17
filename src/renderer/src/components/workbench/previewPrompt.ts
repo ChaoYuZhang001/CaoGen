@@ -60,6 +60,7 @@ export function buildPreviewAgentPrompt(
   const content = rawContent ? truncate(rawContent, maxContentChars) : ''
   const visibleAnnotations = annotations.slice(0, maxAnnotations)
   const annotationsTruncated = annotations.length > visibleAnnotations.length
+  const currentUnitLocatorLine = formatCurrentUnitLocator(currentUnit)
   const notes = annotations
     .slice(0, maxAnnotations)
     .map((item, index) => formatAnnotation(item, index))
@@ -76,6 +77,7 @@ export function buildPreviewAgentPrompt(
     currentUnit ? `当前单元: ${currentUnit.title}` : '',
     currentUnit ? `当前序号: ${currentUnit.position}/${currentUnit.total}` : '',
     currentUnit ? `单元类型: ${currentUnit.kind}` : '',
+    currentUnitLocatorLine,
     typeof p.bytes === 'number' ? `大小: ${p.bytes} bytes` : '',
     rawContent ? `内容字符: ${rawContent.length}` : '',
     rawContent ? `已发送字符: ${Math.min(rawContent.length, maxContentChars)}` : '',
@@ -119,6 +121,15 @@ function formatLocator(locator: unknown): string {
   } catch {
     return ''
   }
+}
+
+function formatCurrentUnitLocator(currentUnit: OfficePreviewUnit | undefined): string {
+  if (!currentUnit) return ''
+  return `当前定位: locator=${formatLocator({
+    page: currentUnit.position,
+    quote: currentUnit.quote || undefined,
+    selector: `office:${currentUnit.kind}:${currentUnit.position}:${currentUnit.title}`
+  })}`
 }
 
 function positiveInt(value: number | undefined, fallback: number): number {

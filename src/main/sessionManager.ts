@@ -72,6 +72,9 @@ import {
 import { ModelAttemptRecoveryGate } from './task/model-attempt-recovery-gate'
 import { TaskSnapshotReplayCoordinator } from './task/task-snapshot-replay'
 import { SubagentOrchestrationCoordinator } from './task/subagent-orchestration-coordinator'
+import { DIRECT_SUBAGENT_LIMIT_MESSAGE, MAX_DIRECT_SUBAGENT_TASKS } from '../shared/agent-capacity-policy'
+import { AgentCapacityCoordinator } from './agent/agent-capacity-coordinator'
+import { provisionDagChildSession } from './agent/dag-child-provisioner'
 import {
   createTaskRun,
   createSessionTaskRun,
@@ -207,6 +210,11 @@ class SessionManager {
   })
   /** DAG 编排:executionId → 调度器;按依赖层释放 child sessions。 */
   private readonly dagSchedulers = new Map<string, TaskDagScheduler>()
+  private readonly agentCapacity = new AgentCapacityCoordinator({
+    schedulers: () => this.dagSchedulers.values(),
+    orchestrations: () => this.subagentOrchestration.states(),
+    sessions: () => [...this.sessions.values()].map((session) => session.meta)
+  })
   /** DAG 最新执行视图:用于恢复/快照保留已经完成或已从调度器移除的 DAG 状态。 */
   private readonly dagExecutionSnapshots = new Map<string, TaskDagExecutionView>()
   /** Serializes repeated approval clicks before the deterministic DAG becomes observable. */
@@ -1139,8 +1147,7 @@ class SessionManager {
     this.taskPlans.assertExecution(parent.meta, '派发子 Agent')
     const tasks = Array.isArray(input?.tasks) ? input.tasks : []
     if (tasks.length === 0) throw new Error('至少需要一个子代理任务')
-    if (tasks.length > 33) throw new Error('一次最多派发 33 个子代理')
-
+    if (tasks.length > MAX_DIRECT_SUBAGENT_TASKS) throw new Error(DIRECT_SUBAGENT_LIMIT_MESSAGE)
     const orchestrationId = randomUUID()
     const children: SubagentDispatchResult['children'] = []
     const usedTaskIds = new Set<string>()
@@ -1154,10 +1161,10 @@ class SessionManager {
       const title = cleanOneLine(task.title ?? role ?? prompt, `子代理 ${index + 1}`, 42)
       return { task, taskId, prompt, role, title }
     })
-
-    this.subagentOrchestration.begin(orchestrationId, parentSessionId)
+    const releaseCapacity = this.agentCapacity.reserveDirect(parentSessionId, plannedTasks.length)
 
     try {
+      this.subagentOrchestration.begin(orchestrationId, parentSessionId)
       for (const { task, taskId, prompt, role, title } of plannedTasks) {
         const meta = await this.createManaged({
           cwd: subagentCwd(task, input, parent.meta),
@@ -1174,14 +1181,18 @@ class SessionManager {
           childRole: role
         })
         this.subagentOrchestration.addChild(orchestrationId, meta.id)
+        releaseCapacity(1)
         children.push({ taskId, prompt, meta })
       }
     } catch (error) {
       this.subagentOrchestration.cancel(orchestrationId)
       await this.rollbackProvisionedSubagents(children)
       throw error
+    } finally {
+      releaseCapacity()
     }
     await this.subagentOrchestration.finishProvisioning(orchestrationId, children)
+    this.agentCapacity.scheduleDrain()
 
     return { orchestrationId, parentSessionId, children }
   }
@@ -1265,31 +1276,15 @@ class SessionManager {
     this.taskPlans.assertExecution(parent.meta, '执行任务 DAG')
     const children: SubagentDispatchResult['children'] = []
     const scheduler = new TaskDagScheduler(parentSessionId, input, {
+      reserveTaskCapacity: () => this.agentCapacity.tryReserve(parentSessionId),
       runTask: async (task, context) => {
         this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
-        const prompt = buildDagTaskPrompt(task, context)
-        const meta = await this.createManaged({
-          cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
-          isolated: input.isolated ?? true,
-          driveMode: input.driveMode ?? parent.meta.driveMode,
-          model: input.model ?? parent.meta.model,
-          providerId: input.providerId ?? parent.meta.providerId,
-          engine: input.engine ?? parent.meta.engine,
-          taskStrategy: parent.meta.taskStrategy,
-          title: `${task.title}${context.attempt > 1 ? ` · 重试 ${context.attempt - 1}` : ''}`,
-          parentSessionId,
-          orchestrationId: input.dag.id,
-          childTaskId: task.id,
-          childRole: task.role,
-          ...(task.workItemId ? { workItemId: task.workItemId } : {})
-        }, { retainJournal: true })
-        const item = { taskId: task.id, prompt, meta }
-        children.push(item)
-        return {
-          sessionId: meta.id,
-          dispatchItem: item,
-          start: async () => requireDagPromptAccepted(await this.send(meta.id, prompt))
-        }
+        const result = await provisionDagChildSession(parent.meta, input, task, context, {
+          createManaged: (options, lifecycle) => this.createManaged(options, lifecycle),
+          send: (sessionId, prompt) => this.send(sessionId, prompt)
+        })
+        children.push(result.dispatchItem)
+        return result
       },
       onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
       onTaskProvisioned: async (_execution, sessionId) => {
@@ -1315,6 +1310,10 @@ class SessionManager {
     // The finalizer may have projected a newer view while scheduler.start() awaited a fast child.
     // Never overwrite that durable finalization state with the scheduler's pre-finalization view.
     const execution = this.dagExecutionSnapshots.get(input.dag.id) ?? scheduler.view()
+    if (launched.length === 0 && execution.status === 'waiting') {
+      this.emitTaskDagUpdate(parentSessionId, execution)
+      await this.persistDagProvisioning(parentSessionId)
+    }
     return { execution, children }
   }
 
@@ -1324,33 +1323,17 @@ class SessionManager {
     children?: SubagentDispatchResult['children']
   ): TaskDagSchedulerCallbacks {
     return {
+      reserveTaskCapacity: () => this.agentCapacity.tryReserve(parentSessionId),
       runTask: async (task, context) => {
         const parent = this.sessions.get(parentSessionId)
         if (!parent) throw new Error('Parent session no longer exists for recovered DAG')
         this.taskPlans.assertExecution(parent.meta, '继续执行任务 DAG')
-        const prompt = buildDagTaskPrompt(task, context)
-        const meta = await this.createManaged({
-          cwd: input.cwd ?? parent.meta.sourceCwd ?? parent.meta.cwd,
-          isolated: input.isolated ?? true,
-          driveMode: input.driveMode ?? parent.meta.driveMode,
-          model: input.model ?? parent.meta.model,
-          providerId: input.providerId ?? parent.meta.providerId,
-          engine: input.engine ?? parent.meta.engine,
-          taskStrategy: parent.meta.taskStrategy,
-          title: `${task.title}${context.attempt > 1 ? ` retry ${context.attempt - 1}` : ''}`,
-          parentSessionId,
-          orchestrationId: input.dag.id,
-          childTaskId: task.id,
-          childRole: task.role,
-          ...(task.workItemId ? { workItemId: task.workItemId } : {})
-        }, { retainJournal: true })
-        const item = { taskId: task.id, prompt, meta }
-        children?.push(item)
-        return {
-          sessionId: meta.id,
-          dispatchItem: item,
-          start: async () => requireDagPromptAccepted(await this.send(meta.id, prompt))
-        }
+        const result = await provisionDagChildSession(parent.meta, input, task, context, {
+          createManaged: (options, lifecycle) => this.createManaged(options, lifecycle),
+          send: (sessionId, prompt) => this.send(sessionId, prompt)
+        })
+        children?.push(result.dispatchItem)
+        return result
       },
       onUpdate: (execution) => this.emitTaskDagUpdate(parentSessionId, execution),
       onTaskProvisioned: async (_execution, sessionId) => {
@@ -1396,12 +1379,13 @@ class SessionManager {
     )
   }
 
-  private finishTaskDag(_parentSessionId: string, execution: TaskDagExecutionView): Promise<void> {
-    return this.dagFinalizationCoordinator.finish(
+  private async finishTaskDag(_parentSessionId: string, execution: TaskDagExecutionView): Promise<void> {
+    await this.dagFinalizationCoordinator.finish(
       execution,
       this.dagAutoMergeOptions.get(execution.id),
       this.snapshotDagMergeSessionsFor(execution)
     )
+    this.agentCapacity.scheduleDrain()
   }
 
   close(id: string): Promise<void> {
@@ -1454,6 +1438,7 @@ class SessionManager {
         resultText: '子会话被手动关闭,任务未完成'
       })
     }
+    this.agentCapacity.scheduleDrain()
     if (preserveDagFinalization && !preserveRecovery) {
       await this.writeTaskSnapshot(id, 'shutdown', 0, 'status', undefined, true)
     }
@@ -1488,6 +1473,7 @@ class SessionManager {
   async disposeAll(): Promise<void> {
     this.persistActiveSessions()
     this.taskSnapshotReplay.clear()
+    this.agentCapacity.clear()
     this.subagentOrchestration.clear()
     // dispose 后 provider 仍可能异步发出尾事件。关机期间保持保护，避免晚到的
     // turn-result/status 把刚写好的恢复快照删掉。
@@ -2217,14 +2203,19 @@ class SessionManager {
     const dag = childSession.meta.orchestrationId
       ? this.dagSchedulers.get(childSession.meta.orchestrationId)
       : undefined
-    if (!dag?.hasSession(sessionId)) return
+    if (!dag?.hasSession(sessionId)) {
+      this.agentCapacity.scheduleDrain()
+      return
+    }
     void dag.completeSession(sessionId, {
       ok: !event.isError,
       resultText: event.resultText,
       error: event.isError ? event.resultText ?? event.subtype : undefined
-    }).catch((error) => {
-      console.error('[caogen] DAG child completion scheduling failed:', error)
     })
+      .catch((error) => {
+        console.error('[caogen] DAG child completion scheduling failed:', error)
+      })
+      .finally(() => this.agentCapacity.scheduleDrain())
   }
 
   private normalizeEventIdentity(

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { AUTO_MODEL, CAOGEN_DRIVE_POLICIES } from '../../shared/types'
+import { DIRECT_SUBAGENT_LIMIT_MESSAGE, MAX_DIRECT_SUBAGENT_TASKS } from '../../shared/agent-capacity-policy'
 import {
   reduceProviderFailover,
   type ProviderKeyFailoverChatItem,
@@ -86,6 +87,7 @@ import {
   createProjectWorkspaceStoreSlice, nextStudioSessionNonce,
   type ProjectWorkspaceStoreSlice
 } from './store/project-workspace-actions'
+import { captureClosingSession, removeClosingSession, restoreClosingSession } from './store/session-close-state'
 import type { PanelId, PanelOpenContext } from './components/workbench/panels'
 import { createSettingsNavigationSlice, type SettingsNavigationSlice } from './store/settings-navigation'
 import { createWelcomeDraftSlice, type WelcomeDraftSlice } from './store/welcome-draft'
@@ -1854,24 +1856,20 @@ export const useStore = create<AppStore>((set, get) => {
 
   async closeSession(id) {
     closeNativeBrowserView(id)
-    await window.agentDesk.closeSession(id)
+    pendingEvents.delete(id)
+    const closing = captureClosingSession(get(), id)
+    set((s) => removeClosingSession(s, id, closing.wasActive))
+    await window.agentDesk.closeSession(id).catch((error) => {
+      set((s) => restoreClosingSession(s, id, closing, drainPendingEvents))
+      throw error
+    })
     pendingEvents.delete(id)
     const [historyResult, taskSnapshotsResult] = await Promise.allSettled([
       window.agentDesk.listHistory(),
       window.agentDesk.listTaskSnapshots()
     ])
     set((s) => {
-      const sessions = { ...s.sessions }
-      delete sessions[id]
-      const order = s.order.filter((x) => x !== id)
-      const requestedActiveId = s.activeId === id ? null : s.activeId
-      const activeId = requestedActiveId && sessions[requestedActiveId]
-        ? requestedActiveId
-        : (order[order.length - 1] ?? null)
       return {
-        sessions,
-        order,
-        activeId,
         history: historyResult.status === 'fulfilled' ? historyResult.value : s.history,
         taskSnapshots: taskSnapshotsResult.status === 'fulfilled' ? taskSnapshotsResult.value : s.taskSnapshots,
         taskSnapshotsLoading: false,
@@ -1881,10 +1879,7 @@ export const useStore = create<AppStore>((set, get) => {
               ? taskSnapshotsResult.reason.message
               : String(taskSnapshotsResult.reason)
             : undefined,
-        showNewSession: activeId === null ? true : s.showNewSession,
-        newSessionProjectId: activeId === null ? null : s.newSessionProjectId,
-        showTaskRecovery: false,
-        view: activeId === null ? 'list' : s.view
+        showTaskRecovery: closing.wasActive ? false : s.showTaskRecovery
       }
     })
   },
@@ -3134,8 +3129,10 @@ export const useStore = create<AppStore>((set, get) => {
           : { id: `task-${index + 1}`, prompt: line }
       })
     if (tasks.length === 0) return undefined
-    if (tasks.length > 33) {
-      set((s) => ({ workbench: { ...s.workbench, subagentError: '一次最多派发 33 个子 Agent' } }))
+    if (tasks.length > MAX_DIRECT_SUBAGENT_TASKS) {
+      set((s) => ({
+        workbench: { ...s.workbench, subagentError: DIRECT_SUBAGENT_LIMIT_MESSAGE }
+      }))
       return undefined
     }
     set((s) => ({ workbench: { ...s.workbench, subagentBusy: true, subagentError: undefined, subagentMessage: undefined } }))

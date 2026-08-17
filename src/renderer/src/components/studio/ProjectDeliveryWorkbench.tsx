@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Download, FileCheck2, FileJson, GitCompareArrows, KeyRound, RotateCw, Save, ShieldCheck, ShieldOff, Upload, UserCheck, X } from 'lucide-react'
+import { Download, FileCheck2, FileJson, GitCompareArrows, KeyRound, RotateCw, Save, ShieldCheck, ShieldOff, Upload, UserCheck, X } from 'lucide-react'
 import type {
   WorkflowAcceptanceRecord,
   WorkflowEvidenceKind,
@@ -11,10 +11,10 @@ import type {
   WorkflowProjectDeliveryArtifact,
   WorkflowProjectDeliveryWorkbench
 } from '../../../../shared/types'
+import { DisclosureChevron } from '../DisclosureChevron'
 import { WorkflowAcceptanceRow } from '../WorkflowAcceptanceRow'
 import { EVIDENCE_KINDS, errorMessage, newWorkflowId } from '../workflow-ledger-ui'
 import { useStore } from '../../store'
-
 interface ProjectDeliveryWorkbenchProps {
   active: boolean
   projectId: string
@@ -780,7 +780,7 @@ function ArtifactLineage({
             aria-label={expanded ? '收起版本历史' : '展开版本历史'}
             title={expanded ? '收起版本历史' : '展开版本历史'}
           >
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <DisclosureChevron expanded={expanded} size={13} />
           </button>
         )}
       </div>

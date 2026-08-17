@@ -127,11 +127,30 @@ async function verifyClosedParentClearsSummary(Coordinator) {
 
 function verifyProductionWiring() {
   const manager = readFileSync(path.join(repoRoot, 'src/main/sessionManager.ts'), 'utf8')
+  const coordinator = readFileSync(
+    path.join(repoRoot, 'src/main/agent/agent-capacity-coordinator.ts'),
+    'utf8'
+  )
+  const capacity = readFileSync(path.join(repoRoot, 'src/shared/agent-capacity-policy.ts'), 'utf8')
+  const panel = readFileSync(
+    path.join(repoRoot, 'src/renderer/src/components/workbench/SubagentPanel.tsx'),
+    'utf8'
+  )
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'))
   const deep = readFileSync(path.join(repoRoot, 'scripts/deep-test.mjs'), 'utf8')
   assertEqual(manager.includes('for (const child of children) this.send(child.meta.id, child.prompt)'), false)
   assertEqual(manager.includes('this.send(state.parentSessionId, lines.join'), false)
   assertIncludes(manager, 'this.subagentOrchestration.finishProvisioning(orchestrationId, children)')
+  assertIncludes(manager, 'MAX_DIRECT_SUBAGENT_TASKS')
+  assertIncludes(capacity, 'MAX_ACTIVE_AGENT_COUNT')
+  assertIncludes(capacity, 'MAX_ACTIVE_PRIMARY_AGENTS = PRIMARY_AGENT_ENTRANCE_COUNT')
+  assertIncludes(capacity, 'MAX_ACTIVE_CHILD_AGENTS_PER_PRIMARY = 2')
+  assertIncludes(coordinator, 'capacity.byParent.size < MAX_ACTIVE_PRIMARY_AGENTS')
+  assertIncludes(coordinator, 'tryReserve(parentSessionId')
+  assertIncludes(manager, 'reserveTaskCapacity: () => this.agentCapacity.tryReserve(parentSessionId)')
+  assertIncludes(manager, 'this.agentCapacity.scheduleDrain()')
+  assertIncludes(panel, 'MAX_DIRECT_SUBAGENT_TASKS')
+  assertEqual(panel.includes('终极目标 33 路模板'), false)
   assertIncludes(manager, 'this.subagentOrchestration.handleEvent(sessionId, event)')
   assertIncludes(packageJson.scripts['test:task-run'], 'subagent-orchestration-reliability-smoke.mjs')
   assertIncludes(deep, 'subagent-orchestration-reliability-smoke.mjs')

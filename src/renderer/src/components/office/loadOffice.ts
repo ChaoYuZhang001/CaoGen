@@ -13,5 +13,7 @@ export function loadOfficeView(): Promise<OfficeViewModule> {
 }
 
 export function preloadOfficeView(): void {
-  void loadOfficeView().catch(() => undefined)
+  void loadOfficeView()
+    .then((module) => module.prewarmOfficeGraphics())
+    .catch(() => undefined)
 }

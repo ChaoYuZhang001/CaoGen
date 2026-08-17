@@ -390,7 +390,7 @@ const DICT: Dict = {
   slashBrowserHint: { zh: '打开内置浏览器并批注网页', en: 'Open built-in browser and annotate pages' },
   slashFilesHint: { zh: '打开内置文件编辑器', en: 'Open built-in file editor' },
   slashPluginsHint: { zh: '扫描 Skills / Agents / MCP 插件生态', en: 'Scan Skills / Agents / MCP plugins' },
-  slashSubagentsHint: { zh: '派发最多 33 个真实子 Agent', en: 'Dispatch up to 33 real subagents' },
+  slashSubagentsHint: { zh: '双子 Agent 派发与 DAG 排队', en: 'Two-child dispatch and queued DAGs' },
   slashRoutineHint: { zh: '打开本地 Routines 面板', en: 'Open local Routines panel' },
   slashMemoryHint: { zh: '打开当前项目记忆面板', en: 'Open project memory panel' },
   slashWorktreeHint: { zh: '查看隔离工作区,检查合并、导出 patch 或丢弃', en: 'Inspect isolated worktree, check merge, export patch, or discard' },

@@ -8,10 +8,11 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caogen-task-dag-smoke-'))
 esbuild.buildSync({
   entryPoints: [
     path.resolve(__dirname, '../src/main/agent/task-decomposer.ts'),
-    path.resolve(__dirname, '../src/main/agent/dag-scheduler.ts')
+    path.resolve(__dirname, '../src/main/agent/dag-scheduler.ts'),
+    path.resolve(__dirname, '../src/main/agent/agent-capacity-coordinator.ts')
   ],
   outdir: tempDir,
-  bundle: false,
+  bundle: true,
   platform: 'node',
   format: 'cjs',
   logLevel: 'silent'
@@ -19,6 +20,7 @@ esbuild.buildSync({
 
 const { decomposeTask } = require(path.join(tempDir, 'task-decomposer.js'))
 const { TaskDagScheduler, validateTaskDag } = require(path.join(tempDir, 'dag-scheduler.js'))
+const { AgentCapacityCoordinator } = require(path.join(tempDir, 'agent-capacity-coordinator.js'))
 
 function makeDispatchItem(sessionId, task, prompt) {
   return {
@@ -202,6 +204,9 @@ async function run() {
 }
 
 async function assertSchedulerEdgeCases(dag) {
+  assertAtomicThreePrimarySixChildCapacity()
+  await assertTwoChildCapacityQueuesReadyTasks(dag)
+  await assertSharedCapacityAdmissionQueuesAcrossParents(dag)
   await assertTaskTimeoutRetries(dag)
   await assertAsyncReadyTaskCreation(dag)
   await assertReadyBatchWatchdogStartsAfterPrompt(dag)
@@ -209,6 +214,137 @@ async function assertSchedulerEdgeCases(dag) {
   await assertRunTaskErrorRetryPolicy(dag)
   await assertProvisioningBlockRetainsRunningSibling(dag)
   await assertRuntimeSnapshotRestore()
+}
+
+function assertAtomicThreePrimarySixChildCapacity() {
+  const coordinator = new AgentCapacityCoordinator({
+    schedulers: () => [],
+    orchestrations: () => [],
+    sessions: () => []
+  })
+  const releases = []
+  for (const parent of ['primary-a', 'primary-b', 'primary-c']) {
+    const first = coordinator.tryReserve(parent)
+    const second = coordinator.tryReserve(parent)
+    assert.ok(first && second, `${parent} must acquire exactly two child slots`)
+    releases.push({ parent, release: first }, { parent, release: second })
+    assert.equal(coordinator.tryReserve(parent), undefined, `${parent} must not acquire a third child slot`)
+  }
+  assert.equal(coordinator.tryReserve('primary-d'), undefined, 'a fourth primary Agent must wait')
+  assert.equal(coordinator.tryReserve('primary-a'), undefined, 'a seventh child Agent must wait')
+
+  for (const item of releases.filter((item) => item.parent === 'primary-a')) item.release()
+  const fourthPrimary = coordinator.tryReserve('primary-d')
+  assert.ok(fourthPrimary, 'the fourth primary Agent must enter after one primary releases both child slots')
+  fourthPrimary()
+  for (const item of releases.filter((item) => item.parent !== 'primary-a')) item.release()
+}
+
+async function assertTwoChildCapacityQueuesReadyTasks(dag) {
+  const template = dag.tasks[0]
+  const capacityDag = {
+    ...dag,
+    id: 'dag-two-child-capacity',
+    tasks: Array.from({ length: 5 }, (_, index) => ({
+      ...template,
+      id: `capacity-${index + 1}`,
+      title: `Capacity ${index + 1}`,
+      dependencies: [],
+      prompt: `capacity task ${index + 1}`
+    }))
+  }
+  const starts = []
+  let maximumRunning = 0
+  const scheduler = new TaskDagScheduler(
+    'parent-two-child-capacity',
+    { dag: capacityDag, isolated: false, maxRetries: 0, taskTimeoutMs: 0 },
+    {
+      runTask(task) {
+        const sessionId = `session-${task.id}`
+        starts.push({ taskId: task.id, sessionId })
+        return { sessionId, dispatchItem: makeDispatchItem(sessionId, task, task.prompt) }
+      },
+      onUpdate(execution) {
+        maximumRunning = Math.max(
+          maximumRunning,
+          execution.tasks.filter((task) => task.status === 'running').length
+        )
+      }
+    }
+  )
+
+  const initial = await scheduler.start()
+  assert.equal(initial.length, 2, 'only two independent DAG children may start for one primary Agent')
+  assert.equal(scheduler.view().tasks.filter((task) => task.status === 'waiting').length, 3)
+
+  let completionIndex = 0
+  while (completionIndex < starts.length || starts.length < capacityDag.tasks.length) {
+    const current = starts[completionIndex]
+    assert.ok(current, 'queued DAG task must fill the next available child slot')
+    completionIndex += 1
+    await scheduler.completeSession(current.sessionId, { ok: true, resultText: `${current.taskId} done` })
+  }
+
+  assert.equal(starts.length, capacityDag.tasks.length, 'every queued task must eventually start')
+  assert.equal(maximumRunning, 2, 'one primary Agent must never exceed two active DAG children')
+  assert.equal(scheduler.view().status, 'success')
+}
+
+async function assertSharedCapacityAdmissionQueuesAcrossParents(dag) {
+  const template = dag.tasks[0]
+  let active = 0
+  let maximumActive = 0
+  const starts = []
+  const schedulers = []
+  const createScheduler = (parentId, prefix) => {
+    const parentDag = {
+      ...dag,
+      id: `dag-shared-capacity-${prefix}`,
+      tasks: Array.from({ length: 3 }, (_, index) => ({
+        ...template,
+        id: `${prefix}-${index + 1}`,
+        title: `${prefix} ${index + 1}`,
+        dependencies: [],
+        prompt: `${prefix} task ${index + 1}`
+      }))
+    }
+    const scheduler = new TaskDagScheduler(
+      parentId,
+      { dag: parentDag, isolated: false, maxRetries: 0, taskTimeoutMs: 0 },
+      {
+        reserveTaskCapacity: () => active < 3 ? () => {} : undefined,
+        runTask(task) {
+          const sessionId = `session-${task.id}`
+          active += 1
+          maximumActive = Math.max(maximumActive, active)
+          starts.push({ scheduler, sessionId, taskId: task.id })
+          return { sessionId, dispatchItem: makeDispatchItem(sessionId, task, task.prompt) }
+        },
+        onUpdate() {}
+      }
+    )
+    schedulers.push(scheduler)
+    return scheduler
+  }
+
+  const first = createScheduler('shared-parent-a', 'a')
+  const second = createScheduler('shared-parent-b', 'b')
+  assert.equal((await first.start()).length, 2)
+  assert.equal((await second.start()).length, 1, 'shared admission must leave excess ready work queued')
+
+  let completed = 0
+  while (completed < 6) {
+    const current = starts[completed]
+    assert.ok(current, 'a released shared slot must eventually admit another queued task')
+    completed += 1
+    active -= 1
+    await current.scheduler.completeSession(current.sessionId, { ok: true, resultText: `${current.taskId} done` })
+    for (const scheduler of schedulers) await scheduler.resume()
+  }
+
+  assert.equal(maximumActive, 3, 'shared admission callback must cap aggregate active children')
+  assert.equal(first.view().status, 'success')
+  assert.equal(second.view().status, 'success')
 }
 
 async function assertReadyBatchWatchdogStartsAfterPrompt(dag) {

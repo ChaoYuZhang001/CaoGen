@@ -59,6 +59,7 @@ async function run() {
     await verifySessionDrafts(win, alpha.id, beta.id)
     await verifyRestartPersistence(win, alpha.id, beta.id)
     await verifyLayout(win)
+    await verifyComposerAutosizeAndDeletion(win, beta.id)
 
     const report = {
       ok: true,
@@ -68,7 +69,8 @@ async function run() {
       screenshots: [
         path.join(screenshotDir, 'chat-message-actions.png'),
         path.join(screenshotDir, 'chat-branch-welcome.png'),
-        path.join(screenshotDir, 'chat-message-actions-compact.png')
+        path.join(screenshotDir, 'chat-message-actions-compact.png'),
+        path.join(screenshotDir, 'chat-composer-autosize.png')
       ],
       checks
     }
@@ -264,6 +266,95 @@ async function verifyLayout(win) {
   check('desktop and compact chat screenshots were written',
     fs.existsSync(path.join(screenshotDir, 'chat-message-actions.png'))
       && fs.existsSync(path.join(screenshotDir, 'chat-message-actions-compact.png')))
+}
+
+async function verifyComposerAutosizeAndDeletion(win, disposableSessionId) {
+  win.setSize(1200, 800)
+  await selectSession(win, disposableSessionId)
+  await setComposerText(win, '短消息')
+  const compactHeight = await rendererValue(win, `document.querySelector('.composer-input').getBoundingClientRect().height`)
+  const multiline = Array.from({ length: 12 }, (_, index) => `第 ${index + 1} 行：输入框应随内容连续增高`).join('\n')
+  await setComposerText(win, multiline)
+  await settleRenderer(win)
+  const expanded = await composerLayoutState(win)
+  check('Composer grows with multiline content before using an internal scrollbar',
+    expanded.height > compactHeight + 100 && expanded.overflowY === 'hidden' && expanded.scrollHeight <= expanded.clientHeight + 1,
+    JSON.stringify({ compactHeight, expanded }))
+  check('Composer and sidebar controls render the unified SVG icon family',
+    await rendererValue(win, `Boolean(
+      document.querySelector('.composer-send svg.lucide-arrow-up') &&
+      document.querySelector('[data-sidebar-action="settings"] svg.lucide-settings') &&
+      document.querySelector('.disclosure-chevron.lucide-chevron-right')
+    )`))
+  await capture(win, 'chat-composer-autosize.png')
+
+  await setComposerText(win, '')
+  await settleRenderer(win)
+  const collapsed = await composerLayoutState(win)
+  check('Composer shrinks back to one row after content is cleared',
+    collapsed.height <= compactHeight + 2 && collapsed.overflowY === 'hidden',
+    JSON.stringify({ compactHeight, collapsed }))
+
+  await rendererValue(win, `document.querySelector('.chat-controls .icon-btn[aria-label="关闭会话"]')?.click()`)
+  await waitForRenderer(win, `!document.querySelector('.session-card:not(.history-card)[data-session-id="${disposableSessionId}"]')`)
+  await waitForRenderer(win, `Boolean(document.querySelector('.composer-input, .welcome-composer-input'))`)
+  await settleRenderer(win)
+  check('closing the active conversation immediately focuses an editable composer',
+    await activeComposerState(win).then((state) => state.focused && !state.disabled && !state.readOnly && !state.inert),
+    JSON.stringify(await activeComposerState(win)))
+  await typeActiveComposer(win, '关闭会话后无需重启即可输入')
+  check('typing works immediately after the active conversation closes',
+    (await activeComposerState(win)).value === '关闭会话后无需重启即可输入')
+
+  await waitForRenderer(win, `Boolean(document.querySelector('.history-card[data-session-id="${disposableSessionId}"]'))`)
+  await rendererValue(win, `window.confirm = () => true; true`)
+  await rendererValue(win, `document.querySelector('.history-card[data-session-id="${disposableSessionId}"] .session-card-more')?.click()`)
+  await waitForRenderer(win, `Boolean([...document.querySelectorAll('.ctx-menu-item')].find((item) => item.textContent.trim() === '删除'))`)
+  await rendererValue(win, `[...document.querySelectorAll('.ctx-menu-item')].find((item) => item.textContent.trim() === '删除')?.click()`)
+  await waitForRenderer(win, `!document.querySelector('.history-card[data-session-id="${disposableSessionId}"]')`)
+  await settleRenderer(win)
+  await typeActiveComposer(win, '删除历史对话后仍可继续输入')
+  const afterDelete = await activeComposerState(win)
+  check('deleting conversation history preserves focus and typing without restart',
+    afterDelete.focused && afterDelete.value === '删除历史对话后仍可继续输入' && !afterDelete.disabled && !afterDelete.inert,
+    JSON.stringify(afterDelete))
+}
+
+function composerLayoutState(win) {
+  return rendererValue(win, `(() => {
+    const input = document.querySelector('.composer-input');
+    const style = getComputedStyle(input);
+    const rect = input.getBoundingClientRect();
+    return {
+      height: rect.height,
+      clientHeight: input.clientHeight,
+      scrollHeight: input.scrollHeight,
+      overflowY: style.overflowY
+    };
+  })()`)
+}
+
+function activeComposerState(win) {
+  return rendererValue(win, `(() => {
+    const input = document.querySelector('.composer-input, .welcome-composer-input');
+    return {
+      value: input?.value || '',
+      focused: document.activeElement === input,
+      disabled: Boolean(input?.disabled),
+      readOnly: Boolean(input?.readOnly),
+      inert: Boolean(input?.closest('[inert]'))
+    };
+  })()`)
+}
+
+async function typeActiveComposer(win, text) {
+  await rendererValue(win, `(() => {
+    const input = document.querySelector('.composer-input, .welcome-composer-input');
+    input.focus();
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(text)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  await waitForRenderer(win, `document.querySelector('.composer-input, .welcome-composer-input')?.value === ${JSON.stringify(text)}`)
 }
 
 async function layoutState(win) {

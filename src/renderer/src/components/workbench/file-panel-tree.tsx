@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronRight, Eye, File, FileText, Folder, FolderOpen } from 'lucide-react'
+import { Eye, File, FileText, Folder, FolderOpen } from 'lucide-react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ProjectFileTreeNavigationKey, VisibleProjectFileNode } from './project-file-tree'
 import { nextProjectFileTreePath } from './project-file-tree'
+import { DisclosureChevron } from '../DisclosureChevron'
 
 export type FileBrowserMode = 'tree' | 'search' | 'problems'
 
@@ -43,7 +44,7 @@ export function FileTreeRow({
         onClick={() => directory ? onToggle(node.path) : onOpen(node.path)}
       >
         <span className="file-row-chevron" aria-hidden="true">
-          {directory ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+          {directory ? <DisclosureChevron expanded={expanded} size={13} /> : null}
         </span>
         <span className="file-row-mark" aria-hidden="true">
           {directory ? (expanded ? <FolderOpen size={14} /> : <Folder size={14} />) : textFile ? <FileText size={14} /> : <File size={14} />}

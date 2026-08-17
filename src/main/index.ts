@@ -121,6 +121,7 @@ function createWindow(): BrowserWindow {
     minHeight: 520,
     title: 'CaoGen',
     backgroundColor: '#1a1a2e',
+    alwaysOnTop: process.env.CAOGEN_OFFICE_PERFORMANCE_TEST === '1',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     ...(icon ? { icon } : {}),
     webPreferences: {

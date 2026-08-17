@@ -28,6 +28,7 @@ const commandDefinitions = [
   { name: 'accessibility required UI e2e', command: 'node', args: ['scripts/accessibility-required.mjs'], category: 'ui' },
   { name: 'i18n longest-string layout required UI e2e', command: 'node', args: ['scripts/i18n-layout-required.mjs'], category: 'ui' },
   { name: 'watercolor accessibility required asset gate', command: 'node', args: ['scripts/watercolor-accessibility-required.mjs'], category: 'static' },
+  { name: 'Office articulated character required gate', command: 'node', args: ['scripts/office-watercolor-status-recheck.mjs'], category: 'static' },
   { name: 'Office render readiness smoke', command: 'node', args: ['scripts/office-render-ready-smoke.mjs'], category: 'smoke' },
   { name: 'deep-test four-state smoke', command: 'node', args: ['scripts/deep-test-four-state-smoke.mjs'], category: 'smoke' },
   { name: 'P0/P1/P2 contract smoke', command: 'node', args: ['scripts/p0-p1-p2-contract-smoke.mjs'], category: 'smoke' },

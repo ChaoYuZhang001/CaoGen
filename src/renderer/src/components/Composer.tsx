@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Paperclip } from 'lucide-react'
+import { ArrowUp, LoaderCircle, Paperclip } from 'lucide-react'
 import { modelOptionsForProvider, useStore } from '../store'
 import { useT } from '../i18n'
 import type { DocumentAttachmentView, ImageAttachmentView, SessionMeta } from '../../../shared/types'
@@ -17,6 +17,7 @@ import {
 } from './experience/projectedComposerCommands'
 import { useComposerSubmission } from './composer/useComposerSubmission'
 import { useSessionComposerDraft } from './composer/useSessionComposerDraft'
+import { useAutosizeTextarea } from './useAutosizeTextarea'
 
 interface Mention {
   start: number
@@ -129,6 +130,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   const attachments = activeId ? attachmentsBySession[activeId] ?? [] : []
   const documents = activeId ? documentsBySession[activeId] ?? [] : []
   const outbound = useComposerOutboundPreview(activeId, activeSession?.meta, text, attachments, documents)
+  useAutosizeTextarea(textareaRef, text)
 
   useEffect(() => {
     imageAttachmentDrafts = attachmentsBySession
@@ -241,7 +243,6 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
       setMention(null)
       setSuggestions([])
       clearAttachments()
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
     },
     onError: (message) => setAttachmentError(message || null)
   })
@@ -459,12 +460,6 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
     }
   }
 
-  const onInput = (e: React.FormEvent<HTMLTextAreaElement>): void => {
-    const el = e.currentTarget
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }
-
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
     const files = [...e.clipboardData.files].filter(isSupportedImageFile)
     if (files.length === 0) return
@@ -593,8 +588,9 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
           onKeyUp={(e) => syncMention(e.currentTarget)}
           onClick={(e) => syncMention(e.currentTarget)}
           onKeyDown={onKeyDown}
-          onInput={onInput}
           onPaste={onPaste}
+          data-composer-autosize="true"
+          autoFocus
         />
         <button
           className="btn btn-primary composer-send"
@@ -603,7 +599,9 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
           onClick={() => void submit()}
           disabled={sendDisabled || outbound.sendDisabled(false)}
         >
-          <span aria-hidden="true">{uploadingAttachment ? '…' : '↑'}</span>
+          {uploadingAttachment
+            ? <LoaderCircle className="composer-send-spinner" size={17} aria-hidden="true" />
+            : <ArrowUp size={17} strokeWidth={2.2} aria-hidden="true" />}
         </button>
       </div>
     </div>

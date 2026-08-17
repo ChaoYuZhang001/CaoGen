@@ -26,6 +26,7 @@ import TaskStrategyControl from './experience/TaskStrategyControl'
 import WelcomeRoutingControls, {
   AssistantComputeIndicator
 } from './experience/WelcomeRoutingControls'
+import { useAutosizeTextarea } from './useAutosizeTextarea'
 import {
   assistantSafeStartError,
   hasAvailableCompute,
@@ -441,6 +442,7 @@ function WelcomeComposer({
   welcomeDraft: WelcomeStoreState['welcomeDraft']
 }): React.JSX.Element {
   const t = useT()
+  useAutosizeTextarea(textareaRef, welcome.text)
   return (
     <div className="welcome-compose-dock">
       <div className="welcome-composer">
@@ -466,6 +468,7 @@ function WelcomeComposer({
           rows={1}
           onChange={(event) => welcome.update({ text: event.target.value })}
           onKeyDown={onKeyDown}
+          data-composer-autosize="true"
           autoFocus
         />
         <div className="welcome-composer-bar">

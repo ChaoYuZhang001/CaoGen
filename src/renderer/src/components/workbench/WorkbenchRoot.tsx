@@ -1,5 +1,6 @@
 import { createElement, memo, Suspense, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
+import { PanelRightClose } from 'lucide-react'
 import ChatView from '../ChatView'
 import RoutineEditor from '../RoutineEditor'
 import { HeaderIcon, type HeaderIconName } from '../ChatHeaderIcons'
@@ -469,7 +470,7 @@ function WorkbenchSidePanel({
       >
         <button type="button" className="workbench-side-collapse" aria-label={t('collapseToolPanel')}
           title={t('collapseToolPanel')} onPointerDown={(event) => event.stopPropagation()} onClick={onCollapse}>
-          ›
+          <PanelRightClose size={15} strokeWidth={1.9} aria-hidden="true" />
         </button>
       </div>
       <section className={`workbench-pane workbench-side ${activePanelId === 'files' ? 'workbench-side-files' : ''}`}

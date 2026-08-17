@@ -16,12 +16,13 @@ import OfficeScene from './kit/OfficeScene'
 import OfficePerformanceProbe from './kit/OfficePerformanceProbe'
 import OfficeFrameDriver, { useOfficeRenderQuality } from './kit/OfficeRenderQuality'
 import WorkstationPro, { activityOf } from './kit/WorkstationPro'
-import WatercolorCharacterRig from './kit/WatercolorCharacterRig'
+import OfficeBootCharacter from './kit/OfficeBootCharacter'
 import { vendorKeyFor } from './kit/VendorSkins'
 import { providerLogoFor } from './kit/ProviderLogos'
 import { buildOfficeModel } from './model'
 import type { OfficeRealtimeSummary, OfficeSessionActivity } from './model'
 import OfficeFailoverSignals from './OfficeFailoverSignals'
+import { useOfficeBootStages } from './useOfficeBootStages'
 import type { OfficeContactShadowMode } from './quality'
 import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
 import type { MediaJobStatus, MediaStudioSnapshot } from '../../../../shared/media-types'
@@ -31,6 +32,8 @@ import {
   stableWatercolorRole,
   type WatercolorCharacterRole
 } from '../../../../shared/watercolor-character'
+
+export { prewarmOfficeGraphics } from './graphicsPrewarm'
 
 /**
  * 把会话按网格铺开在房间中央空地(OfficeScene 家具占外围:
@@ -190,6 +193,7 @@ function OfficeBootScene({
   positions,
   activeId,
   lightMode,
+  showCharacters,
   interactive,
   onSelect,
   onOpen
@@ -198,6 +202,7 @@ function OfficeBootScene({
   positions: Array<[number, number, number]>
   activeId: string | null
   lightMode: boolean
+  showCharacters: boolean
   interactive: boolean
   onSelect: (id: string) => void
   onOpen: (id: string) => void
@@ -237,16 +242,7 @@ function OfficeBootScene({
               <boxGeometry args={[1.45, 0.08, 0.62]} />
               <meshBasicMaterial color={lightMode ? '#65737d' : '#303a45'} />
             </mesh>
-            <group name="office-boot-watercolor" position={[0, 0, 0.28]}>
-              <Suspense fallback={null}>
-                <WatercolorCharacterRig
-                  role={stableWatercolorRole(id)}
-                  state="idle"
-                  compact
-                  scale={id === activeId ? 1 : 0.92}
-                />
-              </Suspense>
-            </group>
+            {showCharacters && <OfficeBootCharacter sessionId={id} active={id === activeId} />}
           </group>
         )
       })}
@@ -339,10 +335,6 @@ export default function OfficeView(): React.JSX.Element {
   const [businessView, setBusinessView] = useState<OfficeBusinessView>(initialBusinessViewRef.current)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('facilities')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(initialBusinessViewRef.current)
-  const [sceneDetailEnabled, setSceneDetailEnabled] = useState(false)
-  const [sceneAssetsEnabled, setSceneAssetsEnabled] = useState(false)
-  const bootFrameRenderedRef = useRef(false)
-  const detailUpgradeTimerRef = useRef<number | null>(null)
   const officeHitRef = useRef({ seq: 0, kind: '', id: '' })
   const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
   const [watercolorRoleByWorkerId, setWatercolorRoleByWorkerId] = useState<Record<string, WatercolorCharacterRole>>({})
@@ -352,36 +344,8 @@ export default function OfficeView(): React.JSX.Element {
   const operationalRefreshSequence = useRef(0)
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
-  const handleOfficeFrame = useCallback(
-    (frameMs: number): void => {
-      renderQuality.recordFrame(frameMs)
-      if (bootFrameRenderedRef.current) return
-      bootFrameRenderedRef.current = true
-      detailUpgradeTimerRef.current = window.setTimeout(() => setSceneDetailEnabled(true), 50)
-    },
-    [renderQuality.recordFrame]
-  )
-
-  useEffect(
-    () => () => {
-      if (detailUpgradeTimerRef.current !== null) window.clearTimeout(detailUpgradeTimerRef.current)
-    },
-    []
-  )
-
-  useEffect(() => {
-    if (!sceneDetailEnabled || sceneAssetsEnabled) return
-    let secondFrame = 0
-    const firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => {
-        setSceneAssetsEnabled(true)
-      })
-    })
-    return () => {
-      window.cancelAnimationFrame(firstFrame)
-      if (secondFrame) window.cancelAnimationFrame(secondFrame)
-    }
-  }, [sceneAssetsEnabled, sceneDetailEnabled])
+  const { bootCharactersEnabled, sceneDetailEnabled, sceneAssetsEnabled, handleOfficeFrame } =
+    useOfficeBootStages(renderQuality.recordFrame)
 
   // 办公区场景色随主题切换
   const isLight = themePref === 'light' || (themePref === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches)
@@ -670,7 +634,7 @@ export default function OfficeView(): React.JSX.Element {
   const projectWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'project').length
   const videoWalkerCount = semanticWalkers.filter((spec) => spec.reason === 'video').length
   const facilityWalkerCount = assistantWalkerCount + projectWalkerCount + videoWalkerCount
-  const deskCharacterCount = Math.max(0, visibleIds.length - awaySessionIds.size)
+  const deskRobotCount = Math.max(0, visibleIds.length - awaySessionIds.size)
   const activeOfficeId = activeId && visibleIds.includes(activeId) ? activeId : (visibleIds[0] ?? null)
   const presentedWalkerSpecs = useMemo(
     () =>
@@ -750,7 +714,7 @@ export default function OfficeView(): React.JSX.Element {
   }))
   const officeOptimizationComplete =
     (visibleIds.length > 0 || hasAnyOperations) &&
-    deskCharacterCount + awaySessionIds.size === visibleIds.length &&
+    deskRobotCount + awaySessionIds.size === visibleIds.length &&
     OFFICE_FACILITY_SPECS.length === 3 &&
     CAMERA_PRESETS.length === 4 &&
     knownLogoCount >= visibleIds.length &&
@@ -874,11 +838,13 @@ export default function OfficeView(): React.JSX.Element {
           data-office-git-untracked={realtime.gitUntracked}
           data-office-walkers={semanticWalkers.length}
           data-office-away-sessions={awaySessionIds.size}
-          data-office-desk-robots={0}
-          data-office-visible-robots={0}
-          data-office-one-robot-per-agent={0}
-          data-office-watercolor-characters={visibleIds.length}
-          data-office-one-watercolor-character-per-agent={deskCharacterCount + awaySessionIds.size === visibleIds.length ? 1 : 0}
+          data-office-desk-workers={deskRobotCount} data-office-visible-digital-workers={deskRobotCount + awaySessionIds.size}
+          data-office-one-digital-worker-per-agent={deskRobotCount + awaySessionIds.size === visibleIds.length ? 1 : 0}
+          data-office-desk-robots={0} data-office-visible-robots={0} data-office-one-robot-per-agent={0}
+          data-office-watercolor-characters={0} data-office-one-watercolor-character-per-agent={0}
+          data-office-articulated-characters={visibleIds.length} data-office-grounded-character-rigs={visibleIds.length}
+          data-office-low-poly-digital-workers={visibleIds.length} data-office-human-proportion-workers={visibleIds.length}
+          data-office-role-accented-workers={visibleIds.length} data-office-camera-facing-character-sprites={0}
           data-office-assistant-walkers={assistantWalkerCount}
           data-office-approval-walkers={approvalWalkerCount}
           data-office-project-walkers={projectWalkerCount}
@@ -902,13 +868,13 @@ export default function OfficeView(): React.JSX.Element {
           data-office-architectural-lights={1}
           data-office-work-zone-glass={1}
           data-office-vendor-emblems={1}
-          data-office-desk-facing-screens={deskCharacterCount}
-          data-office-operator-contact-links={deskCharacterCount * 2}
-          data-office-screen-focus-links={deskCharacterCount * 2}
-          data-office-desk-status-plaques={deskCharacterCount}
+          data-office-desk-facing-screens={deskRobotCount}
+          data-office-operator-contact-links={deskRobotCount * 2}
+          data-office-screen-focus-links={deskRobotCount * 2}
+          data-office-desk-status-plaques={deskRobotCount}
           data-office-walker-floor-badges={semanticWalkers.length}
-          data-office-work-inputs={deskCharacterCount}
-          data-office-operator-input-arrays={deskCharacterCount}
+          data-office-work-inputs={deskRobotCount}
+          data-office-operator-input-arrays={deskRobotCount}
           data-office-service-foreground-occluders={0}
           data-office-screen-panels={visibleIds.length * 2 + 6}
           data-office-walker-routes={semanticWalkers.length}
@@ -919,11 +885,10 @@ export default function OfficeView(): React.JSX.Element {
           data-office-wall-occluders={0}
           data-office-long-light-occluders={0}
           data-office-presentation-backdrop={1}
-          data-office-industrial-robots={0}
-          data-office-humanoid-robot-silhouettes={0}
+          data-office-industrial-robots={0} data-office-humanoid-robot-silhouettes={0}
           data-office-humanoid-face-visors={0}
           data-office-humanoid-shell-panels={0}
-          data-office-humanoid-articulated-joints={0}
+          data-office-humanoid-articulated-joints={visibleIds.length * 8}
           data-office-humanoid-back-shells={0}
           data-office-humanoid-neutral-shells={0}
           data-office-reference-robot-silhouettes={0}
@@ -952,9 +917,9 @@ export default function OfficeView(): React.JSX.Element {
           data-office-deepseek-logo-skins={deepseekSessionCount}
           data-office-deepseek-sessions={deepseekSessionCount}
           data-office-abstract-logo-skins={abstractLogoFallbacks}
-          data-office-provider-logo-badges={deskCharacterCount * 3 + semanticWalkers.length * 2}
-          data-office-provider-logo-texture-badges={deskCharacterCount * 3 + semanticWalkers.length * 2}
-          data-office-provider-logo-wordmark-badges={deskCharacterCount * 2 + semanticWalkers.length}
+          data-office-provider-logo-badges={deskRobotCount * 3 + semanticWalkers.length * 2}
+          data-office-provider-logo-texture-badges={deskRobotCount * 3 + semanticWalkers.length * 2}
+          data-office-provider-logo-wordmark-badges={deskRobotCount * 2 + semanticWalkers.length}
           data-office-clickable-workstations={visibleIds.length}
           data-office-clickable-walkers={semanticWalkers.length}
           data-office-selected-session={activeOfficeId ?? ''}
@@ -1144,6 +1109,7 @@ export default function OfficeView(): React.JSX.Element {
               positions={positions}
               activeId={activeOfficeId}
               lightMode={isLight}
+              showCharacters={bootCharactersEnabled}
               interactive={cameraPreset !== 'facilities'}
               onSelect={selectOfficeSession}
               onOpen={focus}

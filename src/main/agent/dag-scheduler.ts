@@ -9,6 +9,10 @@ import type {
   TaskDagTask,
   TaskDagTaskStatus
 } from '../../shared/types'
+import {
+  MAX_ACTIVE_CHILD_AGENTS_PER_PRIMARY,
+  MAX_TASKS_PER_DAG
+} from '../../shared/agent-capacity-policy'
 
 export interface TaskDagValidationResult {
   ok: boolean
@@ -42,6 +46,8 @@ export interface DagTaskCompletion {
 }
 
 export interface TaskDagSchedulerCallbacks {
+  /** Atomically reserves global capacity; no lease keeps the task waiting without consuming a retry. */
+  reserveTaskCapacity?(task: TaskDagTask): (() => void) | undefined
   runTask(task: TaskDagTask, context: DagTaskRunContext): DagTaskRunResult | Promise<DagTaskRunResult>
   onUpdate(execution: TaskDagExecutionView): void
   onTaskProvisioned?(execution: TaskDagExecutionView, sessionId: string): void | Promise<void>
@@ -119,7 +125,9 @@ export function validateTaskDag(dag: TaskDag): TaskDagValidationResult {
   if (!Array.isArray(dag.tasks) || dag.tasks.length === 0) {
     return { ok: false, error: 'DAG 至少需要一个任务' }
   }
-  if (dag.tasks.length > 33) return { ok: false, error: '一次 DAG 最多 33 个任务' }
+  if (dag.tasks.length > MAX_TASKS_PER_DAG) {
+    return { ok: false, error: `一次 DAG 最多 ${MAX_TASKS_PER_DAG} 个任务` }
+  }
 
   const ids = new Set<string>()
   for (const task of dag.tasks) {
@@ -541,10 +549,25 @@ export class TaskDagScheduler {
         await this.maybeComplete()
         continue
       }
+      const runningCount = [...this.states.values()].filter(
+        (state) => state.status === 'running' && Boolean(state.runningSessionId)
+      ).length
+      const availableSlots = Math.max(0, MAX_ACTIVE_CHILD_AGENTS_PER_PRIMARY - runningCount)
+      if (availableSlots === 0) return
       const deferredStarts: DeferredTaskStart[] = []
-      for (const state of ready) {
-        const deferred = await this.provisionTask(state)
-        if (deferred) deferredStarts.push(deferred)
+      let capacityBlocked = false
+      for (const state of ready.slice(0, availableSlots)) {
+        const releaseCapacity = this.callbacks.reserveTaskCapacity?.(state.task)
+        if (this.callbacks.reserveTaskCapacity && !releaseCapacity) {
+          capacityBlocked = true
+          break
+        }
+        try {
+          const deferred = await this.provisionTask(state)
+          if (deferred) deferredStarts.push(deferred)
+        } finally {
+          releaseCapacity?.()
+        }
         if (this.completed || this.recoveryBlockedError) {
           await this.abortDeferredStarts(deferredStarts)
           return
@@ -554,6 +577,7 @@ export class TaskDagScheduler {
         const started = await this.startDeferredTask(deferred, deferredStarts.slice(index + 1))
         if (!started) return
       }
+      if (capacityBlocked) return
     }
   }
 

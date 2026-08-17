@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { Vector3 } from 'three'
 import type { Group } from 'three'
-import WatercolorCharacterRig from './WatercolorCharacterRig'
+import type { AvatarRefs } from './AvatarRig'
+import ArticulatedDigitalWorkerRig from './ArticulatedDigitalWorkerRig'
+import { animateWalkerRig } from './WalkerRigAnimation'
 import type { WatercolorCharacterRole } from '../../../../../shared/watercolor-character'
 
 export type AgentWalkReason = 'assistant' | 'approval' | 'project' | 'video'
@@ -320,6 +322,7 @@ function OneAgentWalker({
   onOpen?: (sessionId: string) => void
 }): React.JSX.Element {
   const groupRef = useRef<Group>(null)
+  const rigRef = useRef<AvatarRefs>(null)
   const leftFootTargetRef = useRef<Group>(null)
   const rightFootTargetRef = useRef<Group>(null)
   const stageRef = useRef<WalkStage>('toTarget')
@@ -384,7 +387,7 @@ function OneAgentWalker({
     const group = groupRef.current
     if (!group) return
 
-    const elapsed = state.clock.getElapsedTime() + spec.phase
+    const clock = state.clock.getElapsedTime(); const elapsed = clock + spec.phase
     const timelineNow = performance.now() / 1_000
     const oneWayElapsed = Math.max(0, timelineNow - startedAtRef.current)
     const oneWay = spec.reason === 'approval' || spec.holdAtTarget
@@ -486,6 +489,7 @@ function OneAgentWalker({
     }
     previousPositionRef.current.copy(position)
 
+    animateWalkerRig(rigRef.current, clock, spec.reason === 'approval', walking, local, nextStage, travelSeconds, backEnd, spec.phase, gaitPhase, gaitMotion, leftFootTargetRef.current, rightFootTargetRef.current)
   })
 
   return (
@@ -525,12 +529,10 @@ function OneAgentWalker({
             ))}
           </>
         )}
-        <WatercolorCharacterRig
-          role={spec.watercolorRole}
-          state={stage === 'target' && spec.reason === 'approval' ? 'awaiting-approval' : 'tool-running'}
-          position={[0, 0.68, 0]}
-          scale={active ? 1 : 0.94}
-        />
+        <ArticulatedDigitalWorkerRig
+          ref={rigRef} sessionId={spec.sessionId} role={spec.watercolorRole}
+          providerName={spec.providerName} providerBaseUrl={spec.providerBaseUrl} modelName={spec.modelName}
+          loadModel detailLevel="full" scale={active ? 1 : 0.96} />
         {stage === 'target' && <AgentStatusMarker reason={spec.reason} accent={WALKER_ACCENT} />}
       </group>
     </>
