@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { dismissRecoveryCenter } from './lib/project-workspace-lifecycle-ui.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
+process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter)
+require('node:module').Module._initPaths()
 const puppeteer = require('puppeteer-core')
 const packageJson = require(path.join(repoRoot, 'package.json'))
 const electronPackage = require('electron/package.json')
@@ -29,6 +32,8 @@ const electronBin = process.platform === 'win32'
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const projectId = 'workitem-board-project'
 const ITEM_COUNT = 1000
+const LIST_ROW_HEIGHT = 170
+const BOARD_CARD_HEIGHT = 356
 
 const report = {
   schemaVersion: 1,
@@ -85,7 +90,10 @@ try {
       assert(metrics.total === ITEM_COUNT, `List total mismatch: ${metrics.total}`)
       assert(metrics.rendered > 0 && metrics.rendered < 30, `List did not window DOM rows: ${metrics.rendered}`)
       assert(metrics.height === 604, `List viewport height changed: ${metrics.height}`)
-      assert(metrics.rows.every((height) => height === 110), `List rows are not fixed at 110px: ${metrics.rows.join(',')}`)
+      assert(
+        metrics.rows.every((height) => height === LIST_ROW_HEIGHT),
+        `List rows are not fixed at ${LIST_ROW_HEIGHT}px: ${metrics.rows.join(',')}`
+      )
     })
 
     await check('filtering after a deep virtual scroll resets to the first matching WorkItem', async () => {
@@ -104,7 +112,7 @@ try {
         const first = surface?.querySelector('[data-work-item-id]')
         return surface?.scrollTop === 0 && first?.getAttribute('data-work-item-id') === 'work-item-0001'
       }, { timeout: 30_000 })
-      await page.click('[data-work-item-filter="clear"]')
+      await clearWorkItemFilters(page)
       await waitForTotal(page, 'list', ITEM_COUNT)
     })
   })
@@ -113,7 +121,7 @@ try {
     await check('search, status, Goal, and owner filters operate on the canonical projection', async () => {
       await page.type('[data-work-item-filter="query"]', 'Board item 0999')
       await waitForRenderedIds(page, ['work-item-0999'])
-      await page.click('[data-work-item-filter="clear"]')
+      await clearWorkItemFilters(page)
       await waitForTotal(page, 'list', ITEM_COUNT)
 
       await page.select('[data-work-item-filter="status"]', 'blocked')
@@ -125,13 +133,13 @@ try {
       assert(filtered.length > 0, 'filtered List rendered no rows')
       assert(filtered.every((item) => item.status === 'blocked' && item.owner.startsWith('human-')), 'filter result leaked non-matching fields')
 
-      await page.click('[data-work-item-filter="clear"]')
+      await clearWorkItemFilters(page)
       await waitForTotal(page, 'list', ITEM_COUNT)
       await page.select('[data-work-item-filter="goal"]', 'workitem-board-goal')
       await waitForTotal(page, 'list', 100)
       await page.select('[data-work-item-filter="goal"]', 'none')
       await waitForTotal(page, 'list', 900)
-      await page.click('[data-work-item-filter="clear"]')
+      await clearWorkItemFilters(page)
       await waitForTotal(page, 'list', ITEM_COUNT)
     })
 
@@ -185,7 +193,10 @@ try {
       }))
       assert(metrics.total === ITEM_COUNT, `Board aggregate total mismatch: ${metrics.total}`)
       assert(metrics.rendered > 0 && metrics.rendered < 80, `Board DOM is not bounded: ${metrics.rendered}`)
-      assert(metrics.cardHeights.every((height) => height === 262), `Board cards are not fixed at 262px: ${metrics.cardHeights.join(',')}`)
+      assert(
+        metrics.cardHeights.every((height) => height === BOARD_CARD_HEIGHT),
+        `Board cards are not fixed at ${BOARD_CARD_HEIGHT}px: ${metrics.cardHeights.join(',')}`
+      )
       await screenshot(page, 'workitem-board-1000')
     })
 
@@ -216,7 +227,7 @@ try {
         second: await window.agentDesk.getProjectWorkItem('work-item-0001')
       }))
       assert(canonical.second.boardOrder < canonical.first.boardOrder, 'canonical boardOrder reverted after restart')
-      await page.click('[data-work-item-filter="clear"]')
+      await clearWorkItemFilters(page)
       await page.click('[data-view-option="list"]')
       await waitForTotal(page, 'list', ITEM_COUNT)
       const firstRendered = await page.$eval('[data-work-item-surface="list"] [data-work-item-id]', (element) => element.getAttribute('data-work-item-id'))
@@ -257,7 +268,9 @@ function assertGateDefinition() {
 async function runDomainChecks() {
   compileDomainSources()
   installElectronStub()
-  const api = await import(pathToFileURL(findCompiled(domainOutDir, 'index.js')).href)
+  const domainEntry = path.join(domainOutDir, 'main', 'project-workspace', 'index.js')
+  assert(existsSync(domainEntry), 'compiled ProjectWorkspace entry is missing')
+  const api = await import(pathToFileURL(domainEntry).href)
   const store = new api.ProjectWorkspaceStore(domainDataDir)
   await store.open()
   const workspace = await store.createWorkspace({ id: 'domain-project', name: 'Board domain', kind: 'software' })
@@ -449,6 +462,7 @@ async function enterStudio(page) {
     { timeout: 90_000 }
   )
   await page.waitForSelector('[data-work-item-surface]', { timeout: 90_000 })
+  await dismissRecoveryCenter(page)
 }
 
 async function check(name, execute) {
@@ -468,6 +482,22 @@ async function waitForTotal(page, surface, total) {
     { timeout: 30_000 },
     { surface, total }
   )
+}
+
+async function clearWorkItemFilters(page) {
+  await page.$eval('[data-work-item-filter="clear"]', (element) => {
+    if (!(element instanceof HTMLButtonElement) || element.disabled) {
+      throw new Error('clear WorkItem filters control is not enabled')
+    }
+    element.click()
+  })
+  await page.waitForFunction(() => {
+    const query = document.querySelector('[data-work-item-filter="query"]')
+    const status = document.querySelector('[data-work-item-filter="status"]')
+    const goal = document.querySelector('[data-work-item-filter="goal"]')
+    const owner = document.querySelector('[data-work-item-filter="owner"]')
+    return query?.value === '' && status?.value === 'all' && goal?.value === 'all' && owner?.value === 'all'
+  }, { timeout: 30_000 })
 }
 
 async function waitForRenderedIds(page, expected) {
@@ -516,19 +546,6 @@ function installElectronStub() {
   mkdirSync(electronDir, { recursive: true })
   writeFileSync(path.join(electronDir, 'index.js'), `export const app = { getPath: () => ${JSON.stringify(domainDataDir)} }\n`)
   writeFileSync(path.join(electronDir, 'package.json'), '{"type":"module"}\n')
-}
-
-function findCompiled(root, name) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const fullPath = path.join(root, entry.name)
-    if (entry.isDirectory()) {
-      const found = findCompiled(fullPath, name)
-      if (found) return found
-    } else if (entry.isFile() && entry.name === name) {
-      return fullPath
-    }
-  }
-  return null
 }
 
 function assertBuildInputs() {
