@@ -71,6 +71,16 @@ function isSupportedImageFile(file: File): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(file.name)
 }
 
+function clipboardImageFiles(data: DataTransfer): File[] {
+  const files = [...data.files].filter(isSupportedImageFile)
+  if (files.length > 0) return files
+  return [...data.items].flatMap((item) => {
+    if (item.kind !== 'file') return []
+    const file = item.getAsFile()
+    return file && isSupportedImageFile(file) ? [file] : []
+  })
+}
+
 function filePath(file: File): string | undefined {
   try {
     return window.agentDesk.pathForFile(file) || undefined
@@ -461,7 +471,7 @@ export default function Composer({ running }: { running: boolean }): React.JSX.E
   }
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
-    const files = [...e.clipboardData.files].filter(isSupportedImageFile)
+    const files = clipboardImageFiles(e.clipboardData)
     if (files.length === 0) return
     e.preventDefault()
     void addFiles(files)

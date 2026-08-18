@@ -131,8 +131,8 @@
     },
     "scripts/deep-test.mjs": {
       "profile": "automation",
-      "lines": 660,
-      "contentHash": "8c27bbf16ba94db698069c8c6b088252d39aa17d20f2f3711f9d33a329488b4b",
+      "lines": 661,
+      "contentHash": "63d11c6b030c25968e780eb941a3b27d52599c46fb7f69e877c73b26b80fc089",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 62,
       "complexFunctionCount": 1,
@@ -3180,10 +3180,10 @@
     },
     "src/renderer/src/App.tsx": {
       "profile": "product",
-      "lines": 202,
-      "contentHash": "d2189296f7f0262acfe93167c29d45d5240748d75c76a23746e0b9fa879109d1",
+      "lines": 191,
+      "contentHash": "0178a6f6daefaf0eed53ef1153f4c97613b4245458a67df90bbdbd23c649a45b",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 153,
+      "maxFunctionLines": 151,
       "complexFunctionCount": 0,
       "maxComplexity": 10,
       "forbiddenSuppressionCount": 0,
@@ -3191,17 +3191,17 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "App#1": {
-          "lines": 153,
+          "lines": 151,
           "complexity": 7
         }
       }
     },
     "src/renderer/src/components/AppListView.tsx": {
       "profile": "product",
-      "lines": 262,
-      "contentHash": "ebaac345c204db1d8d912a446f16712c4497b9de2f971e5bac9a2841e61acc96",
+      "lines": 260,
+      "contentHash": "e408a0fef8fe2ea12d9cea6de87ebca7f869b3b9c394c4dd8a2f2f2d63a44053",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 88,
+      "maxFunctionLines": 86,
       "complexFunctionCount": 1,
       "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
@@ -3209,7 +3209,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "AppListView#1": {
-          "lines": 88,
+          "lines": 86,
           "complexity": 17
         }
       }
@@ -3260,8 +3260,8 @@
     },
     "src/renderer/src/components/Composer.tsx": {
       "profile": "product",
-      "lines": 609,
-      "contentHash": "b80379a24273ef824cb45b533e3dc4fc7dd993bb4da6cac5ab82ba21a15b4131",
+      "lines": 619,
+      "contentHash": "ba950cabbaa0b1edc1b5fb06b7efbed299e2396bd8230816eae7da0fb2a792e5",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 525,
       "complexFunctionCount": 2,

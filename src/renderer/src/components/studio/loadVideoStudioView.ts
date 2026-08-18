@@ -11,7 +11,3 @@ export function loadVideoStudioView(): Promise<VideoStudioViewModule> {
   }
   return videoStudioViewPromise
 }
-
-export function preloadVideoStudioView(): void {
-  void loadVideoStudioView().catch(() => undefined)
-}

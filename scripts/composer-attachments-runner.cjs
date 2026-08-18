@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, clipboard, ipcMain, nativeImage } = require('electron')
 
 const repoRoot = path.resolve(__dirname, '..')
 const outMain = path.join(repoRoot, 'out', 'main', 'index.js')
@@ -10,6 +10,7 @@ const statePath = requiredEnv('CAOGEN_COMPOSER_ATTACHMENTS_STATE')
 const screenshotDir = requiredEnv('CAOGEN_COMPOSER_ATTACHMENTS_SCREENSHOTS')
 const userDataDir = path.join(root, 'userData')
 const projectDir = path.join(root, 'workspace')
+const PASTE_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 process.env.CAOGEN_USER_DATA_DIR = userDataDir
 process.env.CAOGEN_MEMORY_DIR = path.join(root, 'memory')
 fs.mkdirSync(projectDir, { recursive: true })
@@ -43,6 +44,36 @@ async function run() {
 
     const button = await rendererValue(win, `(() => { const el = document.querySelector('.composer-attach'); return { exists: !!el, label: el?.getAttribute('aria-label'), width: el?.getBoundingClientRect().width }; })()`)
     check('visible attachment button has an accessible label', button.exists && button.label && button.width === 34)
+
+    await rendererValue(win, `document.querySelector('.composer-input')?.focus()`)
+    clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(PASTE_IMAGE_BASE64, 'base64')))
+    win.webContents.paste()
+    await waitForRenderer(win, `document.querySelectorAll('.image-attachment-item').length === 1`)
+    await waitForRenderer(win, `document.querySelector('.image-attachment-image')?.naturalWidth > 0`)
+    const pastedImage = await rendererValue(win, `(() => {
+      const item = document.querySelector('.image-attachment-item')
+      const image = item?.querySelector('.image-attachment-image')
+      return {
+        name: item?.querySelector('.image-attachment-name')?.textContent,
+        naturalWidth: image?.naturalWidth || 0,
+        preview: image?.getAttribute('src') || ''
+      }
+    })()`)
+    check('system clipboard image paste creates a visible image attachment',
+      pastedImage.name && pastedImage.preview.startsWith('blob:') && pastedImage.naturalWidth > 0)
+    await selectSession(win, beta.id)
+    check('another session does not inherit a pasted image attachment',
+      await rendererValue(win, `document.querySelectorAll('.image-attachment-item').length === 0`))
+    await selectSession(win, alpha.id)
+    check('switching back restores the pasted image attachment',
+      await rendererValue(win, `document.querySelectorAll('.image-attachment-item').length === 1`))
+    await setComposerText(win, '请描述这张图片')
+    await rendererValue(win, `document.querySelector('.composer-send')?.click()`)
+    await waitFor(() => server.requests.length === 1, 10_000)
+    check('actual Provider request contains the pasted image block',
+      server.requests[0].includes('input_image') && server.requests[0].includes('data:image/png;base64'))
+    await waitForRenderer(win, `document.querySelectorAll('.image-attachment-item').length === 0`)
+    check('accepted image send clears the image attachment tray', true)
 
     await chooseMention(win, '@notes', 'notes.md')
     await waitForRenderer(win, `document.querySelector('.document-attachment-name')?.textContent === 'notes.md'`)
@@ -86,8 +117,8 @@ async function run() {
     await chooseMention(win, '@notes', 'notes.md')
     await waitForRenderer(win, `document.querySelector('.composer-send')?.disabled === false`)
     await rendererValue(win, `document.querySelector('.composer-send')?.click()`)
-    await waitFor(() => server.requests.length === 1, 10_000)
-    const body = server.requests[0]
+    await waitFor(() => server.requests.length === 2, 10_000)
+    const body = server.requests[1]
     check('actual Provider request contains the frozen document content', body.includes('E2E-DOCUMENT-CONTENT-CANARY'))
     check('actual Provider request labels the document with a relative path', body.includes('===== notes.md ====='))
     check('actual Provider request excludes the unselected S3 content', !body.includes('E2E-LOCAL-ONLY-CANARY'))

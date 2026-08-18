@@ -9,7 +9,7 @@ import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
 import AppListView from './components/AppListView'
 import { APP_ICON_URL, APP_NAME } from './brand'
-import { loadOfficeView, preloadOfficeView } from './components/office/loadOffice'
+import { loadOfficeView } from './components/office/loadOffice'
 import type { ExperienceMode } from './store/experience-mode'
 
 // 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
@@ -22,17 +22,8 @@ function useMobileSidebar(): [boolean, () => void, () => void] {
   return [open, close, toggle]
 }
 
-function useStudioPrewarm(visited: boolean, setVisited: (value: boolean) => void): void {
-  useEffect(() => {
-    if (visited) return
-    const frameId = window.requestAnimationFrame(() => setVisited(true))
-    return () => window.cancelAnimationFrame(frameId)
-  }, [setVisited, visited])
-}
-
 function useStudioVisited(experienceMode: ExperienceMode): boolean {
   const [visited, setVisited] = useState(experienceMode === 'studio')
-  useStudioPrewarm(visited, setVisited)
   useEffect(() => {
     if (experienceMode === 'studio') setVisited(true)
   }, [experienceMode])
@@ -115,8 +106,6 @@ export default function App(): React.JSX.Element {
     if (typeof window.agentDesk === 'undefined') return
     void init()
   }, [init])
-
-  useEffect(() => { preloadOfficeView() }, [])
 
   useEffect(() => {
     if (typeof window.agentDesk === 'undefined') return

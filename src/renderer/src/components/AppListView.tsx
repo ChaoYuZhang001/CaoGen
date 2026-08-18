@@ -14,8 +14,8 @@ import StudioProjectionTabs, {
   STUDIO_PROJECTION_TAB_IDS,
   type StudioProjectionSurface
 } from './experience/StudioProjectionTabs'
-import { loadStudioView, preloadStudioView } from './studio/loadStudioView'
-import { loadVideoStudioView, preloadVideoStudioView } from './studio/loadVideoStudioView'
+import { loadStudioView } from './studio/loadStudioView'
+import { loadVideoStudioView } from './studio/loadVideoStudioView'
 
 const StudioView = lazy(loadStudioView)
 const VideoStudioView = lazy(loadVideoStudioView)
@@ -201,8 +201,6 @@ export default function AppListView({
     studioSessionNavigationNonce,
     hasProjectTask
   )
-  useEffect(() => preloadStudioView(), [])
-  useEffect(() => preloadVideoStudioView(), [])
   const sessionProjection = experienceMode === 'studio' && studioSurface === 'session' ? 'studio' : 'assistant'
   const sessionHidden = experienceMode === 'video' || (experienceMode === 'studio' && studioSurface !== 'session')
   const workspaceHidden = experienceMode !== 'studio' || studioSurface !== 'workspace'

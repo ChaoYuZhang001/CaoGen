@@ -11,7 +11,3 @@ export function loadStudioView(): Promise<StudioViewModule> {
   }
   return studioViewPromise
 }
-
-export function preloadStudioView(): void {
-  void loadStudioView().catch(() => undefined)
-}

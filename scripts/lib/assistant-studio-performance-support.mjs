@@ -1,3 +1,37 @@
+import assert from 'node:assert/strict'
+
+export function attachAssistantStudioPageDiagnostics(page, phase) {
+  page.on('request', (request) => {
+    const chunk = surfaceChunkName(request.url())
+    if (chunk && !phase.requestedSurfaceChunks.includes(chunk)) phase.requestedSurfaceChunks.push(chunk)
+  })
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      phase.warnings.push(`console ${message.type()}: ${message.text()}`)
+    }
+  })
+  page.on('pageerror', (error) => phase.warnings.push(`pageerror: ${error.message}`))
+}
+
+export async function readLazySurfaceState(page, resources) {
+  const state = await page.evaluate(() => ({
+    studioMounted: Boolean(document.querySelector('[data-studio-view]')),
+    videoMounted: Boolean(document.querySelector('[data-video-studio-view]')),
+    officeMounted: Boolean(document.querySelector('.office'))
+  }))
+  return { ...state, resources: [...resources] }
+}
+
+export function assertLazyAssistantShell(state, viewportName) {
+  assert(!state.studioMounted, `${viewportName}: Studio mounted before first activation`)
+  assert(!state.videoMounted, `${viewportName}: Video mounted before first activation`)
+  assert(!state.officeMounted, `${viewportName}: Office mounted before first activation`)
+  assert(
+    state.resources.length === 0,
+    `${viewportName}: Assistant first paint requested heavy surface chunks: ${state.resources.join(', ')}`
+  )
+}
+
 export async function measureStudioDataReady(page, fixture, phase, timeoutMs = 10_000) {
   try {
     return await page.evaluate(async (timeout) => {
@@ -63,6 +97,15 @@ export async function measureStudioDataReady(page, fixture, phase, timeoutMs = 1
     failure.code = 'studio-data-readiness-timeout'
     failure.diagnostics = diagnostics
     throw failure
+  }
+}
+
+function surfaceChunkName(url) {
+  try {
+    const name = new URL(url).pathname.split('/').pop() || ''
+    return /^(StudioView|VideoStudioView|OfficeView)-.+\.js$/.test(name) ? name : ''
+  } catch {
+    return ''
   }
 }
 

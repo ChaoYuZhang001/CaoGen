@@ -60,6 +60,7 @@ const commandDefinitions = [
   { name: 'taskDag smoke', command: 'node', args: ['scripts/task-dag-smoke.cjs'], category: 'smoke' },
   { name: 'taskDag recovery smoke', command: 'node', args: ['scripts/task-dag-recovery-smoke.cjs'], category: 'smoke' },
   { name: 'attachmentOps smoke', command: 'node', args: ['scripts/attachment-ops-smoke.mjs'], category: 'smoke' },
+  { name: 'Composer attachments Electron E2E', command: 'node', args: ['scripts/composer-attachments-e2e.mjs'], category: 'ui' },
   { name: 'browserAnnotations smoke', command: 'node', args: ['scripts/browser-annotations-smoke.mjs'], category: 'smoke' },
   { name: 'checkpointRestorePlan smoke', command: 'node', args: ['scripts/checkpoint-restore-plan-smoke.mjs'], category: 'smoke' },
   { name: 'fileOps smoke', command: 'node', args: ['scripts/file-ops-smoke.mjs'], category: 'smoke' },

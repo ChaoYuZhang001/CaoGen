@@ -30,7 +30,7 @@ try {
     }
   })
   const report = JSON.parse(readFileSync(statePath, 'utf8'))
-  if (!report.ok || report.pass !== report.total || report.total < 14) {
+  if (!report.ok || report.pass !== report.total || report.total < 20) {
     throw new Error(`composer attachments E2E incomplete: ${JSON.stringify({ pass: report.pass, total: report.total })}`)
   }
   console.log(`composer attachments E2E ok: ${reportDir}`)

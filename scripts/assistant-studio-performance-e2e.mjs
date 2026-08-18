@@ -23,7 +23,10 @@ import {
   waitForFrameHealth
 } from './lib/performance-sample-integrity.mjs'
 import {
+  assertLazyAssistantShell,
+  attachAssistantStudioPageDiagnostics,
   measureStudioDataReady,
+  readLazySurfaceState,
   renderAssistantStudioPerformanceMarkdown
 } from './lib/assistant-studio-performance-support.mjs'
 
@@ -119,7 +122,7 @@ if (report.status !== 'pass') {
 
 function createReport(sourceBuildBinding) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     runId,
     runDir,
     startedAt: new Date().toISOString(),
@@ -142,7 +145,7 @@ function createReport(sourceBuildBinding) {
       clock: 'renderer window.performance.now()',
       start: 'programmatic activation of the visible Assistant/Studio mode button',
       stop: 'target mode, visible panel, and enabled mode-local control committed by the first animation frame that can paint the ready state',
-      cold: 'first Studio activation after shell prewarm in a fresh Electron renderer process and fresh userData directory',
+      cold: 'first Studio activation from an Assistant shell where Studio, Video, and Office remain unmounted and their chunks have not been requested',
       warm: 'subsequent Assistant/Studio switches after the first activation',
       foregroundIsolation: 'Electron runs with Chromium background and occluded-window throttling disabled so the benchmark models an actively used foreground CaoGen window even when the automation host overlays it',
       windowScheduling: 'the isolated Electron test process disables background and occluded-window throttling to model a foreground app while automation retains desktop focus',
@@ -174,7 +177,8 @@ function createReport(sourceBuildBinding) {
     metrics: null,
     coverage: {
       verified: [
-        'fresh-process cold and mounted warm Assistant/Studio interaction latency at desktop, tablet, and mobile viewports',
+        'fresh-process cold lazy load and mounted warm Assistant/Studio interaction latency at desktop, tablet, and mobile viewports',
+        'Assistant first paint does not request the Studio, Video, or Office renderer chunks',
         'per-viewport and aggregate cold/warm P95 are strictly below 300ms',
         'switching completes while the local Provider response is held open without additional network data',
         'switching does not restart or duplicate the canonical Run, runtime session, request, user message, or turn result'
@@ -226,7 +230,7 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     await waitForDebugPort(remotePort, 20_000)
     browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
     page = await waitForElectronPage(browser, 20_000)
-    attachPageDiagnostics(page, phase)
+    attachAssistantStudioPageDiagnostics(page, phase)
     await page.setViewport(viewport)
     await page.bringToFront()
     await waitForApp(page, false)
@@ -247,9 +251,10 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     await controlledMock.waitForRequest(requestOrdinal)
     phase.before = await waitForRunningBaseline(page, fixture, requestOrdinal, controlledMock)
 
-    await page.waitForSelector('[data-studio-view]', { timeout: 5_000 })
+    phase.lazySurfacesBeforeCold = await readLazySurfaceState(page, phase.requestedSurfaceChunks)
+    assertLazyAssistantShell(phase.lazySurfacesBeforeCold, viewport.name)
     const coldSample = await measureModeSwitch(page, 'studio', 'cold', 1)
-    assert(coldSample.targetMountedBefore, `${viewport.name}: Studio shell was not prewarmed before first activation`)
+    assert(!coldSample.targetMountedBefore, `${viewport.name}: Studio shell loaded before its first activation`)
     phase.samples.push(coldSample)
     phase.coldSampleIntegrity = classifyPerformanceSampleIntegrity(coldSample, { thresholdMs })
     if (phase.coldSampleIntegrity.status === 'scheduler-contaminated') {
@@ -257,6 +262,19 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
       await captureScreenshot(page, phase, `${viewport.name}-cold-scheduler-contaminated`)
       return phase
     }
+    phase.lazySurfacesAfterCold = await readLazySurfaceState(page, phase.requestedSurfaceChunks)
+    assert(
+      phase.lazySurfacesAfterCold.studioMounted &&
+        phase.lazySurfacesAfterCold.resources.some((resource) => resource.startsWith('StudioView-')),
+      `${viewport.name}: cold Studio activation did not load its renderer chunk: ` +
+        JSON.stringify(phase.lazySurfacesAfterCold)
+    )
+    assert(
+      !phase.lazySurfacesAfterCold.resources.some((resource) =>
+        resource.startsWith('VideoStudioView-') || resource.startsWith('OfficeView-')),
+      `${viewport.name}: Studio activation loaded an unrelated heavy surface: ` +
+        JSON.stringify(phase.lazySurfacesAfterCold.resources)
+    )
     phase.studioShellInteraction = await verifyStudioShellInteraction(page)
     phase.studioDataReady = await measureStudioDataReady(page, fixture, phase)
     await captureScreenshot(page, phase, `${viewport.name}-cold-studio`)
@@ -331,6 +349,9 @@ function createPhase(viewport) {
     studioDataReady: null,
     studioDataReadyDiagnostics: null,
     frameHealthDiagnostics: null,
+    lazySurfacesBeforeCold: null,
+    lazySurfacesAfterCold: null,
+    requestedSurfaceChunks: [],
     browserRuntime: null,
     warnings: [],
     failureCode: null,
@@ -374,15 +395,6 @@ function collectProcessOutput(child) {
   child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
   child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
   return { read: () => ({ stdout, stderr }) }
-}
-
-function attachPageDiagnostics(page, phase) {
-  page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') {
-      phase.warnings.push(`console ${message.type()}: ${message.text()}`)
-    }
-  })
-  page.on('pageerror', (error) => phase.warnings.push(`pageerror: ${error.message}`))
 }
 
 async function createCanonicalFixture(page, name, cwd, baseUrl) {
