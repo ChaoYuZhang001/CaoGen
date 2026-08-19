@@ -24,7 +24,7 @@ npm run typecheck
 npm run build
 ```
 
-涉及 Agent、Provider、Git/worktree、浏览器、文件预览或 3D Office 时，请同时运行对应的 `scripts/*-smoke.*` 或 `package.json` 中的目标测试。完整编码门禁见 [docs/CODING-STANDARDS.md](./docs/CODING-STANDARDS.md)。
+涉及 Agent、Provider、Git/worktree、浏览器、文件预览或 3D Office 时，请同时运行对应的 `scripts/*-smoke.*` 或 `package.json` 中的目标测试；以 `package.json` 中当前可用的 required gate 为准。
 
 ### 六环架构地图
 
@@ -67,7 +67,7 @@ Effect Ledger、Workflow Ledger、验收/恢复和外部副作用网关属于高
 
 ### 从哪里开始
 
-1. 查看 [good-first-issue 草稿](./docs/good-first-issues.md) 或 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)。
+1. 查看 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)。
 2. 在 Issue 下留言说明你准备处理，避免重复工作。
 3. 选择一个不碰核心账本、能够独立验证的小任务，例如 Provider 模板、预览格式、i18n、tooltip、纯函数测试或脚本文档。
 4. 不确定入口时，在 Issue 中贴出你找到的文件和计划；维护者会帮助缩小范围。
@@ -122,7 +122,7 @@ npm run typecheck
 npm run build
 ```
 
-If your change touches agents, providers, Git/worktrees, the browser, file previews, or the 3D Office, also run the relevant `scripts/*-smoke.*` test or its `package.json` command. See [docs/CODING-STANDARDS.md](./docs/CODING-STANDARDS.md) for the full coding gates.
+If your change touches agents, providers, Git/worktrees, the browser, file previews, or the 3D Office, also run the relevant `scripts/*-smoke.*` test or its `package.json` command. Use the currently available required gates in `package.json` as the public source of truth.
 
 ### Six-link architecture map
 
@@ -165,7 +165,7 @@ The Effect Ledger, Workflow Ledger, acceptance/recovery paths, and external side
 
 ### Where to start
 
-1. Browse the [good-first-issue drafts](./docs/good-first-issues.md) or live GitHub [good first issues](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22).
+1. Browse the live GitHub [good first issues](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22).
 2. Comment on the issue before starting so contributors do not duplicate work.
 3. Pick a small, independently testable task outside the core ledgers, such as a provider preset, preview format, i18n parity, tooltip, pure helper test, or script documentation.
 4. If the entry point is unclear, post the files and approach you found; a maintainer will help narrow the scope.

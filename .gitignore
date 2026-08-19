@@ -52,6 +52,18 @@ electron.vite.config.*.mjs
 /tmp/
 /nul
 /docs/
+
+# Internal product requirements, status ledgers, and design plans stay private.
+/DESIGN-V2.md
+/REQUIREMENTS.md
+/ROADMAP.md
+/STATUS.md
+/UI-REFACTOR-PLAN.md
+/UX-UPGRADE-PLAN.md
+/caogen-website-optimization-plan.md
+/caogen-website-optimization-report.md
+/overview.md
+/ui-hifi/PRODUCT-SUITE-COVERAGE.md
 /.workbuddy-ai/
 .claude/launch.json
 

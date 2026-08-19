@@ -18,7 +18,7 @@
 
 [下载](https://github.com/ChaoYuZhang001/CaoGen/releases) · [快速开始](#quick-start) · [讨论](https://github.com/ChaoYuZhang001/CaoGen/discussions) · [贡献](#贡献-caogen) · [路线图](#roadmap--长期愿景建设中)
 
-![CaoGen 主界面](./docs/screenshot-app.jpg)
+![CaoGen 主界面](./resources/screenshots/app.jpg)
 
 </div>
 
@@ -39,19 +39,15 @@ CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面
 - 在应用内使用终端、文件、浏览器、Git，以及 PDF、图片和 Office 文档预览。
 - 用 3D 办公区查看真实会话、审批、失败、成本和工作区状态。
 
-## 当前进展
+## 当前状态
 
-<!-- caogen-public-status:start -->
-截至 2026-08-17，PRD 64 个 P0 的公共投影为：26 个严格“当前已验证”、34 个“部分完成或资格受限”、3 个立项目标、1 个仅达到基础；共 38 项仍开放。
-<!-- caogen-public-status:end -->
-
-这不是版本完成率或发布承诺。已发布的 `v0.1.8` 不是 1.0 stable；完整证据和边界统一放在 [STATUS.md](./STATUS.md) 与 [1.0 验收矩阵](./docs/1.0-ACCEPTANCE-MATRIX.md)。公共数字由 `npm run update:public-status` 从 PRD 状态和 STATUS 日期生成，不应手工修改。
+`v0.1.8` 是当前公开正式版本；`main` 包含尚未发布的开发改动。正式可用范围以 GitHub Releases 中对应版本的说明和校验值为准，未发布代码不视为稳定能力。
 
 > **源码与发布包边界**：公开的 `v0.1.8` Intel x64 安装包固定使用 Electron `40.10.2`。当前 `main` 源码已进入 Electron `41.10.3` 和依赖安全更新验证，但尚未形成新的正式发布；这批变更通过 clean candidate 门禁后必须使用后续补丁版本，不能覆盖或重发 `v0.1.8`。
 
 > **首位陌生用户验收仍开放**：目标是在不超过 30 分钟内从官网安装受支持的发布资产、配置自己的 Provider，并完成一个只读任务。参与条件、隐私边界和报名方式见 [Discussion #9](https://github.com/ChaoYuZhang001/CaoGen/discussions/9)；请勿公开任何 Key、Provider URL 或项目路径。
 
-![CaoGen 3D 办公区](./docs/screenshot-office.jpg)
+![CaoGen 3D 办公区](./resources/screenshots/office.jpg)
 
 ## Quick Start
 
@@ -65,7 +61,7 @@ CaoGen 是一个开源、厂商中立、本地优先的多厂商 AI 工作桌面
 2. **添加 Provider 和 Key**：打开设置，选择 Provider 模板或填写兼容服务的 Base URL，再添加你自己的 API Key。密钥不会提交到本仓库。
 3. **开始第一个任务**：新建会话，选择本地项目目录或使用“未关联项目”，然后输入：`先阅读这个项目，告诉我启动方式、关键入口和最值得修的 3 个问题；先不要改代码。`
 
-> macOS 与 Windows 的签名状态不同；平台例外、发布审计和后续候选状态集中记录在 [STATUS.md](./STATUS.md)，不在 Quick Start 中展开内部发布流程。
+> macOS 与 Windows 的签名状态不同；每个平台的签名和信任状态以对应 GitHub Release 的说明为准。
 
 从源码运行：
 
@@ -78,14 +74,14 @@ npm run dev
 
 ## Roadmap / 长期愿景（建设中）
 
-CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、WorkItem、数字员工、Artifact/Evidence、验收和恢复机制承载完整工作流，并继续演进 3D 办公体验。这些是路线图和建设目标，不等于当前已发布能力；请查看 [唯一执行计划](./docs/PLAN.md)、[项目立项书](./docs/PROJECT-CHARTER.md)、[产品需求](./docs/PRODUCT-REQUIREMENTS.md) 与 [当前状态](./STATUS.md) 了解边界和进度。
+CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、WorkItem、数字员工、Artifact/Evidence、验收和恢复机制承载完整工作流，并继续演进 3D 办公体验。这些是建设方向，不等于当前已发布能力；公开进展以 GitHub Releases、Issues 和 Discussions 为准。
 
 ## 贡献 CaoGen
 
 **我们在找志同道合的人，一起把“厂商中立、本地优先的 AI 工作桌面”做成真正可靠的开源基础设施。**
 
 - 阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，了解开发环境、六环架构链路和 PR 流程。
-- 从 [good first issue 草稿](./docs/good-first-issues.md) 或 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) 开始。
+- 从 GitHub 的 [good first issue](https://github.com/ChaoYuZhang001/CaoGen/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) 开始。
 - 在 [GitHub Discussions](https://github.com/ChaoYuZhang001/CaoGen/discussions) 分享使用反馈、提问或讨论改进建议；入口选择和 48 小时首次回应承诺见 [SUPPORT.md](./SUPPORT.md)。
 - 提交 [Bug](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=bug_report.yml)、[功能建议](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=feature_request.yml) 或 Pull Request。
 
