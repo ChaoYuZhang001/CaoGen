@@ -300,6 +300,15 @@ export const TEXT = {
   confirmPurge: '确认永久删除',
   archivedProjectNotice: '此项目已归档。恢复后才能继续创建或编辑项目内容。',
   deletedProjectNotice: '此项目已软删除。可恢复项目，或永久删除 CaoGen 中的项目记录。',
+  projectDetails: '项目详情',
+  projectDetailsDescription: '项目组合、项目设置、资源和知识',
+  expandAsNeeded: '按需展开',
+  deliverySection: '交付与验收',
+  deliverySectionDescription: '产物、证据和验收状态',
+  executionSection: '执行控制',
+  executionSectionDescription: '运行、暂停、恢复和重试',
+  collaborationSection: '协作与成员',
+  collaborationSectionDescription: '成员、评论、转交和共享审批',
   unknownError: '操作未完成，请重试'
 } as const
 

@@ -7,7 +7,6 @@ import {
   resolveNotificationConnector,
   type ResolvedNotificationConnector
 } from './notification-connector-store'
-import { buildWeComWebhookPayload, sendWeComNotification } from './wecom'
 
 type WebhookMessageTarget = Extract<EffectTarget, { kind: 'webhook_message_send' }>
 
@@ -50,6 +49,9 @@ export async function executeWebhookMessageEffectTarget(
   target: WebhookMessageTarget,
   input: Record<string, unknown>
 ): Promise<MessageSendExecutionResult> {
+  if (!isCurrentNotificationChannel(target.channel)) {
+    throw new Error('历史通知渠道仅供读取，禁止执行或重发')
+  }
   const message = messageInput(input)
   const connector = resolveNotificationConnector(target.connectorId, target.channel)
   assertMessageTarget(target, connector, message)
@@ -60,9 +62,7 @@ export async function executeWebhookMessageEffectTarget(
   }
   const result = connector.channel === 'feishu'
     ? await sendFeishuNotification(message, options)
-    : connector.channel === 'dingtalk'
-      ? await sendDingTalkNotification(message, options)
-      : await sendWeComNotification(message, options)
+    : await sendDingTalkNotification(message, options)
   const receipt = notificationDeliveryReceipt(connector.channel, result)
   return {
     ok: result.ok && result.sent && receipt.confirmed,
@@ -132,12 +132,15 @@ function messageInput(input: Record<string, unknown>): MessageInput {
 
 function messagePayload(channel: NotificationConnectorChannel, input: MessageInput): unknown {
   if (channel === 'feishu') return buildFeishuWebhookPayload(input)
-  if (channel === 'dingtalk') return buildDingTalkWebhookPayload(input)
-  return buildWeComWebhookPayload(input)
+  return buildDingTalkWebhookPayload(input)
 }
 
 function notificationChannel(value: unknown): NotificationConnectorChannel | undefined {
-  return value === 'feishu' || value === 'dingtalk' || value === 'wecom' ? value : undefined
+  return isCurrentNotificationChannel(value) ? value : undefined
+}
+
+function isCurrentNotificationChannel(value: unknown): value is NotificationConnectorChannel {
+  return value === 'feishu' || value === 'dingtalk'
 }
 
 function notificationDeliveryReceipt(

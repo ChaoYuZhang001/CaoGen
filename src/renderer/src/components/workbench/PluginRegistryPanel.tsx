@@ -118,7 +118,7 @@ export interface PluginRegistryPanelProps {
   onApproveItem?: (item: PluginRegistryPanelItem) => void | Promise<void>
   /** MCP 运行态:探测可见 mcp 条目的真实连接状态 */
   onProbeMcp?: (items: PluginRegistryPanelItem[]) => void | Promise<void>
-  /** 本地安装插件(从目录复制入 ~/.claude/plugins;市场分发不在本版范围) */
+  /** 本地安装插件(从目录复制入 ~/.caogen/plugins;市场分发不在本版范围) */
   onInstall?: () => void | Promise<void>
   /** 卸载托管插件(回收站式,仅 managed 条目) */
   onUninstall?: (item: PluginRegistryPanelItem) => void | Promise<void>

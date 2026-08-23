@@ -43,7 +43,7 @@ const invokeProjectWorkspace = (action: string, ...args: unknown[]) =>
 
 /** Renderer-safe bridge for the native ProjectWorkspace domain. */
 export const projectWorkspaceApi: Pick<AgentDeskApi,
-  | 'listProjectWorkspaces' | 'getProjectWorkspace' | 'createProjectWorkspace'
+  | 'listProjectWorkspaces' | 'getProjectWorkspace' | 'createProjectWorkspace' | 'createProjectWorkspaceWithTemplate'
   | 'getProjectAuthorization'
   | 'previewProjectKnowledge'
   | 'searchProjectKnowledge'
@@ -94,6 +94,8 @@ export const projectWorkspaceApi: Pick<AgentDeskApi,
     invokeProjectWorkspace('portfolio:milestones:delete', id, options),
   createProjectWorkspace: (input: ProjectWorkspaceInput, options?: MutationOptions) =>
     invokeProjectWorkspace('create', input, options),
+  createProjectWorkspaceWithTemplate: (input: ProjectWorkspaceInput, options?: MutationOptions) =>
+    invokeProjectWorkspace('createWithTemplate', input, options),
   applyProjectWorkspaceTemplate: (input: ProjectWorkspaceTemplateApplyInput) =>
     invokeProjectWorkspace('templates:apply', input),
   updateProjectWorkspace: (id: string, patch: ProjectWorkspacePatch, options?: MutationOptions) =>

@@ -5,6 +5,7 @@ import type {
   ProviderDeviceAuthorizationView, ProviderQuickAuthorizationPollResult, ProviderQuickDeviceAuthorizationView
 } from '../../shared/provider-authorization-types'
 import type { Provider, ProviderView } from '../../shared/types'
+import { resolveAppVersion } from '../appVersion'
 import {
   createProvider,
   deleteProvider,
@@ -572,7 +573,7 @@ function runtimeAuthorizationHeaders(
       stripManagedHeaders(provider.customHeaders, ['chatgpt-account-id', 'originator', 'version']),
       `chatgpt-account-id: ${accountId}`,
       'originator: codex_cli_rs',
-      `version: ${safeAppVersion()}`
+      `version: ${resolveAppVersion(() => app.getVersion())}`
     ].filter(Boolean).join('\n')
   }
   if (service === 'github-copilot') {
@@ -621,7 +622,7 @@ async function configureProviderForCodex(
     stripManagedHeaders(previous.customHeaders, ['chatgpt-account-id', 'originator', 'version']),
     `chatgpt-account-id: ${accountId}`,
     'originator: codex_cli_rs',
-    `version: ${safeAppVersion()}`
+    `version: ${resolveAppVersion(() => app.getVersion())}`
   ].filter(Boolean).join('\n')
   return updateAuthorizedProvider(previous, {
     service: 'codex-oauth',
@@ -735,7 +736,7 @@ function updateAuthorizedProvider(
       lastAuthenticatedAt: input.now,
       accountRoutingMode: previous.authorization?.accountRoutingMode ?? 'preferred'
     }
-  })
+  }, { allowAuthorizationHeaders: true })
 }
 
 async function accountCredentialFetch(
@@ -885,14 +886,5 @@ function authorizationStartArguments(
     service: serviceOrFetch,
     fetchImpl: typeof fetchOrNow === 'function' ? fetchOrNow : fetch,
     now: typeof fetchOrNow === 'number' ? fetchOrNow : requestedNow
-  }
-}
-
-function safeAppVersion(): string {
-  try {
-    const version = app.getVersion().trim()
-    return /^\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9.-]+)?$/.test(version) ? version : '0.1.8'
-  } catch {
-    return '0.1.8'
   }
 }

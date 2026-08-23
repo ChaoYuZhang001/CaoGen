@@ -12,7 +12,7 @@ interface Props {
 
 export default function AppModeSwitcher({ language, mode, onChange }: Props): React.JSX.Element {
   const labels = language === 'zh'
-    ? { navigation: '工作空间', assistant: '助手', studio: '项目工作台', video: '视频工作室' }
+    ? { navigation: '工作空间', assistant: '助手', studio: '项目', video: '视频' }
     : { navigation: 'Workspace', assistant: 'Assistant', studio: 'Projects', video: 'Video' }
   const selectMode = (next: ExperienceMode): void => {
     if (next === mode) return
@@ -26,7 +26,7 @@ export default function AppModeSwitcher({ language, mode, onChange }: Props): Re
   ]
 
   return (
-    <nav className="app-mode-bar no-drag" role="group" aria-label={labels.navigation} data-experience-mode-switcher>
+    <nav className="app-mode-bar no-drag" aria-label={labels.navigation} data-experience-mode-switcher>
       <div className="app-mode-switcher">
         {options.map((option) => (
           <button

@@ -138,11 +138,7 @@ export default function NotificationConnectorManager(): React.JSX.Element {
 }
 
 function channelLabel(channel: NotificationConnectorView['channel'], t: ReturnType<typeof useT>): string {
-  return channel === 'feishu'
-    ? t('notificationChannelFeishu')
-    : channel === 'dingtalk'
-      ? t('notificationChannelDingTalk')
-      : t('notificationChannelWeCom')
+  return channel === 'feishu' ? t('notificationChannelFeishu') : t('notificationChannelDingTalk')
 }
 
 function errorText(error: unknown): string {

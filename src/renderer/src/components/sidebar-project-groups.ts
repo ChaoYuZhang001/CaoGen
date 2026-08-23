@@ -1,5 +1,6 @@
 import type { HistoryEntry, Project, ProjectWorkspace, SessionMeta } from '../../../shared/types'
 import type { SidebarProjectSort } from './SidebarProjectSections'
+import { sessionExperienceMode } from '../store/session-experience'
 
 export type SidebarEntry =
   | { kind: 'active'; id: string; meta: SessionMeta; history?: HistoryEntry; pendingCount: number }
@@ -127,6 +128,7 @@ function resolveProjectGroup(
   legacyByPath: Map<string, ProjectGroup>
 ): ProjectGroup | undefined {
   const record = entry.kind === 'active' ? entry.meta : entry.history
+  if (sessionExperienceMode(record) === 'assistant') return undefined
   if (record.unassigned) return undefined
   if (record.workspaceId) {
     let group = canonical.get(record.workspaceId)
@@ -144,6 +146,24 @@ function resolveProjectGroup(
     }
     return group
   }
-  if (record.projectId) return legacy.get(record.projectId)
+  if (record.projectId) {
+    let group = legacy.get(record.projectId)
+    if (!group) {
+      const path = sidebarEntryPath(entry)
+      const pathSegments = path.split(/[\\/]/u).filter(Boolean)
+      group = {
+        key: `legacy:${record.projectId}`,
+        kind: 'legacy',
+        projectId: record.projectId,
+        label: pathSegments.at(-1) ?? record.projectId,
+        path,
+        entries: [],
+        updatedAt: 0
+      }
+      legacy.set(record.projectId, group)
+      if (path) legacyByPath.set(path, group)
+    }
+    return group
+  }
   return legacyByPath.get(sidebarEntryPath(entry))
 }

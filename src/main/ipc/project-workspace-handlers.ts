@@ -71,7 +71,7 @@ import {
 } from '../data-lifecycle/project-import-coordinator'
 import { sessionManager } from '../sessionManager'
 import { invalidateHistoryCache } from '../history'
-import { applyProjectWorkspaceTemplate } from '../project-workspace/template-service'
+import { applyProjectWorkspaceTemplate, createProjectWorkspaceWithTemplate } from '../project-workspace/template-service'
 import { executeProjectPortableExportEffect } from '../project-export-effect'
 import { executeProjectPortableImportEffect } from '../project-import-effect'
 import { mutateProjectConnector } from '../project-workspace/project-connector-lifecycle'
@@ -134,7 +134,7 @@ const COMMENT_PATCH_KEYS = new Set(['body', 'mentions'])
 const COLLABORATION_INBOX_LIST_KEYS = new Set(['memberId', 'includeHandled'])
 const COLLABORATION_INBOX_MARK_KEYS = new Set(['projectId', 'itemId', 'sourceRevision', 'status'])
 const PROJECT_WORKSPACE_MUTATIONS = new Set([
-  'create', 'update', 'archive', 'restore', 'delete', 'purge', 'import:data',
+  'create', 'createWithTemplate', 'update', 'archive', 'restore', 'delete', 'purge', 'import:data',
   'templates:apply',
   'goals:create', 'goals:update', 'goals:transition', 'goals:archive', 'goals:restore', 'goals:acceptance',
   'workItems:create', 'workItems:update', 'workItems:transfer', 'workItems:reorder', 'workItems:transition', 'workItems:acceptance',
@@ -196,6 +196,11 @@ const PROJECT_WORKSPACE_HANDLERS: Record<string, ProjectWorkspaceHandler> = {
     if (input.id === MANAGED_PERSONAL_WORKSPACE_ID) throw managedPersonalWorkspaceMutationError('create')
     return store.createWorkspace(input, normalizeMutationOptions(rawOptions))
   }),
+  createWithTemplate: async (rawInput, rawOptions) => {
+    const input = normalizeInput<ProjectWorkspaceInput>(rawInput, WORKSPACE_KEYS, 'workspace')
+    if (input.id === MANAGED_PERSONAL_WORKSPACE_ID) throw managedPersonalWorkspaceMutationError('createWithTemplate')
+    return createProjectWorkspaceWithTemplate(app.getPath('userData'), input, normalizeMutationOptions(rawOptions))
+  },
   'templates:apply': (rawInput) => applyProjectWorkspaceTemplate(
     app.getPath('userData'),
     normalizeProjectTemplateApplyInput(rawInput)
@@ -443,7 +448,7 @@ async function verifyProjectWorkspaceMutation(action: string, args: unknown[], r
 }
 
 function workspaceMutationProjectId(action: string, args: unknown[], result: unknown): string | undefined {
-  if (action === 'create') return recordId(result)
+  if (['create', 'createWithTemplate'].includes(action)) return recordId(result)
   if (action === 'templates:apply') {
     return isRecord(args[0]) ? optionalString(args[0].projectId) : undefined
   }
@@ -877,27 +882,22 @@ function requiredString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim() || /[\0-\x1f\x7f]/.test(value)) throw new Error(`${label} must be a non-empty string`)
   return value.trim()
 }
-
 function optionalString(value: unknown, label = 'value'): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
   return requiredString(value, label)
 }
-
 function nonNegativeInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} must be a non-negative integer`)
   return value as number
 }
-
 function positiveInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new Error(`${label} must be a positive integer`)
   return value as number
 }
-
 function positiveNumber(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`${label} must be positive`)
   return value
 }
-
 function finiteNumber(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${label} must be finite`)
   return value

@@ -62,18 +62,6 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
   },
   providerQuickUseLocal: { zh: '使用本机模型', en: 'Use a local model' },
   providerQuickAccountTitle: { zh: '连接订阅账号', en: 'Connect a subscription account' },
-  providerQuickChatGPTName: { zh: 'ChatGPT Codex', en: 'ChatGPT Codex' },
-  providerQuickChatGPTHint: {
-    zh: '使用 ChatGPT Plus、Pro 或支持 Codex 的账号授权，无需粘贴 API Key。',
-    en: 'Connect a ChatGPT Plus, Pro, or Codex-enabled account without pasting an API key.'
-  },
-  providerQuickChatGPTConnect: { zh: '连接 ChatGPT', en: 'Connect ChatGPT' },
-  providerQuickGitHubName: { zh: 'GitHub Copilot', en: 'GitHub Copilot' },
-  providerQuickGitHubHint: {
-    zh: '使用有 Copilot 权限的 GitHub 账号连接模型和订阅额度。',
-    en: 'Connect models and subscription quota with a Copilot-enabled GitHub account.'
-  },
-  providerQuickGitHubConnect: { zh: '连接 GitHub', en: 'Connect GitHub' },
   providerQuickXaiName: { zh: 'xAI / SuperGrok', en: 'xAI / SuperGrok' },
   providerQuickXaiHint: {
     zh: '使用 xAI 或 SuperGrok 账号连接 Grok 模型和订阅额度。',
@@ -81,9 +69,13 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
   },
   providerQuickXaiConnect: { zh: '连接 xAI', en: 'Connect xAI' },
   providerQuickOAuthStarting: { zh: '正在启动…', en: 'Starting…' },
-  providerQuickChatGPTStarting: { zh: '正在打开授权…', en: 'Opening authorization…' },
   providerQuickOtherWays: { zh: '或使用其他方式', en: 'or use another method' },
   providerQuickOrKey: { zh: '或使用 API Key', en: 'or use an API key' },
+  providerQuickConnectionDetails: { zh: '连接选项', en: 'Connection options' },
+  providerQuickConnectionDetailsHint: {
+    zh: '默认服务已填写。只有自定义地址或模型发现失败时才需要展开。',
+    en: 'The selected service is prefilled. Expand this only for a custom endpoint or failed model discovery.'
+  },
   providerQuickLocalUnavailable: {
     zh: '未发现已启动且安装了模型的 Ollama、LM Studio 或 vLLM。',
     en: 'No running Ollama, LM Studio, or vLLM service with an installed model was found.'
@@ -365,7 +357,7 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
   providerUsageCostSourceDescription_reported: { zh: 'Provider \u6216\u8c03\u7528\u94fe\u76f4\u63a5\u4e0a\u62a5\u7684\u91d1\u989d\u3002', en: 'Amount reported directly by the provider or request path.' },
   'providerUsageCostSourceDescription_provider-pricing': { zh: '\u4f7f\u7528\u5f53\u524d Provider \u6a21\u578b\u5b9a\u4ef7\u4f30\u7b97\u3002', en: 'Estimated from this provider\'s configured model pricing.' },
   'providerUsageCostSourceDescription_builtin-pricing': { zh: '\u4f7f\u7528 CaoGen \u5185\u7f6e\u53c2\u8003\u5b9a\u4ef7\u4f30\u7b97\u3002', en: 'Estimated from CaoGen built-in reference pricing.' },
-  providerUsageCostSourceDescription_imported: { zh: '\u4ece CC Switch \u7b49\u5386\u53f2\u8bb0\u5f55\u5bfc\u5165\u7684\u6c47\u603b\u91d1\u989d\u3002', en: 'Aggregate amount imported from CC Switch or another history source.' },
+  providerUsageCostSourceDescription_imported: { zh: '\u7531\u7528\u6237\u786e\u8ba4\u5bfc\u5165\u7684\u5386\u53f2\u6c47\u603b\u91d1\u989d\u3002', en: 'Historical aggregate amount imported with user approval.' },
   providerUsageCostSourceDescription_unpriced: { zh: '\u6ca1\u6709\u53ef\u7528\u5b9a\u4ef7\uff0c\u4e0d\u8ba1\u5165\u603b\u91d1\u989d\u3002', en: 'No price was available, so these requests add no amount.' },
   providerUsageCostUnpricedWarning: { zh: '\u6709 {n} \u4e2a\u8bf7\u6c42\u672a\u5b9a\u4ef7\uff0c\u5f53\u524d\u603b\u989d\u53ef\u80fd\u4f4e\u4e8e\u5b9e\u9645\u8d26\u5355\u3002', en: '{n} requests are unpriced; the displayed total may be lower than the provider invoice.' },
   providerUsageTruncatedWarning: { zh: '\u672c\u5730\u8bf7\u6c42\u8d26\u672c\u5df2\u8fbe\u8bfb\u53d6\u4e0a\u9650\uff0c\u5f53\u524d\u6c47\u603b\u548c\u5bf9\u8d26\u53ea\u5305\u542b\u90e8\u5206\u8bb0\u5f55\u3002', en: 'The local request ledger reached its read limit; totals and reconciliation include only part of the records.' },
@@ -424,8 +416,6 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
     en: 'Connect a supported subscription account. Credentials are encrypted by the system.'
   },
   providerAuthorizationService: { zh: '授权服务', en: 'Authorization service' },
-  providerAuthorizationServiceCodex: { zh: 'ChatGPT Codex', en: 'ChatGPT Codex' },
-  providerAuthorizationServiceGitHub: { zh: 'GitHub Copilot', en: 'GitHub Copilot' },
   providerAuthorizationServiceXai: { zh: 'xAI / SuperGrok', en: 'xAI / SuperGrok' },
   providerAuthorizationServiceHint: {
     zh: '当前服务：{service}。凭据由系统加密保存。',

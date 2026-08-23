@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import type { AcceptanceResult, Goal, GoalPatch, ProjectSquad, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem, WorkItemComment, WorkItemOwner } from '../../../../shared/types'
 import {
   GoalCreateForm,
@@ -37,6 +37,7 @@ export interface ProjectWorkspaceStudioProps {
   className?: string
   initialProjectId?: string
   newProjectRequest?: number
+  remoteContinuationEnabled?: boolean
   onProjectChange?: (project: ProjectWorkspace | null) => void
   onWorkItemsChange?: (workItems: WorkItem[]) => void
   onContextChange?: (context: ProjectWorkspaceStudioContext) => void
@@ -59,11 +60,25 @@ function activeProjectContentsId(project: ProjectWorkspace | null, selectedProje
   return project?.status === 'active' ? selectedProjectId : ''
 }
 
+function projectWorkspaceShellState(
+  className: string | undefined,
+  workspace: WorkspaceSelection,
+  contents: ProjectContentsState,
+  actions: StudioCreateActions,
+  starter: GoalTaskStarterState
+): { rootClassName: string; loading: boolean } {
+  return {
+    rootClassName: ['project-workspace-studio', className].filter(Boolean).join(' '),
+    loading: workspace.loading || contents.loading || actions.busy !== null || starter.busy
+  }
+}
+
 export function ProjectWorkspaceStudio({
   active = true,
   className,
   initialProjectId,
   newProjectRequest = 0,
+  remoteContinuationEnabled = false,
   onContextChange,
   onProjectChange,
   onWorkItemsChange
@@ -72,7 +87,8 @@ export function ProjectWorkspaceStudio({
   const [form, setForm] = useState<StudioCreateForm>(null)
   const [view, setView] = useState<StudioView>(() => readStoredStudioView())
   const workspace = useWorkspaceSelection(active, initialProjectId, onProjectChange)
-  const contents = useProjectContents(active, activeProjectContentsId(workspace.selectedProject, workspace.selectedProjectId))
+  const selectedProject = workspace.selectedProject
+  const contents = useProjectContents(active, activeProjectContentsId(selectedProject, workspace.selectedProjectId))
   const closeForm = useCallback(() => setForm(null), [])
   const actions = useStudioCreateActions({
     onSuccess: closeForm,
@@ -94,7 +110,7 @@ export function ProjectWorkspaceStudio({
   useEffect(() => {
     onWorkItemsChange?.(contents.workItems)
     onContextChange?.({
-      project: workspace.selectedProject,
+      project: selectedProject,
       goals: contents.goals,
       workItems: contents.workItems,
       squads: contents.squads,
@@ -107,13 +123,10 @@ export function ProjectWorkspaceStudio({
     contents.workItems,
     onContextChange,
     onWorkItemsChange,
-    workspace.selectedProject
+    selectedProject
   ])
 
-  const openForm = (next: Exclude<StudioCreateForm, null>): void => {
-    actions.clearFeedback()
-    setForm((current) => current === next ? null : next)
-  }
+  const openForm = (next: Exclude<StudioCreateForm, null>): void => { actions.clearFeedback(); setForm((current) => current === next ? null : next) }
   const refresh = async (): Promise<void> => {
     actions.clearFeedback()
     await workspace.refreshProjects(workspace.selectedProjectId)
@@ -124,14 +137,13 @@ export function ProjectWorkspaceStudio({
     else void contents.refreshContents()
   }
 
-  const rootClassName = ['project-workspace-studio', className].filter(Boolean).join(' ')
-  const loading = workspace.loading || contents.loading || actions.busy !== null || goalTaskStarter.busy
+  const { rootClassName, loading } = projectWorkspaceShellState(className, workspace, contents, actions, goalTaskStarter)
   return (
     <section className={rootClassName} aria-labelledby={titleId} aria-busy={loading} data-project-workspace-studio>
       <StudioHeader
         titleId={titleId}
         projects={workspace.projects}
-        selectedProject={workspace.selectedProject}
+        selectedProject={selectedProject}
         selectedProjectId={workspace.selectedProjectId}
         goalCount={contents.goals.length}
         workItemCount={contents.workItems.length}
@@ -155,19 +167,6 @@ export function ProjectWorkspaceStudio({
         onRetry={retry}
         workspace={workspace}
       />
-      <ProjectPortfolioView
-        active={active}
-        refreshToken={`${workspace.projects.map((project) => `${project.id}:${project.revision}`).join('|')}|${contents.goals.map((goal) => `${goal.id}:${goal.revision}`).join('|')}|${contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}`}
-        onSelectProject={workspace.selectProject}
-      />
-      <RemoteContinuationPanel active={active} projectId={workspace.selectedProjectId} />
-      {workspace.selectedProject && (
-        <ProjectWorkspaceLifecycle
-          project={workspace.selectedProject}
-          refreshContents={contents.refreshContents}
-          refreshProjects={workspace.refreshProjects}
-        />
-      )}
       <ProjectContents
         active={active}
         actions={actions}
@@ -182,11 +181,77 @@ export function ProjectWorkspaceStudio({
         onWorkItemReorder={controls.reorderWorkItem}
         onWorkItemTransfer={controls.transferWorkItem}
         onViewChange={setView}
-        project={workspace.selectedProject}
+        project={selectedProject}
         starter={goalTaskStarter}
         view={view}
       />
+      {selectedProject && (
+        <ProjectDetails
+          key={selectedProject.id}
+          active={active}
+          project={selectedProject}
+          projectId={workspace.selectedProjectId}
+          projects={workspace.projects}
+          goals={contents.goals}
+          workItems={contents.workItems}
+          remoteContinuationEnabled={remoteContinuationEnabled}
+          onSelectProject={workspace.selectProject}
+          refreshContents={contents.refreshContents}
+          refreshProjects={workspace.refreshProjects}
+        />
+      )}
     </section>
+  )
+}
+
+function ProjectDetails({
+  active,
+  goals,
+  onSelectProject,
+  project,
+  projectId,
+  projects,
+  remoteContinuationEnabled,
+  refreshContents,
+  refreshProjects,
+  workItems
+}: {
+  active: boolean
+  goals: Goal[]
+  onSelectProject: (projectId: string) => void
+  project: ProjectWorkspace
+  projectId: string
+  projects: ProjectWorkspace[]
+  remoteContinuationEnabled: boolean
+  refreshContents: () => Promise<void>
+  refreshProjects: (preferredId?: string) => Promise<void>
+  workItems: WorkItem[]
+}): React.JSX.Element {
+  const [mounted, setMounted] = useState(false)
+  const refreshToken = `${projects.map((item) => `${item.id}:${item.revision}`).join('|')}|${goals.map((item) => `${item.id}:${item.revision}`).join('|')}|${workItems.map((item) => `${item.id}:${item.revision}`).join('|')}`
+  return (
+    <details
+      className="pws-advanced-section pws-project-details"
+      data-project-secondary-details
+      onToggle={(event) => {
+        if (event.currentTarget.open) setMounted(true)
+      }}
+    >
+      <summary>
+        <span className="pws-advanced-summary-copy">
+          <strong>{TEXT.projectDetails}</strong>
+          <small>{TEXT.projectDetailsDescription}</small>
+        </span>
+        <span className="pws-advanced-summary-hint">{TEXT.expandAsNeeded}</span>
+      </summary>
+      {mounted && (
+        <div className="pws-advanced-section-content">
+          <ProjectPortfolioView active={active} refreshToken={refreshToken} onSelectProject={onSelectProject} />
+          {remoteContinuationEnabled && <RemoteContinuationPanel active={active} projectId={projectId} />}
+          <ProjectWorkspaceLifecycle project={project} refreshContents={refreshContents} refreshProjects={refreshProjects} />
+        </div>
+      )}
+    </details>
   )
 }
 
@@ -336,7 +401,7 @@ function ProjectContents({
   const waitingForContents = contents.loading && contentsEmpty
   const contentsUnavailable = Boolean(contents.error) && contentsEmpty
   return (
-    <div className="pws-project-content">
+    <div className="pws-project-content" data-project-primary-surface>
       {waitingForContents && <LoadingState message={TEXT.loadingContents} />}
       {!waitingForContents && !contentsUnavailable && (
         <>
@@ -355,33 +420,71 @@ function ProjectContents({
           )}
           <GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} />
           <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} />
-          <ProjectDeliveryWorkbench
-            active={active}
-            projectId={project.id}
-            refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
-          />
-          <ProjectSupervisorView
-            active={active}
-            projectId={project.id}
-            refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
-            workItems={contents.workItems}
-            onRefreshProject={contents.refreshContents}
-          />
-          <ProjectCollaborationView
-            projectId={project.id}
-            workItems={contents.workItems}
-            squads={contents.squads}
-            members={contents.members}
-            invitations={contents.invitations}
-            comments={contents.comments}
-            sharedApprovals={contents.sharedApprovals}
-            inboxItems={contents.collaborationInbox}
-            authorization={contents.authorization}
-            onRefresh={contents.refreshContents}
-          />
+          <ProgressiveProjectSection label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
+            <ProjectDeliveryWorkbench
+              active={active}
+              projectId={project.id}
+              refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
+            />
+          </ProgressiveProjectSection>
+          <ProgressiveProjectSection label={TEXT.executionSection} description={TEXT.executionSectionDescription} dataKey="supervisor">
+            <ProjectSupervisorView
+              active={active}
+              projectId={project.id}
+              refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
+              workItems={contents.workItems}
+              onRefreshProject={contents.refreshContents}
+            />
+          </ProgressiveProjectSection>
+          <ProgressiveProjectSection label={TEXT.collaborationSection} description={TEXT.collaborationSectionDescription} dataKey="collaboration">
+            <ProjectCollaborationView
+              projectId={project.id}
+              workItems={contents.workItems}
+              squads={contents.squads}
+              members={contents.members}
+              invitations={contents.invitations}
+              comments={contents.comments}
+              sharedApprovals={contents.sharedApprovals}
+              inboxItems={contents.collaborationInbox}
+              authorization={contents.authorization}
+              onRefresh={contents.refreshContents}
+            />
+          </ProgressiveProjectSection>
         </>
       )}
     </div>
+  )
+}
+
+function ProgressiveProjectSection({
+  children,
+  dataKey,
+  description,
+  label
+}: {
+  children: ReactNode
+  dataKey: 'delivery' | 'supervisor' | 'collaboration'
+  description: string
+  label: string
+}): React.JSX.Element {
+  const [mounted, setMounted] = useState(false)
+  return (
+    <details
+      className="pws-advanced-section"
+      data-project-advanced-section={dataKey}
+      onToggle={(event) => {
+        if (event.currentTarget.open) setMounted(true)
+      }}
+    >
+      <summary>
+        <span className="pws-advanced-summary-copy">
+          <strong>{label}</strong>
+          <small>{description}</small>
+        </span>
+        <span className="pws-advanced-summary-hint">{TEXT.expandAsNeeded}</span>
+      </summary>
+      {mounted && <div className="pws-advanced-section-content">{children}</div>}
+    </details>
   )
 }
 

@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Film, FolderKanban, LoaderCircle, Plus } from 'lucide-react'
+import { Film, FolderKanban, LoaderCircle } from 'lucide-react'
 import { useStore } from '../../store'
+import { videoStudioText } from '../../i18n/studioTranslations'
 import { VideoStudioPanel } from './VideoStudioPanel'
+import VideoQuickStart from './VideoQuickStart'
 import './video-studio-view.css'
 
 export default function VideoStudioView({ active = true }: { active?: boolean }): React.JSX.Element {
+  const language = useStore((state) => state.settings.language)
+  const text = videoStudioText(language)
   const projects = useStore((state) => state.projectWorkspaces)
   const loading = useStore((state) => state.projectWorkspacesLoading)
   const loadError = useStore((state) => state.projectWorkspacesError)
@@ -13,7 +17,10 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
   const [selectedProjectId, setSelectedProjectId] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [name, setName] = useState('')
+  const [script, setScript] = useState('')
   const [creating, setCreating] = useState(false)
+  const [showQuickStart, setShowQuickStart] = useState(false)
+  const [selectedProductionId, setSelectedProductionId] = useState('')
   const [error, setError] = useState('')
 
   const availableProjects = useMemo(
@@ -40,16 +47,30 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
     })
   }, [availableProjects, preferredProjectId])
 
-  const createVideoProject = async (): Promise<void> => {
-    const projectName = name.trim()
-    if (!projectName || creating) return
+  useEffect(() => {
+    return bindVideoSidebarEvents(setShowQuickStart, setSelectedProjectId, setSelectedProductionId)
+  }, [])
+
+  const createVideoProject = async (draft?: { name?: string; script?: string }): Promise<void> => {
+    const projectName = (draft?.name ?? name).trim()
+    const productionScript = (draft?.script ?? script).trim()
+    if (!projectName || !productionScript || creating) return
     setCreating(true)
     setError('')
     try {
       const created = await window.agentDesk.createProjectWorkspace({ name: projectName, kind: 'custom' })
+      await window.agentDesk.createVideoProduction({
+        projectId: created.id,
+        title: projectName,
+        script: productionScript,
+        autoStructure: true
+      })
+      window.dispatchEvent(new Event('caogen:video-updated'))
       await refreshProjects()
       setSelectedProjectId(created.id)
+      setShowQuickStart(false)
       setName('')
+      setScript('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -58,21 +79,21 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
   }
 
   return (
-    <section className="video-studio-view" data-video-studio-view aria-label="视频工作室">
+    <section className="video-studio-view" data-video-studio-view data-language={language} aria-label={text.studioLabel}>
       <header className="video-studio-shell-header">
         <div>
           <span className="video-studio-shell-icon"><Film size={17} aria-hidden="true" /></span>
-          <span><strong>视频工作室</strong><small>剧本、分镜、素材、生成与成片</small></span>
+          <span><strong>{text.studioTitle}</strong><small>{text.studioSubtitle}</small></span>
         </div>
         {availableProjects.length > 0 && (
           <label className="video-studio-project-picker">
             <FolderKanban size={14} aria-hidden="true" />
-            <span>归属项目</span>
+            <span>{text.projectLabel}</span>
             <select
               className="input"
               value={selectedProjectId}
               onChange={(event) => setSelectedProjectId(event.target.value)}
-              aria-label="选择视频归属项目"
+              aria-label={text.projectPickerLabel}
             >
               {availableProjects.map((project) => (
                 <option key={project.id} value={project.id}>{project.name}</option>
@@ -84,31 +105,40 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
 
       {(error || loadError) && <p className="video-studio-shell-error" role="alert">{error || loadError}</p>}
       {(!loaded || loading) && availableProjects.length === 0 ? (
-        <div className="video-studio-shell-state" role="status"><LoaderCircle className="video-studio-shell-spinner" size={20} />加载项目...</div>
-      ) : selectedProjectId ? (
-        <VideoStudioPanel active={active} projectId={selectedProjectId} />
+        <div className="video-studio-shell-state" role="status"><LoaderCircle className="video-studio-shell-spinner" size={20} />{text.loadingProjects}</div>
+      ) : selectedProjectId && !showQuickStart ? (
+        <VideoStudioPanel active={active} projectId={selectedProjectId} productionId={selectedProductionId} />
       ) : (
-        <div className="video-studio-shell-empty">
-          <Film size={24} aria-hidden="true" />
-          <h2>创建第一个视频项目</h2>
-          <p>视频制作会保存素材版本、任务状态、成本和最终成片，并可关联项目工作台交付。</p>
-          <form onSubmit={(event) => { event.preventDefault(); void createVideoProject() }}>
-            <input
-              className="input"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：产品宣传片"
-              aria-label="视频项目名称"
-              maxLength={120}
-              autoFocus
-            />
-            <button type="submit" className="btn btn-primary btn-sm" disabled={creating || !name.trim()}>
-              {creating ? <LoaderCircle className="video-studio-shell-spinner" size={14} /> : <Plus size={14} />}
-              创建视频项目
-            </button>
-          </form>
-        </div>
+        <VideoQuickStart
+          name={name}
+          script={script}
+          creating={creating}
+          onNameChange={setName}
+          onScriptChange={setScript}
+          onSubmit={(draft) => void createVideoProject(draft)}
+        />
       )}
     </section>
   )
+}
+
+function bindVideoSidebarEvents(
+  setQuickStart: (value: boolean) => void,
+  setProjectId: (value: string) => void,
+  setProductionId: (value: string) => void
+): () => void {
+  const onNew = (): void => { setQuickStart(true); setProductionId('') }
+  const onSelect = (event: Event): void => {
+    const detail = (event as CustomEvent<{ projectId?: string; productionId?: string }>).detail
+    if (!detail?.projectId) return
+    setQuickStart(false)
+    setProjectId(detail.projectId)
+    setProductionId(detail.productionId ?? '')
+  }
+  window.addEventListener('caogen:video-new', onNew)
+  window.addEventListener('caogen:video-select-production', onSelect)
+  return () => {
+    window.removeEventListener('caogen:video-new', onNew)
+    window.removeEventListener('caogen:video-select-production', onSelect)
+  }
 }

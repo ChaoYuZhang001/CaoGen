@@ -2,7 +2,15 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { buildAcceptanceMap } from './lib/product-acceptance-map.mjs'
+import {
+  buildAcceptanceMap,
+  PRODUCT_1_0_CRITICAL_RECOVERY_REQUIREMENT_IDS,
+  PRODUCT_1_0_EXPECTED_COUNTS
+} from './lib/product-acceptance-map.mjs'
+import {
+  checkAcceptanceContractScripts,
+  loadProductAcceptanceInput
+} from './lib/product-acceptance-input.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -10,20 +18,48 @@ const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'product-1.0-acceptance-map')
 const reportDir = path.join(reportRoot, runId)
 const packageJson = readJson(path.join(repoRoot, 'package.json'))
-const acceptanceMap = buildAcceptanceMap({
-  prdMarkdown: readFileSync(path.join(repoRoot, 'docs', 'PRODUCT-REQUIREMENTS.md'), 'utf8'),
-  matrixMarkdown: readFileSync(path.join(repoRoot, 'docs', '1.0-ACCEPTANCE-MATRIX.md'), 'utf8'),
-  packageScripts: packageJson.scripts ?? {},
-  expectedCounts: { P0: 64, P1: 38 }
-})
+const input = loadProductAcceptanceInput({ repoRoot, required })
+const packageScripts = packageJson.scripts ?? {}
+const expectedCounts = validInventory(input.contract?.inventory)
+  ? input.contract.inventory
+  : PRODUCT_1_0_EXPECTED_COUNTS
+const criticalRecoveryRequirementIds = Array.isArray(input.contract?.closurePolicy?.criticalRecoveryRequirementIds)
+  ? input.contract.closurePolicy.criticalRecoveryRequirementIds
+  : PRODUCT_1_0_CRITICAL_RECOVERY_REQUIREMENT_IDS
+const publicContractFailures = [
+  ...input.contractFailures,
+  ...checkAcceptanceContractScripts(input.contract, packageScripts)
+]
+const acceptanceMap = input.privateInputsComplete
+  ? buildAcceptanceMap({
+      prdMarkdown: input.requirements.markdown,
+      matrixMarkdown: input.matrix.markdown,
+      packageScripts,
+      expectedCounts,
+      criticalRecoveryRequirementIds
+    })
+  : emptyAcceptanceMap(expectedCounts, criticalRecoveryRequirementIds.length)
 const git = readGitState()
 const releaseBindingFailures = [
   ...(!git.commit ? ['release commit is unresolved'] : []),
   ...(!git.worktreeClean ? ['worktree is not clean'] : [])
 ]
-const structuralStatus = acceptanceMap.structuralFailures.length === 0 ? 'passed' : 'failed'
+const structuralFailures = [
+  ...publicContractFailures,
+  ...input.inputResolutionFailures,
+  ...acceptanceMap.structuralFailures
+]
+const structuralStatus = structuralFailures.length === 0 ? 'passed' : 'failed'
+const closureFailures = [
+  ...(!input.privateInputsComplete
+    ? ['private acceptance ledger was not provided; full 1.0 closure is unavailable']
+    : []),
+  ...input.closureInputFailures,
+  ...acceptanceMap.closureFailures
+]
 const closureStatus = structuralStatus === 'passed' &&
-  acceptanceMap.closureFailures.length === 0 &&
+  input.privateInputsComplete &&
+  closureFailures.length === 0 &&
   releaseBindingFailures.length === 0
   ? 'passed'
   : 'failed'
@@ -42,11 +78,15 @@ const report = {
     arch: process.arch,
     node: process.version
   },
-  source: 'docs/PRODUCT-REQUIREMENTS.md',
-  matrix: 'docs/1.0-ACCEPTANCE-MATRIX.md',
+  inputMode: input.mode,
+  coverage: input.privateInputsComplete ? 'full' : 'contract_only',
+  publicContract: input.contractPath,
+  source: input.privateInputsComplete ? input.requirements.path : null,
+  matrix: input.privateInputsComplete ? input.matrix.path : null,
+  privateInputsComplete: input.privateInputsComplete,
   summary: acceptanceMap.summary,
-  structuralFailures: acceptanceMap.structuralFailures,
-  closureFailures: acceptanceMap.closureFailures,
+  structuralFailures,
+  closureFailures,
   releaseBindingFailures,
   unexpectedMatrixIds: acceptanceMap.unexpectedMatrixIds,
   entries: acceptanceMap.entries
@@ -60,6 +100,8 @@ console.log(JSON.stringify({
   structuralStatus,
   closureStatus,
   required,
+  inputMode: report.inputMode,
+  privateInputsComplete: report.privateInputsComplete,
   summary: report.summary,
   structuralFailures: report.structuralFailures,
   closureFailureCount: report.closureFailures.length,
@@ -84,4 +126,35 @@ function readGitState() {
   } catch {
     return { commit: '', worktreeClean: false }
   }
+}
+
+function emptyAcceptanceMap(inventory, criticalRecoveryTotal) {
+  return {
+    entries: [],
+    unexpectedMatrixIds: [],
+    structuralFailures: [],
+    closureFailures: [],
+    summary: {
+      total: inventory.P0 + inventory.P1,
+      p0: emptyPrioritySummary(inventory.P0),
+      p1: emptyPrioritySummary(inventory.P1),
+      mapped: 0,
+      requirementsWithImplementedGate: 0,
+      declaredGateCommands: 0,
+      implementedGateCommands: 0,
+      releaseBound: 0,
+      criticalRecovery: {
+        total: criticalRecoveryTotal,
+        complete: 0
+      }
+    }
+  }
+}
+
+function emptyPrioritySummary(total) {
+  return { total, mapped: 0, verified: 0, conditional: 0, targets: 0, open: total }
+}
+
+function validInventory(value) {
+  return Number.isInteger(value?.P0) && Number.isInteger(value?.P1)
 }

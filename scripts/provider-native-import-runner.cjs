@@ -122,6 +122,7 @@ async function run() {
 async function verifyNativeConfigWorkspace(win) {
   const configPath = path.join(requiredEnv('CODEX_HOME'), 'config.toml')
   const originalSource = fs.readFileSync(configPath, 'utf8')
+  const unsignedMacRuntime = process.platform === 'darwin'
   const opened = await rendererValue(win, `(() => {
     const button = document.querySelector('[data-codex-native-config-open]');
     button?.click();
@@ -163,16 +164,25 @@ async function verifyNativeConfigWorkspace(win) {
   check('raw config editor accepts arbitrary non-secret TOML fields', changed)
   await waitForRenderer(win, `!document.querySelector('[data-codex-native-config-save]')?.disabled`)
   await rendererValue(win, `document.querySelector('[data-codex-native-config-save]')?.click()`)
-  await waitForRenderer(win, `document.body.innerText.includes('Codex 配置已保存')`)
-  const savedSource = fs.readFileSync(configPath, 'utf8')
-  check('config workspace writes the edited field and restores the protected value in main',
-    savedSource.includes('sandbox_mode = "read-only"') && savedSource.includes(secret))
-  const backups = await invokeProfile('native-config-backups')
-  check('config workspace creates a rollback backup', backups.length === 1 && backups[0].configPresent === true)
-  const backupRoot = path.join(userDataDir, 'codex-native-config-backups')
-  const backupRaw = fs.readdirSync(backupRoot).map((name) => fs.readFileSync(path.join(backupRoot, name), 'utf8')).join('\n')
-  check('config workspace backup is encrypted and contains no plaintext config credential',
-    backupRaw.includes('"encryptedSource": "enc:') && !backupRaw.includes(secret))
+  let backups = []
+  if (unsignedMacRuntime) {
+    await waitForRenderer(win, `document.querySelector('.codex-native-config-notice.notice-error')?.innerText.includes('System credential encryption is unavailable')`)
+    check('unsigned macOS config editing fails closed without changing config bytes',
+      fs.readFileSync(configPath, 'utf8') === originalSource)
+    backups = await invokeProfile('native-config-backups')
+    check('failed-closed config editing creates no rollback artifact', backups.length === 0)
+  } else {
+    await waitForRenderer(win, `document.body.innerText.includes('Codex 配置已保存')`)
+    const savedSource = fs.readFileSync(configPath, 'utf8')
+    check('config workspace writes the edited field and restores the protected value in main',
+      savedSource.includes('sandbox_mode = "read-only"') && savedSource.includes(secret))
+    backups = await invokeProfile('native-config-backups')
+    check('config workspace creates a rollback backup', backups.length === 1 && backups[0].configPresent === true)
+    const backupRoot = path.join(userDataDir, 'codex-native-config-backups')
+    const backupRaw = fs.readdirSync(backupRoot).map((name) => fs.readFileSync(path.join(backupRoot, name), 'utf8')).join('\n')
+    check('config workspace backup is encrypted and contains no plaintext config credential',
+      backupRaw.includes('"encryptedSource": "enc:') && !backupRaw.includes(secret))
+  }
   check('config workspace keeps the credential out of the DOM after save',
     !(await rendererValue(win, `document.body.innerText.includes(${JSON.stringify(secret)})`)))
   await capture(win, 'codex-native-config-workspace.png')
@@ -197,8 +207,16 @@ async function verifyNativeConfigWorkspace(win) {
   await capture(win, 'codex-native-config-workspace-compact.png')
   win.setSize(1200, 900)
 
-  await invokeProfile('native-config-rollback', backups[0].id)
-  check('config workspace rollback restores exact original config bytes', fs.readFileSync(configPath, 'utf8') === originalSource)
+  if (backups.length > 0) {
+    await invokeProfile('native-config-rollback', backups[0].id)
+    check('config workspace rollback restores exact original config bytes', fs.readFileSync(configPath, 'utf8') === originalSource)
+  } else {
+    await rendererValue(win, `(() => {
+      const textarea = document.querySelector('[data-codex-native-config-editor]');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(textarea, ${JSON.stringify(editor.value)});
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`)
+  }
   await rendererValue(win, `document.querySelector('[data-codex-native-config-workspace] .codex-native-config-head .btn-icon-sm')?.click()`)
   await waitForRenderer(win, `!document.querySelector('[data-codex-native-config-editor]')`)
 }

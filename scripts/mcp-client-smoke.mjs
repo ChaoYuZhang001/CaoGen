@@ -18,6 +18,9 @@ const explicitEnvCanary = 'explicit-config-env-reaches-mcp'
 const explicitEnvName = 'MCP_EXPLICIT_API_TOKEN'
 const previousInheritedSecretCanary = process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY
 const previousUserDataRoot = process.env.CAOGEN_USER_DATA_DIR
+const previousHome = process.env.HOME
+const previousUserProfile = process.env.USERPROFILE
+const previousAppData = process.env.APPDATA
 process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY = inheritedSecretCanary
 process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
@@ -240,6 +243,7 @@ try {
   const tools = adapter.toCaoGenTools('demo', stdioDiscovery)
   assertEqual(tools[0].function.name, 'mcp__demo__echo')
   mkdirSync(projectRoot, { recursive: true })
+  fillRegistryScanBudget(path.join(projectRoot, '.claude'))
   writeFileSync(
     path.join(projectRoot, '.mcp.json'),
     JSON.stringify({
@@ -256,14 +260,86 @@ try {
   )
   assert(runtime.canHandle('mcp__demo__echo'), 'runtime should route generated MCP tool name')
   const runtimeCall = await runtime.execute('mcp__demo__echo', { text: 'runtime' })
-  assertEqual(runtimeCall.ok, true)
+  assert(runtimeCall.ok, `runtime MCP call failed: ${runtimeCall.output}`)
   assert(runtimeCall.output.includes('runtime'), 'runtime should call generated MCP tool')
+
+  const isolatedHome = path.join(tempRoot, 'global-mcp-home')
+  process.env.HOME = isolatedHome
+  process.env.USERPROFILE = isolatedHome
+  process.env.APPDATA = path.join(isolatedHome, 'AppData', 'Roaming')
+  const largeCaogenRoot = path.join(isolatedHome, '.caogen')
+  fillRegistryScanBudget(largeCaogenRoot)
+  const claudeHomeMcpPath = path.join(isolatedHome, '.claude', 'settings.json')
+  mkdirSync(path.dirname(claudeHomeMcpPath), { recursive: true })
+  writeFileSync(
+    claudeHomeMcpPath,
+    JSON.stringify({
+      mcpServers: {
+        claudeHome: { command: process.execPath, args: [stdioServerPath] }
+      }
+    }, null, 2),
+    'utf8'
+  )
+  const claudeDesktopMcpPath = client.defaultClaudeDesktopConfigPath()
+  mkdirSync(path.dirname(claudeDesktopMcpPath), { recursive: true })
+  writeFileSync(
+    claudeDesktopMcpPath,
+    JSON.stringify({
+      mcpServers: {
+        claudeDesktop: { command: process.execPath, args: [stdioServerPath] }
+      }
+    }, null, 2),
+    'utf8'
+  )
+  const codexPluginRoot = path.join(isolatedHome, '.codex', 'plugins', 'cache', 'fixture', 'global-mcp', '1.0.0')
+  mkdirSync(codexPluginRoot, { recursive: true })
+  writeFileSync(path.join(codexPluginRoot, 'plugin.json'), JSON.stringify({ name: 'global-mcp-fixture' }), 'utf8')
+  writeFileSync(
+    path.join(codexPluginRoot, 'mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        codexPlugin: { command: process.execPath, args: [stdioServerPath] }
+      }
+    }, null, 2),
+    'utf8'
+  )
+  const globalConfigs = {
+    claudeHome: { command: process.execPath, args: [stdioServerPath] },
+    claudeDesktop: { command: process.execPath, args: [stdioServerPath] },
+    codexPlugin: { command: process.execPath, args: [stdioServerPath] }
+  }
+  const globalRuntime = adapter.createMcpToolRuntime(globalConfigs)
+  for (const serverId of Object.keys(globalConfigs)) {
+    const unapprovedCall = await globalRuntime.execute(`mcp__${serverId.toLowerCase()}__echo`, { text: 'blocked' })
+    assertEqual(unapprovedCall.ok, false)
+    assert(
+      unapprovedCall.output.includes('blocked by Plugin Registry'),
+      `unapproved global MCP must remain blocked: ${unapprovedCall.output}`
+    )
+  }
+  approveRegistryItems(
+    registry,
+    [path.dirname(claudeHomeMcpPath), path.dirname(claudeDesktopMcpPath), codexPluginRoot],
+    (item) => item.kind === 'mcp' && Object.hasOwn(globalConfigs, item.name)
+  )
+  for (const serverId of Object.keys(globalConfigs)) {
+    const output = `${serverId}-runtime`
+    const globalCall = await globalRuntime.execute(`mcp__${serverId.toLowerCase()}__echo`, { text: output })
+    assert(globalCall.ok, `global MCP call failed after approval: ${globalCall.output}`)
+    assert(globalCall.output.includes(output), `approved ${serverId} MCP should survive a large ~/.caogen scan`)
+  }
   console.log('mcpClient smoke ok')
 } finally {
   if (previousInheritedSecretCanary === undefined) delete process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY
   else process.env.CAOGEN_MCP_INHERITED_SECRET_CANARY = previousInheritedSecretCanary
   if (previousUserDataRoot === undefined) delete process.env.CAOGEN_USER_DATA_DIR
   else process.env.CAOGEN_USER_DATA_DIR = previousUserDataRoot
+  if (previousHome === undefined) delete process.env.HOME
+  else process.env.HOME = previousHome
+  if (previousUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = previousUserProfile
+  if (previousAppData === undefined) delete process.env.APPDATA
+  else process.env.APPDATA = previousAppData
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
@@ -276,6 +352,13 @@ function approveRegistryItems(registry, roots, select) {
     registry.emptyPluginRegistryState()
   )
   registry.writePluginRegistryState(path.join(userDataRoot, 'plugin-registry-state.json'), state)
+}
+
+function fillRegistryScanBudget(root) {
+  mkdirSync(root, { recursive: true })
+  for (let index = 0; index <= 3_000; index += 1) {
+    writeFileSync(path.join(root, `scan-budget-${String(index).padStart(4, '0')}.txt`), 'fixture')
+  }
 }
 
 function fakeStdioServer() {

@@ -377,10 +377,11 @@ try {
     }
     await clickMode(page, 'studio')
     await clickStudioSurface(page, 'session')
-    await screenshot(page, '02-running-studio-session')
-    await clickMode(page, 'assistant')
     const draft = await page.$eval('.composer-input', (input) => input.value)
     assert(draft === runningComposerDraft, `projection roundtrips lost the running Composer draft: ${draft}`)
+    await screenshot(page, '02-running-studio-session')
+    await clickMode(page, 'assistant')
+    await page.waitForSelector('.welcome-composer-input', { visible: true, timeout: 10_000 })
   })
 
   await check('completion preserves exact stream order and single request identity', async () => {
@@ -405,10 +406,12 @@ try {
     assert(completed.initCount === baseline.initCount, `session restarted during switching: initCount=${completed.initCount}`)
     assert(mock.requests.length === 1, `projection switching resent the request ${mock.requests.length} times`)
     assert(mock.requests[0].body?.model === baseline.meta.model, 'request model changed during switching')
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'session')
     await page.waitForFunction(() => document.querySelector('.composer-send')?.disabled === false, { timeout: 10_000 })
     const draft = await page.$eval('.composer-input', (input) => input.value)
     assert(draft === runningComposerDraft, `task completion cleared the unsent Composer draft: ${draft}`)
-    await screenshot(page, '03-completed-assistant')
+    await screenshot(page, '03-completed-studio-session')
   })
 
   await check('Studio-triggered approval and notification survive projection switches', async () => {
@@ -442,7 +445,6 @@ try {
 
     for (let cycle = 0; cycle < 6; cycle += 1) {
       await clickMode(page, 'assistant')
-      await page.waitForSelector('.permission-card', { visible: true, timeout: 10_000 })
       const assistant = await readRuntimeSnapshot(page, sessionId)
       assert(JSON.stringify(assistant.pendingPermissionIds) === JSON.stringify([permissionId]),
         `approval identity changed in Assistant cycle ${cycle + 1}`)
@@ -453,7 +455,8 @@ try {
         `approval identity changed in Studio cycle ${cycle + 1}`)
     }
 
-    await clickMode(page, 'assistant')
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'session')
     await clickPermissionAction(page, 'bash', 'allow')
     const completed = await waitForValue(
       () => readRuntimeSnapshot(page, sessionId),
@@ -514,27 +517,28 @@ try {
 
     for (let cycle = 0; cycle < 4; cycle += 1) {
       await clickMode(page, 'assistant')
+      await clickMode(page, 'studio')
+      await clickStudioSurface(page, cycle % 2 === 0 ? 'workspace' : 'session')
       await page.waitForFunction((message) =>
         Array.from(document.querySelectorAll('.notice-error')).some((element) => element.textContent?.includes(message)),
       { timeout: 10_000 }, failureMessage)
       const composer = await page.$eval('.composer-input', (input) => ({ disabled: input.disabled, placeholder: input.placeholder }))
       assert(composer.disabled === false, `failure recovery Composer disabled in cycle ${cycle + 1}`)
-      await clickMode(page, 'studio')
-      await clickStudioSurface(page, cycle % 2 === 0 ? 'workspace' : 'session')
       const current = await readRuntimeSnapshot(page, sessionId)
       assertIdentityEqual(failed, current, `failure cycle ${cycle + 1}`)
       assert(current.meta.status === 'error', `failure status changed in cycle ${cycle + 1}`)
       assert(current.errorTurnResultCount === failed.errorTurnResultCount,
         `failure result count changed in cycle ${cycle + 1}`)
     }
-    await clickMode(page, 'assistant')
+    await clickMode(page, 'studio')
+    await clickStudioSurface(page, 'session')
     report.failureContinuity = {
       projectionRoundtrips: 4,
       notification: failureNotification,
       status: failed.meta.status,
       retryComposerEnabled: true
     }
-    await screenshot(page, '05-failure-recovery-assistant')
+    await screenshot(page, '05-failure-recovery-studio-session')
   })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)

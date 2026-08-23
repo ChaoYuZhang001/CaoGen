@@ -290,7 +290,7 @@ export class MediaRuntime implements MediaApi {
           acceptance: {
             id: ids.acceptanceId!, criterionId: `${ids.acceptanceId}:criterion:continuity`,
             criterion: 'Every enabled continuity lock resolves to exactly one adopted binding with the frozen Asset version on each target Shot.',
-            status: reportBody.passed ? 'passed' : 'failed', verifier: 'media-continuity-check'
+            status: reportBody.passed ? 'passed' : 'failed', verifier: 'media-continuity-check', authorizesWorkflowStage: true
           }
         }, this.rootDir)
         const summary = {
@@ -863,7 +863,7 @@ async function persistMediaOutput(
       criterionId: `${target.acceptanceId}:criterion:integrity`,
       criterion: 'Media output bytes match the recorded digest and are available from canonical Artifact storage.',
       status: 'passed',
-      verifier: 'media-runtime'
+      verifier: 'media-runtime', authorizesWorkflowStage: true
     },
     attachToStage: true
   }, rootDir)
@@ -936,7 +936,7 @@ async function persistRemoteMediaOutput(
       criterionId: `${target.acceptanceId}:criterion:integrity`,
       criterion: 'Remote media output bytes match the recorded digest and are available from canonical Artifact storage.',
       status: 'passed',
-      verifier: 'media-provider-runtime'
+      verifier: 'media-provider-runtime', authorizesWorkflowStage: true
     },
     attachToStage: true
   }, rootDir)
@@ -1007,7 +1007,7 @@ async function persistLocalMediaArtifact(input: {
       criterionId: `${target.acceptanceId}:criterion:integrity`,
       criterion: 'Local media bytes match the recorded digest and remain available from project-owned storage.',
       status: 'passed',
-      verifier: input.producer
+      verifier: input.producer, authorizesWorkflowStage: true
     },
     attachToStage: true
   }, input.rootDir)

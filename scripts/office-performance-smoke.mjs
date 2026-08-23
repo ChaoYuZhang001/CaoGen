@@ -16,6 +16,7 @@ import { cpus, freemem, platform, release, tmpdir, totalmem } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
+import { evaluateOfficeLoadPhases, formatOfficeActivation, formatOfficeLoadMs, primeOfficeIntentPreload } from './lib/office-intent-preload.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -270,7 +271,13 @@ try {
       const reloadLoad = await openOfficeWithLoadPhases(page, {
         expectedAgents: count,
         expectedQuality: qualityMode,
-        kind: scenarioIndex === 0 ? 'renderer-cold-prefetched' : 'renderer-cache-warm-prefetched'
+        kind: scenarioIndex === 0
+          ? 'renderer-cold-direct'
+          : scenarioIndex === 1 ? 'renderer-cache-warm-pointer-immediate' : 'renderer-cache-warm-intent-prefetched',
+        activationMode: scenarioIndex === 0
+          ? 'direct'
+          : scenarioIndex === 1 ? 'pointer-immediate' : 'intent-prefetched',
+        intentPreload: scenarioIndex < 2 ? null : await primeOfficeIntentPreload(page)
       })
       const { canvas, firstNonblankMs, loadPhases } = reloadLoad
       const measurement = await collectFrameMetrics(page, warmupFrames, sampleFrames)
@@ -336,8 +343,8 @@ try {
       await closeOffice(page)
 
       scenario.loadPhaseViolations = [
-        ...evaluateLoadPhases(scenario.loadPhases, loadPhaseTargets),
-        ...evaluateLoadPhases(scenario.warmRemountLoadPhases, loadPhaseTargets)
+        ...evaluateOfficeLoadPhases(scenario.loadPhases, loadPhaseTargets),
+        ...evaluateOfficeLoadPhases(scenario.warmRemountLoadPhases, loadPhaseTargets)
       ]
       report.scenarios.push(scenario)
       report.checks.push({
@@ -359,6 +366,13 @@ try {
     }
   }
   report.checks.push(evaluateQualityMatrix(report.scenarios, fixedQualityAgentCount))
+  if (required) {
+    report.checks.push({
+      name: '3D Office session capacity and overflow navigation',
+      status: 'pass',
+      ...await verifyOfficeSessionCapacity(page, projectDir, createdSessions)
+    })
+  }
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   report.checks.push({
@@ -427,14 +441,59 @@ async function removeIdleSessions(page, count) {
   }, count)
 }
 
-async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality, kind }) {
+async function verifyOfficeSessionCapacity(page, cwd, offset) {
+  const capacityTarget = 13
+  const additionalSessions = Math.max(0, capacityTarget - offset)
+  await createIdleSessions(page, additionalSessions, offset, cwd)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForApp(page)
+  let officeOpen = false
+  try {
+    await page.click('[data-sidebar-action="control-room"]')
+    await page.waitForSelector('.office-canvas-wrap', { timeout: 10_000 })
+    officeOpen = true
+    await page.click('[data-office-business-view-option="all"]')
+    await page.waitForFunction(
+      () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-business-view') === 'all',
+      { timeout: 5_000 }
+    )
+    const initial = await page.$eval('.office-canvas-wrap', (office) => ({
+      capacity: Number(office.getAttribute('data-office-session-capacity') ?? 0),
+      visible: Number(office.getAttribute('data-office-sessions') ?? 0),
+      hidden: Number(office.getAttribute('data-office-hidden-sessions') ?? 0)
+    }))
+    if (initial.capacity !== 12 || initial.visible !== 12 || initial.hidden !== 1) {
+      throw new Error(`Office capacity contract mismatch: ${JSON.stringify(initial)}`)
+    }
+    await page.click('[data-office-hidden-sessions-toggle]')
+    await page.waitForSelector('[data-office-hidden-session]', { timeout: 5_000 })
+    const hiddenId = await page.$eval('[data-office-hidden-session]', (button) => button.getAttribute('data-office-hidden-session') ?? '')
+    if (!hiddenId) throw new Error('hidden Office session did not expose an id')
+    await page.click(`[data-office-hidden-session="${hiddenId}"]`)
+    await page.waitForFunction(
+      (id) => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-selected-session') === id,
+      { timeout: 5_000 },
+      hiddenId
+    )
+    const revealed = await page.$eval('.office-canvas-wrap', (office) => ({
+      visible: Number(office.getAttribute('data-office-sessions') ?? 0),
+      hidden: Number(office.getAttribute('data-office-hidden-sessions') ?? 0),
+      selected: office.getAttribute('data-office-selected-session') ?? ''
+    }))
+    if (revealed.visible !== 12 || revealed.selected !== hiddenId) {
+      throw new Error(`hidden Office session was not promoted into the bounded floor: ${JSON.stringify(revealed)}`)
+    }
+    return { capacity: initial.capacity, initial, revealed }
+  } finally {
+    if (officeOpen) await closeOffice(page)
+    await removeIdleSessions(page, additionalSessions)
+  }
+}
+async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality, kind, activationMode = 'direct', intentPreload = null }) {
   await page.evaluate(
     ({ agents, quality, loadKind }) => {
       const previous = window.__caogenOfficeLoadMeasurement
       if (previous?.rafId) window.cancelAnimationFrame(previous.rafId)
-
-      const button = document.querySelector('.sidebar-office')
-      if (!(button instanceof HTMLElement)) throw new Error('Office navigation button unavailable')
 
       const startedAt = performance.now()
       const measurement = {
@@ -459,10 +518,10 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
       }
       window.__caogenOfficeLoadMeasurement = measurement
 
-      const elapsed = () => performance.now() - startedAt
+      const elapsed = () => performance.now() - measurement.startedAt
       const tick = () => {
         if (!measurement.active) return
-        if (measurement.shellReadyMs === null && document.querySelector('.office')) {
+        if (measurement.shellReadyMs === null && document.querySelector('.office, .office-loading')) {
           measurement.shellReadyMs = elapsed()
         }
         if (measurement.canvasReadyMs === null && document.querySelector('.office canvas')) {
@@ -513,7 +572,7 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
           measurement.lastSnapshotAt = snapshotStartedAt
           const snapshot = diagnostics.snapshot()
           measurement.snapshotDurationsMs.push(performance.now() - snapshotStartedAt)
-          const snapshotObservedAt = snapshotStartedAt - startedAt
+          const snapshotObservedAt = snapshotStartedAt - measurement.startedAt
           const assetsReady = office?.getAttribute('data-office-scene-assets-ready') === '1'
           const characterCount = Number(office?.getAttribute('data-office-visible-digital-workers') ?? 0)
           const oneCharacterPerAgent = office?.getAttribute('data-office-one-digital-worker-per-agent') === '1'
@@ -548,12 +607,11 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
         measurement.rafId = window.requestAnimationFrame(tick)
       }
 
-      button.click()
       tick()
     },
     { agents: expectedAgents, quality: expectedQuality, loadKind: kind }
   )
-
+  const preloadStates = await activateOfficeForMeasurement(page, activationMode)
   try {
     await page.waitForFunction(
       () => window.__caogenOfficeLoadMeasurement?.complete === true,
@@ -601,22 +659,41 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
     delete window.__caogenOfficeLoadMeasurement
     return result
   })
-  return { canvas, firstNonblankMs: loadPhases.basicNonblankMs, loadPhases }
+  return {
+    canvas,
+    firstNonblankMs: loadPhases.basicNonblankMs,
+    loadPhases: { ...loadPhases, activationMode, ...preloadStates, intentPreload }
+  }
 }
-
+async function activateOfficeForMeasurement(page, activationMode) {
+  return page.evaluate((activation) => {
+    const button = document.querySelector('[data-sidebar-action="control-room"]')
+    if (!(button instanceof HTMLElement)) throw new Error('Office navigation button unavailable')
+    const measurement = window.__caogenOfficeLoadMeasurement
+    if (!measurement) throw new Error('Office load phase measurement unavailable')
+    measurement.startedAt = performance.now()
+    measurement.startedAtEpochMs = performance.timeOrigin + measurement.startedAt
+    const preloadStateBeforePointer = button.getAttribute('data-office-preload-state')
+    if (activation === 'pointer-immediate') {
+      button.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+    }
+    const preloadStateAtClick = button.getAttribute('data-office-preload-state')
+    button.click()
+    return { preloadStateBeforePointer, preloadStateAtClick }
+  }, activationMode)
+}
 async function closeOffice(page) {
   await page.click('.office-actions .btn-primary')
   await page.waitForFunction(() => !document.querySelector('.office-canvas-wrap'), { timeout: 10_000 })
   await page.waitForFunction(() => typeof window.__caogenOfficePerformance === 'undefined', { timeout: 5_000 })
 }
-
 async function verifyQualitySettingsUi(page) {
   const originalViewport = await page.evaluate(() => ({
     width: window.innerWidth,
     height: window.innerHeight,
     deviceScaleFactor: window.devicePixelRatio
   }))
-  await page.click('.sidebar-footer > .sidebar-nav-item')
+  await page.click('[data-sidebar-action="settings"]')
   await page.waitForSelector('.settings-page', { timeout: 10_000 })
   await page.click('[data-settings-tab="office"]')
   await page.waitForFunction(
@@ -674,7 +751,7 @@ async function verifyQualitySettingsUi(page) {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForApp(page)
   await page.setViewport({ width: 360, height: 520, deviceScaleFactor: 1 })
-  await page.evaluate(() => document.querySelector('.sidebar-footer > .sidebar-nav-item')?.click())
+  await page.evaluate(() => document.querySelector('[data-sidebar-action="settings"]')?.click())
   await page.waitForSelector('.settings-page', { timeout: 10_000 })
   await page.click('[data-settings-tab="office"]')
   const compactLayout = await page.evaluate(() =>
@@ -1129,58 +1206,6 @@ function inspectCanvasImage(buffer) {
   }
 }
 
-function evaluateLoadPhases(measurement, budget) {
-  if (!measurement) return ['missing Office load phase measurement']
-  const violations = []
-  const prefix = `${measurement.kind}: `
-  const checks = [
-    ['shellReadyMs', 'office shell', budget.shellReadyMsMaximum, true],
-    ['canvasReadyMs', 'Canvas mount', budget.canvasReadyMsMaximum, true],
-    ['basicNonblankMs', 'basic nonblank', budget.basicNonblankMsMaximum, true],
-    ['interactiveReadyMs', 'interactive ready', budget.interactiveReadyMsMaximum, true],
-    ['sceneAssetsReadyMs', 'business scene assets ready', budget.sceneAssetsReadyMsMaximum, true],
-    ['charactersReadyMs', '3D digital workers ready', budget.charactersReadyMsMaximum, true]
-  ]
-  for (const [field, label, maximum, expected] of checks) {
-    if (!expected) continue
-    const value = measurement[field]
-    if (!Number.isFinite(value)) {
-      violations.push(`${prefix}${label} timing is missing`)
-    } else if (value > maximum) {
-      violations.push(`${prefix}${label} ${value.toFixed(1)}ms exceeds ${maximum}ms`)
-    }
-  }
-  if (!Number.isFinite(measurement.interactiveReadyMs)) {
-    violations.push(`${prefix}interactive readiness timing is missing`)
-  }
-  if (
-    Number.isFinite(measurement.shellReadyMs) &&
-    Number.isFinite(measurement.canvasReadyMs) &&
-    measurement.canvasReadyMs < measurement.shellReadyMs
-  ) {
-    violations.push(`${prefix}Canvas mounted before the Office shell`)
-  }
-  if (
-    Number.isFinite(measurement.canvasReadyMs) &&
-    Number.isFinite(measurement.basicNonblankMs) &&
-    measurement.basicNonblankMs < measurement.canvasReadyMs
-  ) {
-    violations.push(`${prefix}nonblank timing precedes Canvas mount`)
-  }
-  if (measurement.observed?.digitalWorkers !== measurement.expectedAgents) {
-    violations.push(
-      `${prefix}observed ${measurement.observed?.digitalWorkers ?? 'missing'} digital workers, expected ${measurement.expectedAgents}`
-    )
-  }
-  if (measurement.observed?.renderedDigitalWorkers !== measurement.expectedAgents) {
-    violations.push(
-      `${prefix}scene probe observed ${measurement.observed?.renderedDigitalWorkers ?? 'missing'} digital workers, expected ${measurement.expectedAgents}`
-    )
-  }
-  if (measurement.observed?.sceneAssetsReady !== true) violations.push(`${prefix}business scene assets were not ready`)
-  return violations
-}
-
 function evaluateScenario(scenario, budget, label) {
   const violations = []
   if (!budget) {
@@ -1354,7 +1379,6 @@ function renderMarkdown(value) {
     const target = scenario.targetViolations.length > 0 ? scenario.targetViolations.join('; ') : 'met'
     return `| ${scenario.agents} | ${scenario.qualityMode} | ${scenario.effectiveQuality} | ${scenario.renderer.workers?.characters ?? 0} | ${scenario.renderer.canvas.pixelRatio.toFixed(2)} | ${scenario.renderer.quality.shadows ? 'on' : 'off'} | ${scenario.renderer.quality.contactShadows} | ${scenario.rendererRendersPerSample.toFixed(2)} | ${scenario.firstNonblankMs} | ${scenario.frameDurationMs.median.toFixed(2)} | ${scenario.frameDurationMs.p95.toFixed(2)} | ${scenario.medianFps.toFixed(1)} | ${scenario.render.calls.median.toFixed(0)} | ${scenario.render.triangles.median.toFixed(0)} | ${regression} | ${target} |`
   })
-  const formatLoadMs = (duration) => (Number.isFinite(duration) ? duration.toFixed(1) : 'n/a')
   const loadRows = value.scenarios.flatMap((scenario) =>
     [scenario.loadPhases, scenario.warmRemountLoadPhases]
       .filter(Boolean)
@@ -1362,7 +1386,7 @@ function renderMarkdown(value) {
         const violations = (scenario.loadPhaseViolations ?? []).filter((item) =>
           item.startsWith(`${load.kind}:`)
         )
-        return `| ${scenario.agents} | ${scenario.qualityMode} | ${load.kind} | ${formatLoadMs(load.shellReadyMs)} | ${formatLoadMs(load.canvasReadyMs)} | ${formatLoadMs(load.basicNonblankMs)} | ${formatLoadMs(load.sceneAssetsReadyMs)} | ${formatLoadMs(load.charactersReadyMs)} | ${formatLoadMs(load.interactiveReadyMs)} | ${violations.length > 0 ? violations.join('; ') : 'met'} |`
+        return `| ${scenario.agents} | ${scenario.qualityMode} | ${load.kind} | ${formatOfficeActivation(load)} | ${formatOfficeLoadMs(load.shellReadyMs)} | ${formatOfficeLoadMs(load.canvasReadyMs)} | ${formatOfficeLoadMs(load.basicNonblankMs)} | ${formatOfficeLoadMs(load.sceneAssetsReadyMs)} | ${formatOfficeLoadMs(load.charactersReadyMs)} | ${formatOfficeLoadMs(load.interactiveReadyMs)} | ${violations.length > 0 ? violations.join('; ') : 'met'} |`
       })
   )
   const pause = value.renderPause
@@ -1401,10 +1425,10 @@ ${rows.join('\n')}
 
 ## Load phases
 
-\`renderer-cold-prefetched\` is the first measured renderer reload and includes the product's post-paint Office prefetch. \`renderer-cache-warm-prefetched\` repeats that path with browser resource-cache reuse. \`warm-remount\` reopens Office in the same renderer context after a real unmount.
+\`renderer-cold-direct\` measures an immediate first click without prefetch. \`renderer-cache-warm-pointer-immediate\` clicks while pointer prefetch is still loading. \`renderer-cache-warm-intent-prefetched\` waits for pointer intent under a 1000ms hard prefetch budget. \`warm-remount\` reopens Office in the same renderer context after a real unmount.
 
-| Agents | Quality | Load kind | Shell ms | Canvas ms | Basic nonblank ms | Business assets ms | 3D workers ms | Interactive ms | Contract |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---|
+| Agents | Quality | Load kind | Intent preload | Shell ms | Canvas ms | Basic nonblank ms | Business assets ms | 3D workers ms | Interactive ms | Contract |
+|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|
 ${loadRows.join('\n')}
 
 ## Checks

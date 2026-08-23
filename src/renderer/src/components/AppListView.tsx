@@ -1,14 +1,12 @@
 import { Suspense, lazy, useEffect } from 'react'
-import { Menu, X } from 'lucide-react'
 import type { ExperienceMode } from '../store/experience-mode'
 import { useStore } from '../store'
-import { useT } from '../i18n'
 import Sidebar from './Sidebar'
 import WelcomeView from './WelcomeView'
 import WorkbenchRoot from './workbench/WorkbenchRoot'
 import { ExperienceProjectionProvider } from './experience/ExperienceProjection'
-import StudioResultPanel from './workbench/StudioResultPanel'
 import { useFirstTaskOnboardingLifecycle } from './experience/first-task-onboarding'
+import { sessionExperienceMode } from '../store/session-experience'
 import StudioProjectionTabs, {
   STUDIO_PROJECTION_PANEL_IDS,
   STUDIO_PROJECTION_TAB_IDS,
@@ -19,52 +17,17 @@ import { loadVideoStudioView } from './studio/loadVideoStudioView'
 
 const StudioView = lazy(loadStudioView)
 const VideoStudioView = lazy(loadVideoStudioView)
+const StudioResultPanel = lazy(() => import('./workbench/StudioResultPanel'))
 
 interface AppListViewProps {
   activeId: string | null
   experienceMode: ExperienceMode
   hasActive: boolean
   language: 'zh' | 'en'
-  mobileSidebarOpen: boolean
   showNewSession: boolean
   studioVisited: boolean
   videoVisited: boolean
-  onCloseMobileSidebar: () => void
   onExperienceModeChange: (mode: ExperienceMode) => void
-  onToggleMobileSidebar: () => void
-}
-
-interface MobileSidebarControlsProps {
-  open: boolean
-  closeLabel: string
-  openLabel: string
-  onClose: () => void
-  onToggle: () => void
-}
-
-function MobileSidebarControls({
-  open,
-  closeLabel,
-  openLabel,
-  onClose,
-  onToggle
-}: MobileSidebarControlsProps): React.JSX.Element {
-  return (
-    <>
-      <button
-        type="button"
-        className="mobile-sidebar-toggle"
-        aria-label={open ? closeLabel : openLabel}
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        {open ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
-      </button>
-      {open && (
-        <button type="button" className="mobile-sidebar-backdrop" aria-label={closeLabel} onClick={onClose} />
-      )}
-    </>
-  )
 }
 
 interface SessionSurfaceProps {
@@ -133,7 +96,11 @@ function ResultSurface({ activeId, hidden, onOpenSession }: ResultSurfaceProps):
       aria-hidden={hidden}
       {...(hidden ? { inert: '' } : {})}
     >
-      {!hidden && <StudioResultPanel sessionId={activeId} standalone onOpenSessionSurface={onOpenSession} />}
+      {!hidden && (
+        <Suspense fallback={<div className="studio-loading">加载交付结果...</div>}>
+          <StudioResultPanel sessionId={activeId} standalone onOpenSessionSurface={onOpenSession} />
+        </Suspense>
+      )}
     </section>
   )
 }
@@ -153,10 +120,48 @@ function VideoSurface({ hidden }: { hidden: boolean }): React.JSX.Element {
   )
 }
 
+function deriveProjectionState({
+  activeSession,
+  hasActive,
+  newSessionProjectId,
+  showNewSession,
+  welcomeProjectChoice
+}: {
+  activeSession?: {
+    workspaceId?: string
+    projectId?: string
+    goalId?: string
+    workItemId?: string
+    experienceModeOverride?: 'assistant' | 'studio'
+  }
+  hasActive: boolean
+  newSessionProjectId: string | null
+  showNewSession: boolean
+  welcomeProjectChoice: string | null
+}): {
+  hasAssistantSession: boolean
+  hasProjectSession: boolean
+  hasProjectTask: boolean
+} {
+  const activeSessionIsStudio = Boolean(
+    hasActive && activeSession && sessionExperienceMode(activeSession) === 'studio'
+  )
+  const hasProjectTask = activeSessionIsStudio && !showNewSession
+  const hasPersistedProjectDraft = !hasActive && Boolean(
+    welcomeProjectChoice && welcomeProjectChoice !== '__unassigned__' && welcomeProjectChoice !== '__new_project__'
+  )
+  return {
+    hasProjectTask,
+    hasProjectSession: hasProjectTask || Boolean(showNewSession && newSessionProjectId) || hasPersistedProjectDraft,
+    hasAssistantSession: hasActive && !activeSessionIsStudio && !showNewSession
+  }
+}
+
 function useStudioSurface(
   workspaceNonce: number,
   sessionNonce: number,
-  hasResult: boolean
+  hasResult: boolean,
+  hasSession: boolean
 ): [StudioProjectionSurface, (surface: StudioProjectionSurface) => void] {
   const surface = useStore((state) => state.studioSurface)
   const setSurface = useStore((state) => state.setStudioSurface)
@@ -167,8 +172,9 @@ function useStudioSurface(
     if (sessionNonce > 0) setSurface('session')
   }, [sessionNonce])
   useEffect(() => {
-    if (!hasResult && surface === 'result') setSurface('workspace')
-  }, [hasResult, surface])
+    if (!hasResult && surface === 'result') setSurface(hasSession ? 'session' : 'workspace')
+    if (!hasSession && surface === 'session') setSurface('workspace')
+  }, [hasResult, hasSession, surface])
   return [surface, setSurface]
 }
 
@@ -177,29 +183,25 @@ export default function AppListView({
   experienceMode,
   hasActive,
   language,
-  mobileSidebarOpen,
-  onCloseMobileSidebar,
   onExperienceModeChange,
-  onToggleMobileSidebar,
   showNewSession,
   studioVisited,
   videoVisited
 }: AppListViewProps): React.JSX.Element {
-  const t = useT()
   useFirstTaskOnboardingLifecycle()
   const studioNavigationNonce = useStore((state) => state.studioNavigationNonce)
   const studioSessionNavigationNonce = useStore((state) => state.studioSessionNavigationNonce)
+  const newSessionProjectId = useStore((state) => state.newSessionProjectId)
+  const welcomeProjectChoice = useStore((state) => state.welcomeDraft.projectChoice)
   const activeSession = useStore((state) => activeId ? state.sessions[activeId]?.meta : undefined)
-  const hasProjectTask = Boolean(
-    hasActive &&
-    !showNewSession &&
-    activeSession &&
-    (activeSession.workspaceId || activeSession.projectId || activeSession.goalId || activeSession.workItemId)
-  )
+  const projection = deriveProjectionState({
+    activeSession, hasActive, newSessionProjectId, showNewSession, welcomeProjectChoice
+  })
   const [studioSurface, setStudioSurface] = useStudioSurface(
     studioNavigationNonce,
     studioSessionNavigationNonce,
-    hasProjectTask
+    projection.hasProjectTask,
+    projection.hasProjectSession
   )
   const sessionProjection = experienceMode === 'studio' && studioSurface === 'session' ? 'studio' : 'assistant'
   const sessionHidden = experienceMode === 'video' || (experienceMode === 'studio' && studioSurface !== 'session')
@@ -208,24 +210,16 @@ export default function AppListView({
   const videoHidden = experienceMode !== 'video'
   return (
     <>
-      <MobileSidebarControls
-        open={mobileSidebarOpen}
-        closeLabel={t('closeSession')}
-        openLabel={t('openSidebar')}
-        onClose={onCloseMobileSidebar}
-        onToggle={onToggleMobileSidebar}
-      />
       <Sidebar
         experienceMode={experienceMode}
         language={language}
-        mobileOpen={mobileSidebarOpen}
         onExperienceModeChange={onExperienceModeChange}
-        onMobileClose={onCloseMobileSidebar}
       />
       <ExperienceProjectionProvider mode={sessionProjection}>
         <main className="main">
           <StudioProjectionTabs
-            hasResult={hasProjectTask}
+            hasResult={projection.hasProjectTask}
+            hasSession={projection.hasProjectSession}
             hidden={experienceMode !== 'studio'}
             language={language}
             surface={studioSurface}
@@ -239,7 +233,7 @@ export default function AppListView({
             <SessionSurface
               activeId={activeId}
               experienceMode={experienceMode}
-              hasActive={hasActive}
+              hasActive={experienceMode === 'studio' ? projection.hasProjectTask : projection.hasAssistantSession}
               hidden={sessionHidden}
               showNewSession={showNewSession}
             />

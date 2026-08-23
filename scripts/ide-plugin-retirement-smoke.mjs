@@ -52,10 +52,31 @@ for (const marker of ['ide_build_and_vscode_required', 'jetbrains_ide_interactio
   assert(!releaseScopeGate.includes(marker), `P2 release gate restored retired check: ${marker}`)
 }
 
-const replacementPlan = read('docs/COMPETITOR-REPLACEMENT-MASTER-PLAN.md')
-assert(replacementPlan.includes('`IDE-001`'), 'built-in coding workbench replacement target is missing')
-assert(replacementPlan.includes('`IDE-002`'), 'built-in coding workbench acceptance target is missing')
-assert(replacementPlan.includes('不依赖 VS Code/JetBrains 插件'), 'replacement plan must forbid IDE plugin dependency')
+const contributing = read('CONTRIBUTING.md')
+assert(
+  contributing.includes('以 `package.json` 中当前可用的 required gate 为准') &&
+    contributing.includes('required gates in `package.json` as the public source of truth'),
+  'public contribution guides must identify package.json required gates as the source of truth'
+)
+
+const readme = read('README.md')
+assert(
+  readme.includes('在应用内使用终端、文件、浏览器、Git'),
+  'public README must describe the built-in coding workbench surface'
+)
+
+const workbench = read('src/renderer/src/components/workbench/WorkbenchRoot.tsx')
+for (const marker of ["openPanel('diff')", "openPanel('terminal')", "openPanel('browser')", "openPanel('files')"]) {
+  assert(workbench.includes(marker), `built-in coding workbench surface is missing: ${marker}`)
+}
+for (const scriptName of [
+  'test:file-editor-tabs:required',
+  'test:project-tests:required',
+  'test:project-debugger:required',
+  'test:project-refactor:required'
+]) {
+  assert(packageJson.scripts?.[scriptName], `built-in coding workbench required gate is missing: ${scriptName}`)
+}
 
 console.log('IDE plugin retirement smoke ok')
 

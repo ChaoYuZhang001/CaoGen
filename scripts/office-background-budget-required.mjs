@@ -198,8 +198,8 @@ async function createRuntimeFixture(targetPage) {
 }
 
 async function openOffice(targetPage) {
-  await targetPage.waitForSelector('.sidebar-office', { visible: true, timeout: 10_000 })
-  await targetPage.click('.sidebar-office')
+  await targetPage.waitForSelector('[data-sidebar-action="control-room"]', { visible: true, timeout: 10_000 })
+  await targetPage.click('[data-sidebar-action="control-room"]')
   await targetPage.waitForSelector('.office-canvas-wrap', { visible: true, timeout: 20_000 })
   await targetPage.waitForFunction(
     () => typeof window.__caogenOfficePerformance?.snapshot === 'function' &&

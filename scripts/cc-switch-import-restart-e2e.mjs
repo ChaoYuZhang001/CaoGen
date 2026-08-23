@@ -193,6 +193,7 @@ function installRuntimeStubs() {
     path.join(outDir, 'node_modules', '@iarna', 'toml'),
     { recursive: true }
   )
+  cpSync(path.join(repoRoot, 'node_modules', 'sql.js'), path.join(outDir, 'node_modules', 'sql.js'), { recursive: true })
 }
 
 function createFixture() {

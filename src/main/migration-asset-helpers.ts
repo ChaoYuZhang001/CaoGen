@@ -88,15 +88,17 @@ export function migrationTargetRoot(
 }
 
 export function ruleTarget(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
-  return scope === 'project' && cwd ? join(cwd, 'CLAUDE.md') : join(home, '.claude', 'CLAUDE.md')
+  return scope === 'project' && cwd ? join(cwd, 'caogen.md') : join(home, '.caogen', 'rules.md')
 }
 
 export function mcpTarget(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
-  return scope === 'project' && cwd ? join(cwd, '.mcp.json') : join(home, '.claude', 'settings.json')
+  const ownerRoot = scope === 'project' && cwd ? cwd : home
+  return join(ownerRoot, '.caogen', 'mcp', 'mcp.json')
 }
 
 export function skillTargetRoot(scope: MigrationAssetScope, cwd: string | undefined, home: string): string {
-  return scope === 'project' && cwd ? join(cwd, '.claude', 'skills') : join(home, '.claude', 'skills')
+  const ownerRoot = scope === 'project' && cwd ? cwd : home
+  return join(ownerRoot, '.caogen', 'skills')
 }
 
 export function inspectRuleTarget(targetPath: string, id: string, digest: string): {

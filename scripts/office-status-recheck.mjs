@@ -445,6 +445,11 @@ check('buildOfficeModel merges live git status into workspace signals', () => {
 
 check('OfficeView exposes machine-readable session status counts', () => {
   const text = source('src/renderer/src/components/office/OfficeView.tsx')
+  assert(text.includes('const OFFICE_MAX_VISIBLE_SESSIONS = 12'), 'OfficeView must cap visible sessions at 12')
+  assert(text.includes('prioritizeOfficeSessionIds(businessSessionIds, activeId)'), 'OfficeView must prioritize the active session within the cap')
+  assert(text.includes('data-office-session-capacity={OFFICE_MAX_VISIBLE_SESSIONS}'), 'OfficeView must expose the session capacity')
+  assert(text.includes('data-office-hidden-sessions={hiddenSessionCount}'), 'OfficeView must expose hidden session count')
+  assert(text.includes('data-office-hidden-sessions-toggle') && text.includes('data-office-hidden-session={session.id}'), 'OfficeView must expose a reachable hidden-session list')
   for (const marker of [
     'data-office-idle-sessions',
     'data-office-running-sessions',

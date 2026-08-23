@@ -168,6 +168,7 @@ function installRuntimeStubs() {
   writeFileSync(path.join(electronRoot, 'index.js'), `'use strict'\nmodule.exports = {\n  app: { getPath(name) {\n    if (name === 'userData') return ${JSON.stringify(userDataDir)}\n    if (name === 'home') return ${JSON.stringify(tempRoot)}\n    throw new Error('unsupported Electron path: ' + name)\n  } },\n  safeStorage: {\n    isEncryptionAvailable() { return true },\n    encryptString(value) { return Buffer.from(value, 'utf8') },\n    decryptString(value) { return Buffer.from(value).toString('utf8') },\n    getSelectedStorageBackend() { return 'keychain' }\n  }\n}\n`)
   const tomlSource = path.join(repoRoot, 'node_modules', '@iarna', 'toml')
   cpSync(tomlSource, path.join(outDir, 'node_modules', '@iarna', 'toml'), { recursive: true })
+  cpSync(path.join(repoRoot, 'node_modules', 'sql.js'), path.join(outDir, 'node_modules', 'sql.js'), { recursive: true })
 }
 
 function writeCodex({ authKey, oauthToken, model = 'gpt-native-one' }) {

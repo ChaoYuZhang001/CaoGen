@@ -31,6 +31,11 @@ export function isEffectTarget(value: unknown): value is EffectTarget {
   return value.kind === 'unsupported' && isString(value.toolName)
 }
 
+export function isEffectTargetCreatable(value: EffectTarget): boolean {
+  return value.kind !== 'webhook_message_send' ||
+    value.channel === 'feishu' || value.channel === 'dingtalk'
+}
+
 function isMediaJobOperationTarget(record: Record<string, unknown>): boolean {
   const operations = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose']
   const statuses = ['submitting', 'running', 'downloading', 'succeeded', 'failed', 'cancelled', 'waiting_reconciliation']

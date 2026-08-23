@@ -72,7 +72,7 @@ import { normalizeProviderAdvancedConfig, normalizeProviderAuthorization } from 
 import {
   assertProviderCredentialInput,
   inspectCredentialHeaderNames,
-  normalizedCredentialHeaderNames,
+  normalizedCredentialHeaderNames, normalizedAuthorizationHeaders,
   normalizedCustomHeaders,
   providerCredentialHeaderLines,
   providerCredentialHeaders,
@@ -765,7 +765,7 @@ export function createProvider(input: ProviderInput): ProviderView {
   })
 }
 
-export function updateProvider(id: string, patch: Partial<ProviderInput>): ProviderView {
+export function updateProvider(id: string, patch: Partial<ProviderInput>, options: { allowAuthorizationHeaders?: boolean } = {}): ProviderView {
   const list = load()
   const idx = list.findIndex((p) => p.id === id)
   if (idx === -1) throw new Error('Provider 不存在')
@@ -776,7 +776,7 @@ export function updateProvider(id: string, patch: Partial<ProviderInput>): Provi
     normalizedCredentialHeaderNames,
     normalizeBaseUrl,
     resolveProviderEngine
-  })
+  }, options.allowAuthorizationHeaders ? { customHeadersNormalizer: normalizedAuthorizationHeaders } : undefined)
   const nextEngine = patch.engine ?? resolveProviderEngine(prev)
   const authorization = patch.authorization === undefined
     ? prev.authorization

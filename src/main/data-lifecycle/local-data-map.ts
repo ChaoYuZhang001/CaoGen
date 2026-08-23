@@ -109,7 +109,7 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
       status: 'enforced'
     },
     implementationStatus: 'partial',
-    projectObjects: ['Workspace', 'Resource', 'Goal', 'WorkItem', 'Squad', 'Comment', 'Artifact', 'Evidence', 'Acceptance', 'Audit'],
+    projectObjects: ['Workspace', 'Resource', 'Goal', 'WorkItem', 'Squad', 'Comment'],
     gaps: ['Current participant-set export/import, private backup readback, minimum-retention deadlines, legal-hold blocking, atomic authority/delete ordering, and journal-backed expiry resume are implemented for Project purge; all-Store ownership, non-requested age-policy automation, and remaining external/data-source boundaries remain open.']
   },
   {
@@ -160,7 +160,6 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     export: { mode: 'redacted', status: 'partial' },
     deletion: { softDelete: 'none', purge: 'none', externalDelete: 'not_applicable', status: 'enforced' },
     implementationStatus: 'partial',
-    projectObjects: ['Policy', 'Audit'],
     gaps: ['Trusted CAS mutations, default and subject-specific Project/Session minimum retention, application/Project/Session legal holds, durable release history, atomic deletion/compaction ordering, redacted audit export, pending-deletion UI, and journal-backed expiry resume are implemented in current source. Remaining Store enforcement, application-data reset, non-requested age-policy automation, and runtime evidence remain open.']
   },
   {
@@ -690,6 +689,20 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     gaps: ['Project and standalone deletion remove only removed registry projections plus exact/timestamped patches and merge receipts; active worktrees remain blocked until their Effect completes, and runtime proof remains open.']
   },
   {
+    id: 'project-refactor-journal',
+    title: 'Project refactor recovery journal',
+    paths: ['userData/project-refactor-journal/<operation-id>.json'],
+    sourceModules: ['src/main/projectRefactorJournal.ts', 'src/main/projectRefactor.ts'],
+    owner: { scope: 'session', key: 'sessionId, workspace root, and operationId' },
+    sensitivity: 'confidential',
+    backup: { behavior: 'private_local', status: 'enforced' },
+    retention: { rule: 'At most 50 records and 250 MB are retained; capacity cleanup removes only terminal applied, recovered, or superseded records, while interrupted, blocked, and corrupt recovery evidence is preserved.', status: 'enforced' },
+    export: { mode: 'excluded', status: 'enforced' },
+    deletion: { softDelete: 'none', purge: 'record', externalDelete: 'external_untouched', status: 'partial' },
+    implementationStatus: 'partial',
+    gaps: ['Successful rollback and dismissed recovery remove their records, and bounded terminal compaction is implemented; Session/Project cascade deletion and an application-data reset contract remain open.']
+  },
+  {
     id: 'migration-backups',
     title: 'Private asset migration rollback backups',
     paths: ['userData/private/migration-backups/<backup-id>', 'userHome/.caogen-private/migration-backups/<backup-id>'],
@@ -725,7 +738,7 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
   {
     id: 'plugins',
     title: 'Plugin registry state and managed installations',
-    paths: ['userData/plugin-registry-state.json', 'userHome/.claude/plugins/<managed-plugin>'],
+    paths: ['userData/plugin-registry-state.json', 'userHome/.caogen/plugins/<managed-plugin>'],
     sourceModules: [
       'src/main/pluginRegistry.ts',
       'src/main/pluginInstall.ts',
@@ -765,7 +778,6 @@ export const LOCAL_DATA_LIFECYCLE_MAP: LocalDataLifecycleEntry[] = [
     export: { mode: 'excluded', status: 'enforced' },
     deletion: { softDelete: 'none', purge: 'cache_purge', externalDelete: 'external_untouched', status: 'enforced' },
     implementationStatus: 'enforced',
-    projectObjects: ['Resource'],
     gaps: ['No global cache quota or LRU eviction policy exists.']
   },
   {
@@ -878,6 +890,16 @@ export const PERSISTENCE_SCAN_EXCLUSIONS: PersistenceScanExclusion[] = [
     sourceModule: 'src/main/migration-safety.ts',
     boundary: 'delegates_to_registered_store',
     reason: 'Provides atomic primitives for registered migration backups and explicit external target writes.'
+  },
+  {
+    sourceModule: 'src/main/task/workflow-artifact-delivery.ts',
+    boundary: 'external_user_action',
+    reason: 'Writes delivery manifests and packages only to a destination explicitly selected by the user in a save dialog.'
+  },
+  {
+    sourceModule: 'src/main/task/workflow-artifact-export.ts',
+    boundary: 'external_user_action',
+    reason: 'Copies verified Artifact bytes only to a destination explicitly selected by the user in a save dialog.'
   },
   {
     sourceModule: 'src/main/providerCredentialBroker.ts',

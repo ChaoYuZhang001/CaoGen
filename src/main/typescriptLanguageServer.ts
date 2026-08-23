@@ -14,6 +14,7 @@ import type {
   SemanticHoverResult,
   TypeScriptLanguageInput
 } from '../shared/types'
+import { resolveAppVersion } from './appVersion'
 import { buildMinimalSubprocessEnv } from './security/subprocess-environment'
 
 const MAX_DOCUMENT_BYTES = 512_000
@@ -174,7 +175,7 @@ class TypeScriptLspClient {
         tsserver: { path: tsserverPath },
         preferences: { includeCompletionsForModuleExports: true, includeCompletionsWithInsertText: true }
       },
-      clientInfo: { name: 'CaoGen', version: '0.1.8' }
+      clientInfo: { name: 'CaoGen', version: resolveAppVersion() }
     })
     this.notify('initialized', {})
   }

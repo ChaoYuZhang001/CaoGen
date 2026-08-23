@@ -26,8 +26,9 @@ interface ProviderMergeDependencies {
   resolveProviderEngine(provider: Provider): EngineKind
 }
 
-interface ProviderPatchOptions {
+export interface ProviderPatchOptions {
   replaceOptionalConfiguration?: boolean
+  customHeadersNormalizer?: ProviderPatchFieldDependencies['normalizedCustomHeaders']
 }
 
 export function resolveProviderPatchFields(
@@ -36,9 +37,10 @@ export function resolveProviderPatchFields(
   dependencies: ProviderPatchFieldDependencies,
   options: ProviderPatchOptions = {}
 ): ProviderPatchFields {
+  const normalizeHeaders = options.customHeadersNormalizer ?? dependencies.normalizedCustomHeaders
   const customHeaders = patch.customHeaders === undefined && !options.replaceOptionalConfiguration
     ? previous.customHeaders
-    : dependencies.normalizedCustomHeaders(patch.customHeaders)
+    : normalizeHeaders(patch.customHeaders)
   const credentialHeaderNames = patch.credentialHeaderNames === undefined && !options.replaceOptionalConfiguration
     ? previous.credentialHeaderNames
     : dependencies.normalizedCredentialHeaderNames(patch.credentialHeaderNames)

@@ -86,18 +86,20 @@ const SAFE_CUSTOM_HEADER_NAMES = new Set([
   'anthropic-version',
   'content-type',
   'chatgpt-account-id',
-  'copilot-integration-id',
-  'editor-plugin-version',
-  'editor-version',
   'http-referer',
   'openai-organization',
   'openai-project',
   'originator',
   'referer',
   'user-agent',
-  'x-github-api-version',
   'x-rapidapi-host',
   'x-title'
+])
+const AUTHORIZATION_CUSTOM_HEADER_NAMES = new Set([
+  'copilot-integration-id',
+  'editor-plugin-version',
+  'editor-version',
+  'x-github-api-version'
 ])
 const SAFE_CUSTOM_HEADER_NAME_PATTERN =
   /^(?:(?:x-)?(?:account|channel|correlation|debug|deployment|endpoint|experiment|feature|gateway|meta|metadata|model|org|organization|project|provider|region|request|route|routing|source|tag|tenant|trace|vendor|version|workspace)(?:-|$)|helicone-property-)/i
@@ -517,13 +519,31 @@ export function inspectProviderCustomHeaders(value: string): {
   safeValue: string
   rejectedNames: string[]
 } {
+  return inspectProviderHeaders(value, AUTHORIZATION_CUSTOM_HEADER_NAMES, false)
+}
+
+export function inspectProviderAuthorizationHeaders(value: string): {
+  safeValue: string
+  rejectedNames: string[]
+} {
+  return inspectProviderHeaders(value, AUTHORIZATION_CUSTOM_HEADER_NAMES, true)
+}
+
+function inspectProviderHeaders(
+  value: string,
+  authorizationNames: ReadonlySet<string>,
+  allowAuthorizationNames: boolean
+): {
+  safeValue: string
+  rejectedNames: string[]
+} {
   const lines = splitHeaderLines(value)
   const rejectedNames: string[] = []
   const seenRejectedNames = new Set<string>()
   const safeLines: HeaderLine[] = []
 
   for (const line of lines) {
-    const inspection = inspectProviderHeaderLine(line)
+    const inspection = inspectProviderHeaderLine(line, authorizationNames, allowAuthorizationNames)
     if (inspection.safeLine) safeLines.push(inspection.safeLine)
     if (inspection.rejectedName) {
       addUniqueRejectedName(inspection.rejectedName, rejectedNames, seenRejectedNames)
@@ -594,7 +614,11 @@ function pushUniqueRejectedName(name: string, rejectedNames: string[]): void {
   if (!rejectedNames.some((item) => item.toLowerCase() === name.toLowerCase())) rejectedNames.push(name)
 }
 
-function inspectProviderHeaderLine(line: HeaderLine): {
+function inspectProviderHeaderLine(
+  line: HeaderLine,
+  authorizationNames: ReadonlySet<string>,
+  allowAuthorizationNames: boolean
+): {
   safeLine?: HeaderLine
   rejectedName?: string
 } {
@@ -604,7 +628,7 @@ function inspectProviderHeaderLine(line: HeaderLine): {
   }
   const name = line.value.slice(0, colonIndex)
   const headerValue = line.value.slice(colonIndex + 1).replace(/^[ \t]+|[ \t]+$/g, '')
-  if (isSafeProviderHeader(name, headerValue)) {
+  if (isSafeProviderHeader(name, headerValue, authorizationNames, allowAuthorizationNames)) {
     return {
       safeLine: { value: `${name}:${headerValue ? ` ${headerValue}` : ''}`, ending: line.ending }
     }
@@ -612,9 +636,15 @@ function inspectProviderHeaderLine(line: HeaderLine): {
   return { rejectedName: rejectedProviderHeaderName(name) }
 }
 
-function isSafeProviderHeader(name: string, value: string): boolean {
+function isSafeProviderHeader(
+  name: string,
+  value: string,
+  authorizationNames: ReadonlySet<string>,
+  allowAuthorizationNames: boolean
+): boolean {
+  const normalized = name.trim().toLowerCase()
   return !isSensitiveProviderHeaderName(name)
-    && isAllowedProviderCustomHeaderName(name)
+    && (isAllowedProviderCustomHeaderName(name) || (allowAuthorizationNames && authorizationNames.has(normalized)))
     && !looksLikeProviderCredentialValue(name)
     && value.length <= 8192
     && !FORBIDDEN_HEADER_VALUE_CHARACTERS.test(value)

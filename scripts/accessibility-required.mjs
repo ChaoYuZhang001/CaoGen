@@ -61,7 +61,7 @@ try {
   await page.waitForSelector('[data-studio-surface="digital-workers"]', { visible: true, timeout: 15_000 })
   await auditSurface('studio-team', '[data-studio-surface="digital-workers"]')
 
-  await click(page, '.sidebar-office')
+  await click(page, '[data-sidebar-action="control-room"]')
   await page.waitForSelector('.office', { visible: true, timeout: 15_000 })
   await auditSurface('office', '.office')
 
@@ -108,7 +108,7 @@ async function inspectSurfaceDom(selector) {
   return page.evaluate((rootSelector) => {
     const root = document.querySelector(rootSelector)
     if (!root) throw new Error(`surface root is missing: ${rootSelector}`)
-    const all = [...root.querySelectorAll('button,input,select,textarea,a[href],[role="button"],[tabindex]')]
+    const all = [...root.querySelectorAll('button,input,select,textarea,a[href],summary,[role="button"],[tabindex]')]
     const visible = all.filter((element) => {
       const style = window.getComputedStyle(element)
       const rect = element.getBoundingClientRect()
@@ -160,7 +160,7 @@ async function waitForFocusableInventoryStable(selector) {
     const current = await page.evaluate((rootSelector) => {
       const root = document.querySelector(rootSelector)
       if (!root) return -1
-      return [...root.querySelectorAll('button,input,select,textarea,a[href],[role="button"],[tabindex]')]
+      return [...root.querySelectorAll('button,input,select,textarea,a[href],summary,[role="button"],[tabindex]')]
         .filter((element) => {
           const style = window.getComputedStyle(element)
           const rect = element.getBoundingClientRect()
@@ -178,8 +178,8 @@ async function waitForFocusableInventoryStable(selector) {
 }
 
 async function auditAccessibilityTree(selector) {
-  const focusableRoles = new Set(['button', 'checkbox', 'combobox', 'link', 'menuitem', 'radio', 'switch', 'tab', 'textbox'])
-  const handles = await page.$$(`${selector} :is(button,input,select,textarea,a[href],[role="button"],[role="tab"])`)
+  const focusableRoles = new Set(['button', 'checkbox', 'combobox', 'DisclosureTriangle', 'link', 'menuitem', 'radio', 'switch', 'tab', 'textbox'])
+  const handles = await page.$$(`${selector} :is(button,input,select,textarea,a[href],summary,[role="button"],[role="tab"])`)
   const nodes = []
   const unnamedFocusable = []
   for (const handle of handles) {
@@ -222,7 +222,7 @@ async function auditKeyboardTraversal(selector) {
     sentinel.style.opacity = '0'
     root.before(sentinel)
     sentinel.focus()
-    return [...root.querySelectorAll('button,input,select,textarea,a[href],[role="button"],[tabindex]')]
+    return [...root.querySelectorAll('button,input,select,textarea,a[href],summary,[role="button"],[tabindex]')]
       .filter((element) => {
         const style = window.getComputedStyle(element)
         const rect = element.getBoundingClientRect()
@@ -252,7 +252,7 @@ async function auditKeyboardTraversal(selector) {
   const expectedAfterTraversal = await page.evaluate((rootSelector) => {
     const root = document.querySelector(rootSelector)
     if (!root) throw new Error(`surface root is missing: ${rootSelector}`)
-    return [...root.querySelectorAll('button,input,select,textarea,a[href],[role="button"],[tabindex]')]
+    return [...root.querySelectorAll('button,input,select,textarea,a[href],summary,[role="button"],[tabindex]')]
       .filter((element) => {
         const style = window.getComputedStyle(element)
         const rect = element.getBoundingClientRect()

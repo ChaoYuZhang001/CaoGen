@@ -238,9 +238,7 @@ function releaseIdentityDomain() {
     commitResolved: /^[0-9a-f]{40}$/.test(gitState.commit),
     worktreeClean: gitState.worktreeClean
   }
-  const failures = Object.entries(checks)
-    .filter(([, passed]) => !passed)
-    .map(([name]) => name)
+  const failures = failedCheckNames('', checks)
   return {
     id: 'release_identity',
     title: 'Release version and Git identity',
@@ -295,7 +293,8 @@ function stableProductAcceptanceDomain() {
     everyP0Verified:
       audit.data?.summary?.p0?.verified === audit.data?.summary?.p0?.total &&
       audit.data?.summary?.p0?.open === 0,
-    acceptanceMatrixPresent: existsSync(path.join(repoRoot, 'docs', '1.0-ACCEPTANCE-MATRIX.md'))
+    auditUsesFullPrivateLedger: audit.data?.privateInputsComplete === true && audit.data?.inputMode === 'private_ledger' && audit.data?.coverage === 'full',
+    acceptanceMapUsesFullPrivateLedger: acceptanceMap.data?.privateInputsComplete === true && acceptanceMap.data?.inputMode === 'private_ledger' && acceptanceMap.data?.coverage === 'full'
   }
   const failures = Object.entries(checks)
     .filter(([, passed]) => !passed)
@@ -310,6 +309,7 @@ function stableProductAcceptanceDomain() {
       path: audit.relativePath,
       exists: audit.exists,
       status: evidenceStatus(audit),
+      input: { mode: audit.data?.inputMode, coverage: audit.data?.coverage, complete: audit.data?.privateInputsComplete },
       summary: audit.data?.summary,
       openP0: Array.isArray(audit.data?.openP0) ? audit.data.openP0.map((item) => item.id) : []
     },
@@ -317,6 +317,7 @@ function stableProductAcceptanceDomain() {
       path: acceptanceMap.relativePath,
       exists: acceptanceMap.exists,
       status: evidenceStatus(acceptanceMap),
+      input: { mode: acceptanceMap.data?.inputMode, coverage: acceptanceMap.data?.coverage, complete: acceptanceMap.data?.privateInputsComplete },
       structuralStatus: acceptanceMap.data?.structuralStatus,
       closureStatus: acceptanceMap.data?.closureStatus,
       summary: acceptanceMap.data?.summary,
@@ -335,7 +336,8 @@ function stableProductAcceptanceDomain() {
     nextActions: failures.length === 0
       ? ['Keep all 64 PRD P0 requirements verified and bound to their acceptance evidence.']
       : [
-          'Use docs/1.0-ACCEPTANCE-MATRIX.md as the owner and evidence ledger for the remaining PRD P0/P1 work.',
+          'Provide both private acceptance inputs through their default docs paths or CAOGEN_PRODUCT_REQUIREMENTS_PATH and CAOGEN_ACCEPTANCE_MATRIX_PATH.',
+          'Use the private acceptance matrix as the owner and evidence ledger for the remaining PRD P0/P1 work.',
           'Keep the machine-readable acceptance map complete and bind the required result to the clean release commit.',
           'Do not use a green engineering Deep report as a substitute for the formal 1.0 product acceptance gate.'
         ]
@@ -771,7 +773,7 @@ function product1SoakFailures(soakChecks, waiverChecks, soakPassed, waiverAccept
 function failedCheckNames(prefix, checks) {
   return Object.entries(checks)
     .filter(([, passed]) => !passed)
-    .map(([name]) => `${prefix}.${name}`)
+    .map(([name]) => prefix ? `${prefix}.${name}` : name)
 }
 
 function product1SoakNextActions(soakPassed, waiverAccepted) {
@@ -1039,7 +1041,7 @@ function githubReleaseDomain() {
       ? ['Keep the public release asset audit green after creating or editing any GitHub Release.']
       : [
           'Audit current public GitHub Release assets before publishing or editing release notes.',
-          'Only installer/update metadata assets are allowed: DMG, mac zip, Windows installer, AppImage, blockmap, and latest*.yml.',
+          'Only installer, update metadata, and checksum-manifest assets are allowed: DMG, mac zip, Windows installer, AppImage, blockmap, latest*.yml, and SHA256SUMS.txt.',
           'If a forbidden asset is already public, delete it from GitHub Releases and rotate/revoke the credential if it contained a real secret.'
         ]
   }

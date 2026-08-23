@@ -28,6 +28,11 @@ export const ASSISTANT_PROJECTION_TRANSLATIONS = {
     zh: '当前工作位置不可用。请重新选择后再试。',
     en: 'This workspace is unavailable. Choose it again and retry.'
   },
+  assistantPresetNeedsWorkspace: {
+    zh: '这个任务需要项目目录。请选择已有项目，或浏览一个文件夹；当前内容尚未发送。',
+    en: 'This task needs a project folder. Choose an existing project or browse for a folder; nothing has been sent yet.'
+  },
+  assistantChooseWorkspace: { zh: '选择项目文件夹', en: 'Choose project folder' },
   assistantComputeCheckFailed: {
     zh: '暂时无法检查可用服务。请稍后重试。',
     en: 'Available services could not be checked. Try again shortly.'

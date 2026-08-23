@@ -7,6 +7,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
 import { verifyMigrationManager } from './lib/assistant-studio-migration-manager.mjs'
+import { verifyAssistantOverrideProjection } from './lib/assistant-studio-projection-check.mjs'
 import { verifyRevokedPlanGates, waitForApprovedPlanCompletion } from './lib/assistant-studio-task-plan-e2e.mjs'
 
 const repoRoot = process.cwd()
@@ -106,8 +107,8 @@ const report = {
       'View/Plan/Execute strategy selection, persistence, and active-run switch rejection',
       'immutable plan version creation, restart persistence, exact approval, and approve-to-execute gate',
       'unassigned plan approval remains conversation-only and creates no hidden Project',
-      'redacted migration preview, no-project entry, Memory draft, disabled Routine, Channel index, responsive safe defaults, apply, and rollback',
-      'responsive horizontal-overflow and basic overlay stacking'
+      'redacted migration preview, no-project entry, Memory draft, disabled Routine, Channel index, desktop safe defaults, apply, and rollback',
+      'desktop horizontal-overflow and basic overlay stacking'
     ],
     explicitlyNotVerified: [
       'assistant-studio-consistency',
@@ -258,7 +259,7 @@ try {
 
     for (const [mode, expectedView] of [['assistant', 'assistant'], ['studio', 'project'], ['video', 'video']]) {
       await clickMode(page, mode)
-      await page.click('.sidebar-office')
+      await page.click('[data-sidebar-action="control-room"]')
       await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
       const officeState = await waitForValue(
         () => page.evaluate(() => {
@@ -325,11 +326,10 @@ try {
   })
 
   if (workspaceOnly) {
-    await check('three workspace entries remain usable on desktop and mobile', async () => {
+    await check('three workspace entries remain usable across supported desktop sizes', async () => {
       for (const viewport of [
         { width: 1320, height: 860 },
-        { width: 760, height: 700 },
-        { width: 360, height: 520 }
+        { width: 1024, height: 640 }
       ]) {
         await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
         await sleep(150)
@@ -371,12 +371,14 @@ try {
         providerId: provider.id,
         model: 'mock-responses',
         taskStrategy: 'plan',
+        unassigned: false,
+        experienceModeOverride: 'assistant',
         isolated: false,
         title: 'Assistant Studio UI session'
       })
     }, { cwd: projectDir, baseUrl: mock.baseUrl })
     assert(session?.id, 'session id missing')
-    await waitForValue(
+    session = await waitForValue(
       () => page.evaluate((id) => window.agentDesk.listSessions().then((items) => items.find((item) => item.id === id)), session.id),
       (meta) => Boolean(meta?.sdkSessionId),
       12_000,
@@ -395,9 +397,13 @@ try {
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await waitForApp(page)
-  await page.waitForSelector('.composer-input', { visible: true, timeout: 15_000 })
+  await dismissTaskRecoveryDrawer(page)
+  session = await restorePersistedSession(page, session)
 
-  await check('migration manager supports conversation entry, responsive safe defaults, apply, and rollback', async () => {
+  await check('Assistant override outranks retained project context in every entrance projection', () =>
+    verifyAssistantOverrideProjection({ page, session, clickMode, openCommandPalette, assertMode }))
+
+  await check('migration manager supports conversation entry, desktop safe defaults, apply, and rollback', async () => {
     await verifyMigrationManager({
       targetPage: page,
       targetProject: projectDir,
@@ -613,23 +619,20 @@ try {
     assertSameSnapshot(stableSnapshot, after, 'pointer projection switch')
   })
 
-  await check('new-session, search, and Office roundtrip retain Studio mode', async () => {
+  await check('new-project, search, and Control Room roundtrip retain Project mode', async () => {
     await clickMode(page, 'studio')
-    await page.click('.sidebar-new')
+    await page.click('.sidebar-new-project')
     await assertMode(page, 'studio')
     await focusSidebarSearch(page)
     await assertMode(page, 'studio')
     await enterText(page, '.sidebar-search', 'stable transcript', 'Sidebar search')
     await clearFocusedInput(page)
-    await page.waitForSelector('.session-card.active', { visible: true, timeout: 5_000 })
-    await page.click('.sidebar-office')
+    await page.click('[data-sidebar-action="control-room"]')
     await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
     assert(await page.$('[data-experience-mode-switcher]') === null, 'mode switcher should not cover Office')
     await page.waitForSelector('.office-actions .btn-primary', { visible: true, timeout: 30_000 })
     await page.$eval('.office-actions .btn-primary', (button) => button.click())
     await page.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
-    await assertMode(page, 'studio')
-    await page.click('.session-card.active')
     await assertMode(page, 'studio')
     const after = await readSessionSnapshot(page, session.id)
     assertSameSnapshot(stableSnapshot, after, 'navigation roundtrip')
@@ -658,11 +661,10 @@ try {
     await page.waitForSelector('.command-palette-backdrop', { hidden: true, timeout: 5_000 })
   })
 
-  await check('responsive Assistant, Project, and Video panes do not overflow horizontally', async () => {
+  await check('desktop Assistant, Project, and Video panes do not overflow horizontally', async () => {
     for (const viewport of [
       { width: 1320, height: 860 },
-      { width: 760, height: 700 },
-      { width: 360, height: 520 }
+      { width: 1024, height: 640 }
     ]) {
       await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
       await sleep(250)
@@ -685,18 +687,6 @@ try {
     }
   })
 
-  await check('mobile sidebar and backdrop stay above the mode switcher', async () => {
-    await page.setViewport({ width: 360, height: 520, deviceScaleFactor: 1 })
-    await page.click('.mobile-sidebar-toggle')
-    await page.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar-mobile-open')).transform === 'matrix(1, 0, 0, 1, 0, 0)', { timeout: 5_000 })
-    const stacking = await readMobileSidebarStacking(page)
-    assert(stacking.sidebarZ > stacking.switcherZ, `sidebar z-index ${stacking.sidebarZ} <= switcher ${stacking.switcherZ}`)
-    assert(stacking.backdropZ > stacking.switcherZ, `sidebar backdrop ${stacking.backdropZ} <= switcher ${stacking.switcherZ}`)
-    assert(stacking.overlayOwnsSwitcherPoint, `switcher painted above mobile overlay: ${JSON.stringify(stacking)}`)
-    await page.mouse.click(350, 260)
-    await page.waitForSelector('.mobile-sidebar-backdrop', { hidden: true, timeout: 5_000 })
-  })
   }
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)
@@ -760,19 +750,8 @@ async function clickMode(targetPage, mode) {
     const rect = button.getBoundingClientRect()
     return rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= window.innerWidth
   })
-  if (!visible) {
-    await targetPage.click('.mobile-sidebar-toggle')
-    await targetPage.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
-    await targetPage.waitForFunction((option) => {
-      const rect = document.querySelector(`.sidebar-mobile-open ${option}`)?.getBoundingClientRect()
-      return rect && rect.left >= 0 && rect.right <= window.innerWidth
-    }, { timeout: 5_000 }, selector)
-  }
-  await targetPage.click(visible ? selector : `.sidebar-mobile-open ${selector}`)
-  if (!visible) {
-    await targetPage.click('.sidebar-mobile-close')
-    await targetPage.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
-  }
+  assert(visible, `${mode} workspace entry is outside the supported desktop viewport`)
+  await targetPage.click(selector)
   await assertMode(targetPage, mode)
 }
 
@@ -876,6 +855,70 @@ async function assertMode(targetPage, expected, expectedFocus) {
   return state
 }
 
+async function dismissTaskRecoveryDrawer(targetPage) {
+  const drawer = await targetPage.waitForSelector('.task-recovery-drawer', {
+    visible: true,
+    timeout: 10_000
+  }).catch(() => null)
+  if (!drawer) return
+  await targetPage.waitForFunction(() => {
+    const close = document.querySelector('.task-recovery-drawer-close')
+    return close instanceof HTMLButtonElement && !close.disabled
+  }, { timeout: 15_000 })
+  await targetPage.$eval('.task-recovery-drawer-close', (button) => button.click())
+  await targetPage.waitForSelector('.task-recovery-drawer', { hidden: true, timeout: 5_000 })
+}
+
+async function restorePersistedSession(targetPage, reference) {
+  const inventory = await waitForValue(
+    () => targetPage.evaluate(async ({ id, sdkSessionId }) => {
+      const [sessions, history] = await Promise.all([
+        window.agentDesk.listSessions(),
+        window.agentDesk.listHistory()
+      ])
+      const matches = (item) => item.id === id || Boolean(sdkSessionId && item.sdkSessionId === sdkSessionId)
+      return {
+        active: sessions.find(matches),
+        history: history.find(matches)
+      }
+    }, { id: reference.id, sdkSessionId: reference.sdkSessionId }),
+    (value) => Boolean(value.active || value.history),
+    15_000,
+    'waiting for persisted session inventory after renderer reload'
+  )
+  const persisted = inventory.active ?? inventory.history
+  assert(persisted, `persisted session missing after reload: ${JSON.stringify(inventory)}`)
+  await clickMode(targetPage, sessionExperienceMode(persisted))
+
+  const selector = `[data-session-id="${inventory.active?.id ?? inventory.history?.id}"]`
+  await targetPage.waitForSelector(selector, { visible: true, timeout: 15_000 })
+  if (inventory.active) {
+    await targetPage.click(selector)
+    await targetPage.waitForSelector('.composer-input', { visible: true, timeout: 15_000 })
+    return inventory.active
+  }
+
+  const historyCard = await targetPage.$eval(selector, (element) => element.classList.contains('history-card'))
+  assert(historyCard, `persisted history rendered with the wrong lifecycle state: ${selector}`)
+  await targetPage.click(selector)
+  const resumed = await waitForValue(
+    () => targetPage.evaluate((sdkSessionId) => window.agentDesk.listSessions()
+      .then((items) => items.find((item) => item.sdkSessionId === sdkSessionId)), inventory.history.sdkSessionId),
+    Boolean,
+    15_000,
+    'waiting for history session resume'
+  )
+  await targetPage.waitForSelector('.composer-input', { visible: true, timeout: 15_000 })
+  return resumed
+}
+
+function sessionExperienceMode(meta) {
+  if (meta.experienceModeOverride === 'assistant' || meta.experienceModeOverride === 'studio') {
+    return meta.experienceModeOverride
+  }
+  return meta.workspaceId || meta.projectId || meta.goalId || meta.workItemId ? 'studio' : 'assistant'
+}
+
 async function readSessionSnapshot(targetPage, sessionId) {
   return targetPage.evaluate(async (id) => {
     const sessions = await window.agentDesk.listSessions()
@@ -895,10 +938,7 @@ function assertSameSnapshot(before, after, label) {
 }
 
 async function focusSidebarSearch(targetPage) {
-  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await targetPage.keyboard.down(modifier)
-  await targetPage.keyboard.press('f')
-  await targetPage.keyboard.up(modifier)
+  await targetPage.click('.sidebar-header-action')
   await waitForValue(
     () => targetPage.evaluate(() => document.activeElement?.classList.contains('sidebar-search') === true),
     Boolean,
@@ -949,31 +989,12 @@ async function readOverlayStacking(targetPage, overlaySelector) {
   }, overlaySelector)
 }
 
-async function readMobileSidebarStacking(targetPage) {
-  return targetPage.evaluate(() => {
-    const switcher = document.querySelector('[data-experience-mode-switcher]')
-    const sidebar = document.querySelector('.sidebar-mobile-open')
-    const backdrop = document.querySelector('.mobile-sidebar-backdrop')
-    if (!switcher || !sidebar || !backdrop) throw new Error('missing mobile overlay probe')
-    const rect = switcher.getBoundingClientRect()
-    const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
-    return {
-      switcherZ: Number.parseInt(getComputedStyle(switcher).zIndex, 10) || 0,
-      sidebarZ: Number.parseInt(getComputedStyle(sidebar).zIndex, 10) || 0,
-      backdropZ: Number.parseInt(getComputedStyle(backdrop).zIndex, 10) || 0,
-      overlayOwnsSwitcherPoint: Boolean(top && (sidebar.contains(top) || backdrop.contains(top))),
-      topClass: top?.className || top?.tagName || ''
-    }
-  })
-}
-
 async function readOverflow(targetPage, mode) {
   return targetPage.evaluate((activeMode) => {
     const app = document.querySelector('.app')
     const main = document.querySelector('.main')
     const switcher = document.querySelector('[data-experience-mode-switcher]')
     const switcherRect = switcher?.getBoundingClientRect()
-    const mobileToggleRect = document.querySelector('.mobile-sidebar-toggle')?.getBoundingClientRect()
     const strategy = document.querySelector('[data-task-strategy]')
     const strategyRect = strategy?.getBoundingClientRect()
     const width = window.innerWidth
@@ -981,7 +1002,6 @@ async function readOverflow(targetPage, mode) {
       const rect = element.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0 || rect.right <= 0 || rect.left >= width) return []
       if (rect.left >= -1 && rect.right <= width + 1) return []
-      if (element.closest('.sidebar:not(.sidebar-mobile-open)')) return []
       let ancestor = element.parentElement
       while (ancestor) {
         const overflowX = getComputedStyle(ancestor).overflowX
@@ -1001,8 +1021,7 @@ async function readOverflow(targetPage, mode) {
       documentOverflow: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
       appOverflow: app ? Math.max(0, app.scrollWidth - app.clientWidth) : -1,
       mainOverflow: main ? Math.max(0, main.scrollWidth - main.clientWidth) : -1,
-      switcherInsideViewport: [switcherRect, mobileToggleRect]
-        .some((rect) => rect && rect.width > 0 && rect.height > 0 && rect.left >= -1 && rect.right <= width + 1),
+      switcherInsideViewport: Boolean(switcherRect && switcherRect.width > 0 && switcherRect.height > 0 && switcherRect.left >= -1 && switcherRect.right <= width + 1),
       strategyInsideViewport: Boolean(strategyRect && strategyRect.left >= -1 && strategyRect.right <= width + 1),
       strategyTextFits: [...document.querySelectorAll('[data-task-strategy-option]')]
         .every((button) => button.scrollWidth <= button.clientWidth + 1),

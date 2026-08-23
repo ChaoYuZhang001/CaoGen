@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { dismissRecoveryCenter } from './lib/project-workspace-lifecycle-ui.mjs'
+import {
+  checkAcceptanceContractScripts,
+  hasPublicAcceptanceGate,
+  loadProductAcceptanceInput
+} from './lib/product-acceptance-input.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -261,8 +266,16 @@ if (report.status === 'pass') {
 process.exit(report.status === 'pass' ? 0 : 1)
 
 function assertGateDefinition() {
-  const matrix = readFileSync(path.join(repoRoot, 'docs', '1.0-ACCEPTANCE-MATRIX.md'), 'utf8')
-  assert(matrix.includes('`WORK-002`') && matrix.includes('test:workitem-board:required'), 'WORK-002 acceptance gate declaration is missing')
+  const input = loadProductAcceptanceInput({ repoRoot })
+  assert(input.contractFailures.length === 0, `public acceptance contract is invalid: ${input.contractFailures.join('; ')}`)
+  assert(
+    checkAcceptanceContractScripts(input.contract, packageJson.scripts ?? {}).length === 0,
+    'public acceptance contract references missing package scripts'
+  )
+  assert(
+    hasPublicAcceptanceGate(input.contract, 'WORK-002', 'test:workitem-board:required'),
+    'WORK-002 public acceptance gate declaration is missing'
+  )
 }
 
 async function runDomainChecks() {

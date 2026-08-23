@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Ellipsis, Plus, Search, X } from 'lucide-react'
+import { Ellipsis, Plus, Search } from 'lucide-react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { basename, formatCost, formatTime } from '../format'
@@ -11,17 +11,18 @@ import type {
   TranscriptSearchResult
 } from '../../../shared/types'
 import type { ExperienceMode } from '../store/experience-mode'
-import AppModeSwitcher from './AppModeSwitcher'
 import SessionContextMenu, { type SessionMenuItem } from './SessionContextMenu'
-import { preloadOfficeView } from './office/loadOffice'
 import SidebarProjectSections, { type SidebarProjectSort } from './SidebarProjectSections'
 import { HeaderIcon } from './ChatHeaderIcons'
 import { modelAttemptMatchesSnapshot } from './ModelAttemptRecoveryPanel'
 import { isTaskSnapshotRecoverable } from './TaskRecoveryItem'
 import { useSidebarResize } from './useSidebarResize'
-import { ExperiencePreferenceSuggestion } from './ExperiencePreferenceSuggestion'
 import { recommendExperiencePreferences } from '../store/experience-recommendation'
 import { DisclosureChevron } from './DisclosureChevron'
+import SidebarVideoSections from './SidebarVideoSections'
+import SidebarPrimaryAction from './SidebarPrimaryAction'
+import SidebarFooter from './SidebarFooter'
+import { sidebarSearchKey, sidebarVisibleCount, splitAssistantEntries } from './sidebar-mode-projection'
 import { restoreComposerFocus, SidebarPanelIcon } from './SidebarControls'
 import {
   buildSidebarProjectGroups,
@@ -92,17 +93,17 @@ function highlightSnippet(snippet: string, query: string): React.ReactNode {
 interface SidebarProps {
   experienceMode: ExperienceMode
   language: 'zh' | 'en'
-  mobileOpen?: boolean
   onExperienceModeChange: (mode: ExperienceMode) => void
-  onMobileClose?: () => void
+}
+
+function When({ values, children }: { values: boolean[]; children: React.ReactNode }): React.JSX.Element | null {
+  return values.every(Boolean) ? <>{children}</> : null
 }
 
 function Sidebar({
   experienceMode,
   language,
-  mobileOpen = false,
-  onExperienceModeChange,
-  onMobileClose
+  onExperienceModeChange
 }: SidebarProps): React.JSX.Element {
   const t = useT()
   const order = useStore((s) => s.order)
@@ -141,7 +142,6 @@ function Sidebar({
   const setView = useStore((s) => s.setView)
   const showNewSession = useStore((s) => s.showNewSession)
   const showTaskRecovery = useStore((s) => s.showTaskRecovery)
-  const view = useStore((s) => s.view)
   const settings = useStore((s) => s.settings)
   const layout = settings.layout
   const updateSettings = useStore((s) => s.updateSettings)
@@ -156,6 +156,9 @@ function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const { sidebarWidth, patchLayout, startSidebarResize } = useSidebarResize(layout, updateSettings)
+  const isAssistant = experienceMode === 'assistant'
+  const isProject = experienceMode === 'studio'
+  const isVideo = experienceMode === 'video'
   const experienceRecommendation = useMemo(() => recommendExperiencePreferences({
     settings,
     sessions: Object.values(sessions).map((session) => session.meta),
@@ -227,38 +230,23 @@ function Sidebar({
   const historyEntries = history.filter(
     (entry) => !openSessionIds.has(entry.id) && !openSdkIds.has(entry.sdkSessionId)
   )
-  const pinnedEntries: SidebarEntry[] = [
-    ...activeEntries.filter((entry) => entry.history?.pinned && !entry.history.archived),
-    ...historyEntries
-      .filter((entry) => entry.pinned && !entry.archived)
-      .map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
-      .filter(matchesQuery)
-  ]
-  const pinnedActiveIds = new Set(
-    pinnedEntries.filter((entry) => entry.kind === 'active').map((entry) => entry.id)
-  )
-  const projectActiveEntries = activeEntries.filter((entry) => !pinnedActiveIds.has(entry.id))
-  const recentHistory = historyEntries
-    .filter((entry) => !entry.pinned && !entry.archived)
-    .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
-  const archivedHistory = historyEntries
-    .filter((entry) => entry.archived)
-    .filter((entry) => matchesQuery({ kind: 'history', id: entry.id, history: entry }))
+  const visibleHistoryEntries = historyEntries
+    .map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
+    .filter(matchesQuery)
   const groupedEntries = useMemo(() => {
     return buildSidebarProjectGroups({
-      entries: [
-        ...projectActiveEntries,
-        ...recentHistory.map((entry) => ({ kind: 'history' as const, id: entry.id, history: entry }))
-      ],
+      entries: [...activeEntries, ...visibleHistoryEntries],
       legacyProjects: projects,
       projectSort,
       query,
       unassignedLabel: t('unassignedSessions'),
       workspaces: projectWorkspaces
     })
-  }, [projectActiveEntries, projectSort, projectWorkspaces, projects, query, recentHistory, t])
+  }, [activeEntries, projectSort, projectWorkspaces, projects, query, t, visibleHistoryEntries])
 
   const { projectGroups, archivedProjectGroups, unassigned, showUnassigned } = groupedEntries
+  const { archived: archivedHistory, pinned: pinnedEntries, sessions: assistantSessionEntries } =
+    splitAssistantEntries(unassigned.entries)
 
   const startRename = (entry: SidebarEntry): void => {
     setEditing({ kind: entry.kind, id: entry.id })
@@ -301,10 +289,6 @@ function Sidebar({
 
   const copyPath = (path: string): void => {
     void navigator.clipboard?.writeText(path).catch(() => undefined)
-  }
-
-  const closeMobile = (): void => {
-    onMobileClose?.()
   }
 
   const menuItemsFor = (entry: SidebarEntry): SessionMenuItem[] => {
@@ -438,15 +422,9 @@ function Sidebar({
         data-session-id={entry.id}
         role="button"
         tabIndex={0}
-        onClick={() => {
-          selectSession(entry.id)
-          closeMobile()
-        }}
+        onClick={() => selectSession(entry.id)}
         onKeyDown={(e) =>
-          activateByKeyboard(e, () => {
-            selectSession(entry.id)
-            closeMobile()
-          })
+          activateByKeyboard(e, () => selectSession(entry.id))
         }
         onContextMenu={(e) => showMenu(e, entry)}
       >
@@ -489,15 +467,9 @@ function Sidebar({
         role="button"
         tabIndex={0}
         title={t('resumeSessionTitle', { cwd: path })}
-        onClick={() => {
-          closeMobile()
-          void resumeFromHistory(entry)
-        }}
+        onClick={() => void resumeFromHistory(entry)}
         onKeyDown={(e) =>
-          activateByKeyboard(e, () => {
-            closeMobile()
-            void resumeFromHistory(entry)
-          })
+          activateByKeyboard(e, () => void resumeFromHistory(entry))
         }
         onContextMenu={(e) => showMenu(e, ref)}
       >
@@ -544,7 +516,6 @@ function Sidebar({
               aria-label={`${t('newSessionHere')}: ${group.label}`}
               title={t('newSessionHere')}
               onClick={() => {
-                closeMobile()
                 if (group.kind === 'canonical' && group.projectId) openProjectWorkspace(group.projectId)
                 else setShowNewSession(true, group.projectId)
               }}
@@ -596,18 +567,16 @@ function Sidebar({
     )
   }
 
-  const totalVisible =
-    pinnedEntries.length +
-    projectGroups.reduce((count, group) => count + group.entries.length, 0) +
-    archivedProjectGroups.reduce((count, group) => count + group.entries.length, 0) +
-    unassigned.entries.length +
-    archivedHistory.length
+  const totalVisible = sidebarVisibleCount(experienceMode,
+    [pinnedEntries.length, assistantSessionEntries.length, archivedHistory.length],
+    [...projectGroups, ...archivedProjectGroups].map((group) => group.entries.length))
   const archiveExpanded = archiveOpen || query.trim().length > 0
   const contentSearchActive = query.trim().length >= 2
+  const searchPlaceholder = t(sidebarSearchKey(experienceMode))
 
   return (
     <aside
-      className={`sidebar ${layout.sidebarCollapsed ? 'sidebar-collapsed' : ''} ${mobileOpen ? 'sidebar-mobile-open' : ''}`}
+      className={`sidebar ${layout.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
       style={
         {
           '--sidebar-width': `${layout.sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px`
@@ -622,9 +591,9 @@ function Sidebar({
         <button
           type="button"
           className={`sidebar-header-action no-drag ${searchOpen || query ? 'is-active' : ''}`}
-          aria-label={t('sidebarSearchPlaceholder')}
+          aria-label={searchPlaceholder}
           aria-expanded={searchOpen || Boolean(query)}
-          title={t('sidebarSearchPlaceholder')}
+          title={searchPlaceholder}
           onClick={() => {
             const nextOpen = !searchOpen || Boolean(query)
             setSearchOpen(nextOpen)
@@ -642,64 +611,31 @@ function Sidebar({
         >
           <SidebarPanelIcon collapsed={layout.sidebarCollapsed} />
         </button>
-        <button
-          type="button"
-          className="sidebar-mobile-close no-drag"
-          aria-label={t('closeSession')}
-          onClick={closeMobile}
-        >
-          <X size={16} aria-hidden="true" />
-        </button>
       </div>
 
       <nav className="sidebar-primary-nav" aria-label={t('primaryNavigation')}>
-        <button
-          type="button"
-          className={`sidebar-nav-item sidebar-new ${showNewSession ? 'is-active' : ''}`}
-          aria-current={showNewSession ? 'page' : undefined}
-          onClick={() => {
-            closeMobile()
-            setShowNewSession(true)
-          }}
-        >
-          <HeaderIcon name="compose" />
-          <span>{t('newSession')}</span>
-        </button>
+        <SidebarPrimaryAction
+          mode={experienceMode}
+          newSessionActive={showNewSession}
+          onNewSession={() => setShowNewSession(true)}
+          onNewProject={openNewProjectWorkspace}
+          onNewVideo={() => { onExperienceModeChange('video'); window.dispatchEvent(new Event('caogen:video-new')) }}
+        />
 
-        <button
-          type="button"
-          className={`sidebar-nav-item sidebar-office ${view === 'office' ? 'is-active' : ''}`}
-          aria-current={view === 'office' ? 'page' : undefined}
-          onPointerEnter={preloadOfficeView}
-          onFocus={preloadOfficeView}
-          onPointerDown={preloadOfficeView}
-          onClick={() => {
-            closeMobile()
-            setShowTaskRecovery(false)
-            setView('office')
-          }}
-        >
-          <HeaderIcon name="office" />
-          <span>{t('office3d')}</span>
-        </button>
-
-        {recoveryCount > 0 && (
+        <When values={[isAssistant, recoveryCount > 0]}>
           <button
             type="button"
             className={`sidebar-nav-item sidebar-recovery ${showTaskRecovery ? 'is-active' : ''}`}
             aria-expanded={showTaskRecovery}
             aria-haspopup="dialog"
             data-sidebar-action="recovery-center"
-            onClick={() => {
-              closeMobile()
-              setShowTaskRecovery(true)
-            }}
+            onClick={() => setShowTaskRecovery(true)}
           >
             <HeaderIcon name="recovery" />
             <span>{t('recoveryCenter')}</span>
             <strong className="sidebar-nav-badge">{recoveryCount}</strong>
           </button>
-        )}
+        </When>
       </nav>
 
       <div className={`sidebar-search-wrap ${searchOpen || query ? 'is-open' : ''}`}>
@@ -707,20 +643,27 @@ function Sidebar({
           ref={searchRef}
           className="input sidebar-search"
           value={query}
-          placeholder={t('sidebarSearchPlaceholder')}
+          placeholder={searchPlaceholder}
           onFocus={() => setSearchOpen(true)}
           onChange={(e) => setSidebarQuery(e.target.value)}
         />
       </div>
 
       <div className="sidebar-scroll">
-        {pinnedEntries.length > 0 && (
+        <When values={[isAssistant, pinnedEntries.length > 0]}>
           <section className="sidebar-section">
             <div className="sidebar-section-title">{t('pinned')}</div>
             {pinnedEntries.map(renderSidebarEntry)}
           </section>
-        )}
+        </When>
 
+        {isAssistant ? (
+          <section className="sidebar-section sidebar-conversations-section" data-sidebar-assistant-sessions>
+            <div className="sidebar-section-title">{t('sessions')}</div>
+            {assistantSessionEntries.map(renderSidebarEntry)}
+            {assistantSessionEntries.length === 0 && <div className="sidebar-empty">{t('noSessions')}</div>}
+          </section>
+        ) : isProject ? (
         <SidebarProjectSections
           conversationCollapsed={collapsedProjects[unassigned.key] === true}
           conversationContent={unassigned.entries.map(renderSidebarEntry)}
@@ -736,10 +679,7 @@ function Sidebar({
             ...state,
             ...Object.fromEntries(projectGroups.map((group) => [group.key, false]))
           }))}
-          onNewProject={() => {
-            closeMobile()
-            openNewProjectWorkspace()
-          }}
+          onNewProject={openNewProjectWorkspace}
           onProjectSortChange={setProjectSort}
           onToggleConversation={() => setCollapsedProjects((state) => ({
             ...state,
@@ -748,10 +688,24 @@ function Sidebar({
           projectContent={projectGroups.map((group) => renderProjectGroup(group, true))}
           projectCount={projectGroups.length}
           projectSort={projectSort}
-          showConversation={showUnassigned}
+          showConversation={false}
         />
+        ) : (
+          <SidebarVideoSections active={isVideo} query={query} onNewVideo={() => { onExperienceModeChange('video'); window.dispatchEvent(new Event('caogen:video-new')) }} projects={projectWorkspaces} />
+        )}
 
-        {archivedProjectGroups.length > 0 && (
+        <When values={[isAssistant, archivedHistory.length > 0]}>
+          <section className="sidebar-section">
+            <button className="sidebar-section-toggle" aria-expanded={archiveExpanded} onClick={() => setArchiveOpen((value) => !value)}>
+              <DisclosureChevron expanded={archiveExpanded} />
+              <span>{t('archived')}</span>
+              <span className="sidebar-group-count">{archivedHistory.length}</span>
+            </button>
+            {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
+          </section>
+        </When>
+
+        <When values={[isProject, archivedProjectGroups.length > 0]}>
           <section className="sidebar-section sidebar-archived-projects-section">
             <button
               className="sidebar-section-toggle" aria-expanded={archivedProjectsOpen || Boolean(query.trim())}
@@ -764,20 +718,8 @@ function Sidebar({
             {(archivedProjectsOpen || query.trim()) &&
               archivedProjectGroups.map((group) => renderProjectGroup(group, false))}
           </section>
-        )}
-
-        {archivedHistory.length > 0 && (
-          <section className="sidebar-section">
-            <button className="sidebar-section-toggle" aria-expanded={archiveExpanded} onClick={() => setArchiveOpen((value) => !value)}>
-              <DisclosureChevron expanded={archiveExpanded} />
-              <span>{t('archived')}</span>
-              <span className="sidebar-group-count">{archivedHistory.length}</span>
-            </button>
-            {archiveExpanded && archivedHistory.map((entry) => renderHistoryEntry(entry))}
-          </section>
-        )}
-
-        {contentSearchActive && (
+        </When>
+        <When values={[isAssistant, contentSearchActive]}>
           <section className="sidebar-section">
             <div className="sidebar-section-title">{t('contentSearchSection')}</div>
             {transcriptSearchResults.map((result) => renderSearchHit(result))}
@@ -785,35 +727,26 @@ function Sidebar({
               <div className="sidebar-empty">{t('contentSearchEmpty')}</div>
             )}
           </section>
-        )}
+        </When>
 
-        {query.trim() && totalVisible === 0 && projectGroups.length === 0 && archivedProjectGroups.length === 0 && !showUnassigned && (
+        <When values={[!isVideo, Boolean(query.trim()), totalVisible === 0, projectGroups.length === 0, archivedProjectGroups.length === 0, !showUnassigned]}>
           <div className="sidebar-empty">{t('noMatchingSessions')}</div>
-        )}
+        </When>
       </div>
 
-      <div className="sidebar-footer">
-        {experienceRecommendation && (
-          <ExperiencePreferenceSuggestion
-            language={language}
-            recommendation={experienceRecommendation}
-            settings={settings}
-            onUpdate={updateSettings}
-          />
-        )}
-        <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
-        <button
-          type="button"
-          className="sidebar-nav-item" data-sidebar-action="settings"
-          onClick={() => {
-            closeMobile()
-            setShowSettings(true)
-          }}
-        >
-          <HeaderIcon name="settings" />
-          <span>{t('settings')}</span>
-        </button>
-      </div>
+      <SidebarFooter
+        language={language}
+        mode={experienceMode}
+        recommendation={experienceRecommendation}
+        settings={settings}
+        onExperienceModeChange={onExperienceModeChange}
+        onOpenControlRoom={() => {
+          setShowTaskRecovery(false)
+          setView('office')
+        }}
+        onOpenSettings={() => setShowSettings(true)}
+        onUpdateSettings={updateSettings}
+      />
 
       <div
         className="sidebar-resize-handle no-drag"

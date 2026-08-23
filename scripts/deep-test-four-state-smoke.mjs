@@ -305,6 +305,8 @@ function assertExternalRequirements() {
   })
   assert.equal(byName.get('typecheck')?.requirement, 'required')
   assert.equal(byName.get('build')?.requirement, 'required')
+  assert.equal(byName.get('external product code boundary required')?.requirement, 'required')
+  assert.equal(byName.get('Video Studio golden path required UI e2e')?.requirement, 'required')
   assert(commands.every((item) => item.requirement === 'required' || item.requirement === 'optional'))
 }
 
@@ -384,18 +386,13 @@ function requiredExternalEnv(scenario, privateRoot) {
       FEISHU_WEBHOOK_SECRET: '',
       DINGTALK_WEBHOOK_URL: '',
       DINGTALK_WEBHOOK_SECRET: '',
-      WECOM_WEBHOOK_URL: '',
       GITEE_ACCESS_TOKEN: '',
       GITEE_OWNER: '',
       GITEE_REPO: '',
       GITEE_PR_HEAD: '',
       GITEE_PR_BASE: '',
       ALIYUN_YUNXIAO_API_URL: '',
-      ALIYUN_DEVOPS_CHECK_URL: '',
-      TENCENT_CODING_API_URL: '',
-      TENCENT_CODING_CHECK_URL: '',
-      WECHAT_MINIPROGRAM_API_URL: '',
-      WECHAT_MINIPROGRAM_CHECK_URL: ''
+      ALIYUN_DEVOPS_CHECK_URL: ''
     }
   }
   if (scenario === 'china-parity-missing-key-required') {

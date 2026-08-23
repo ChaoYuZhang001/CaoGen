@@ -78,7 +78,7 @@ async function successAndPrivacyCase(modules) {
   assert(typeof safeInput.selectionDigest === 'string' && safeInput.selectionDigest.length === 64)
   assert(!JSON.stringify(safeInput).includes(sourcePath), 'raw migration source path entered Effect input')
   assert(!JSON.stringify(safeInput).includes(sourceCanary), 'migration source content entered Effect input')
-  assert(readFileSync(path.join(projectRoot, 'CLAUDE.md'), 'utf8').includes(sourceCanary))
+  assert(readFileSync(path.join(projectRoot, 'caogen.md'), 'utf8').includes(sourceCanary))
   assertEqual(await modules.snapshotStore.getTaskSnapshot('operation:migration-success'), null)
   assertDatabaseExcludes([sourcePath, sourceCanary, '/NOT_SELECTED_PRIVATE_22'])
 

@@ -537,7 +537,7 @@ function runProviderHeaderPolicyChecks({
     'Editor-Plugin-Version',
     'X-GitHub-Api-Version'
   ]) {
-    assert(isAllowedProviderCustomHeaderName(name), `${name} Copilot routing metadata must be allowed`)
+    assert(!isAllowedProviderCustomHeaderName(name), `${name} retired Copilot metadata must fail closed`)
   }
   assert(!isAllowedProviderCustomHeaderName('X-License'), 'unknown custom headers must fail closed')
   for (const name of [

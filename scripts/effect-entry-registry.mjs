@@ -219,7 +219,7 @@ const readOnlyProjectWorkspaceActions = [
 ]
 const durableProjectWorkspaceActions = [
   'connectors:mutate', 'knowledge:search',
-  'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
+  'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'createWithTemplate', 'delete',
   'export:data', 'goals:acceptance', 'goals:archive', 'goals:create',
   'goals:restore', 'goals:transition', 'goals:update', 'goalTask:create',
   'invitations:accept', 'invitations:create', 'invitations:revoke',

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "contractId": "caogen-product-1.0-acceptance",
+  "inventory": {
+    "P0": 64,
+    "P1": 38
+  },
+  "requirementsTable": {
+    "columns": ["id", "priority", "status", "requirement"],
+    "idPattern": "^[A-Z][A-Z0-9-]+-\\d+$",
+    "priorities": ["P0", "P1"]
+  },
+  "matrixTable": {
+    "columns": ["id", "selection", "status", "evidence", "owner", "gateClass", "gate", "dependencies"],
+    "allowedColumnCounts": [7, 8]
+  },
+  "closurePolicy": {
+    "requiredPrivateInputs": ["requirements", "matrix"],
+    "verifiedStatus": "当前已验证",
+    "conditionalStatus": "条件可用",
+    "openStatus": "立项目标",
+    "criticalRecoveryRequirementIds": [
+      "RUN-004",
+      "RUN-005",
+      "TRUST-002",
+      "TRUST-003",
+      "TRUST-004",
+      "ART-002",
+      "NFR-REC-001",
+      "NFR-REC-002",
+      "NFR-REC-003",
+      "NFR-REC-004",
+      "NFR-REC-005"
+    ],
+    "requiredPackageScripts": [
+      "test:1.0-acceptance-map",
+      "test:1.0-acceptance-map:smoke",
+      "test:1.0-acceptance-map:required",
+      "test:product-1.0-acceptance",
+      "test:product-1.0-acceptance:required"
+    ],
+    "publicGateBindings": [
+      {
+        "requirementId": "WORK-002",
+        "script": "test:workitem-board:required"
+      }
+    ]
+  },
+  "privateInput": {
+    "requirementsEnv": "CAOGEN_PRODUCT_REQUIREMENTS_PATH",
+    "matrixEnv": "CAOGEN_ACCEPTANCE_MATRIX_PATH",
+    "defaultRequirementsPath": "docs/PRODUCT-REQUIREMENTS.md",
+    "defaultMatrixPath": "docs/1.0-ACCEPTANCE-MATRIX.md"
+  }
+}

@@ -87,7 +87,7 @@ try {
 
   approveRegistryItems(
     registry,
-    [path.join(projectRoot, '.caogen', 'skills')],
+    [path.join(projectRoot, '.caogen')],
     (item) => item.kind === 'skill' && item.name === 'API Review'
   )
   const skills = await toolsModule.executeCodingTool(

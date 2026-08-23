@@ -5,7 +5,7 @@ import path from 'node:path'
 export async function verifyMigrationManager(context) {
   const preview = await scanMigrationPreview(context)
   verifyMigrationPreview(context, preview)
-  await verifyMigrationResponsiveLayout(context)
+  await verifyMigrationDesktopLayout(context)
   const paths = migrationArtifactPaths(context)
   await applyMigrationDrafts(context, paths)
   await rollbackMigrationDrafts(context, paths)
@@ -14,7 +14,7 @@ export async function verifyMigrationManager(context) {
 }
 
 async function scanMigrationPreview({ assert, secretCanary, setFieldValue, targetPage, targetProject, sleep }) {
-  await targetPage.click('.sidebar-footer button.sidebar-nav-item')
+  await targetPage.click('[data-sidebar-action="settings"]')
   await targetPage.waitForSelector('[data-settings-tab="migrate"]', { visible: true, timeout: 10_000 })
   await targetPage.click('[data-settings-tab="migrate"]')
   await targetPage.waitForSelector('[data-migration-manager]', { visible: true, timeout: 5_000 })
@@ -67,11 +67,10 @@ function verifyMigrationPreview({ assert, secretCanary }, state) {
   assert(!state.leaked || !secretCanary, 'migration preview must not expose credentials')
 }
 
-async function verifyMigrationResponsiveLayout({ assert, captureScreenshot, sleep, targetPage }) {
+async function verifyMigrationDesktopLayout({ assert, captureScreenshot, sleep, targetPage }) {
   for (const viewport of [
     { width: 1320, height: 860 },
-    { width: 760, height: 700 },
-    { width: 360, height: 520 }
+    { width: 1024, height: 640 }
   ]) {
     await targetPage.setViewport({ ...viewport, deviceScaleFactor: 1 })
     await sleep(150)
@@ -106,7 +105,7 @@ async function applyMigrationDrafts({ assert, secretCanary, targetPage, targetPr
     const button = document.querySelector('[data-migration-rollback]')
     return button instanceof HTMLButtonElement && !button.disabled
   }, { timeout: 30_000 })
-  assert(existsSync(path.join(targetProject, 'CLAUDE.md')), 'selected project rule was not imported')
+  assert(existsSync(path.join(targetProject, 'caogen.md')), 'selected project rule was not imported')
   assert(!existsSync(path.join(targetProject, '.mcp.json')), 'unselected MCP was imported')
   const draftFiles = existsSync(paths.draftsDir) ? readdirSync(paths.draftsDir).filter((name) => name.endsWith('.json')) : []
   assert(draftFiles.length === 1, `memory draft was not imported exactly once: ${JSON.stringify(draftFiles)}`)
@@ -166,7 +165,7 @@ async function rollbackMigrationDrafts({ assert, targetPage, targetProject, wait
     throw new Error(`migration rollback did not settle: ${JSON.stringify(state)}; ${error instanceof Error ? error.message : String(error)}`)
   }
   await waitForValue(
-    async () => !existsSync(path.join(targetProject, 'CLAUDE.md')),
+    async () => !existsSync(path.join(targetProject, 'caogen.md')),
     Boolean,
     30_000,
     'waiting for migration rollback'

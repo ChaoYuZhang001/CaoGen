@@ -18,6 +18,7 @@ interface WelcomeDraftControllerOptions {
   providers: ProviderView[]
   requestedProjectId: string | null
   settings: AppSettings
+  preferInitialProject?: boolean
 }
 
 function resolveProjectDraft(
@@ -45,7 +46,8 @@ export function useWelcomeDraftController({
   projects,
   providers,
   requestedProjectId,
-  settings
+  settings,
+  preferInitialProject = true
 }: WelcomeDraftControllerOptions) {
   const stored = useStore((state) => state.welcomeDraft)
   const update = useStore((state) => state.updateWelcomeDraft)
@@ -57,7 +59,7 @@ export function useWelcomeDraftController({
     [projects]
   )
   const initialProject = availableProjects.find((project) => project.id === requestedProjectId)
-    ?? availableProjects[0]
+    ?? (preferInitialProject ? availableProjects[0] : undefined)
   const { projectChoice, cwd } = resolveProjectDraft(
     availableProjects,
     stored.projectChoice,

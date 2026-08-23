@@ -101,8 +101,6 @@ function ProviderQuickAccountOptions({ oauthFlow, oauthBusy, busy, localBusy, on
 }): React.JSX.Element {
   const t = useT()
   const services = [
-    ['codex-oauth', 'providerQuickChatGPTName', 'providerQuickChatGPTHint', 'providerQuickChatGPTConnect'],
-    ['github-copilot', 'providerQuickGitHubName', 'providerQuickGitHubHint', 'providerQuickGitHubConnect'],
     ['xai-oauth', 'providerQuickXaiName', 'providerQuickXaiHint', 'providerQuickXaiConnect']
   ] as const
   return <>
@@ -110,7 +108,7 @@ function ProviderQuickAccountOptions({ oauthFlow, oauthBusy, busy, localBusy, on
     {!oauthFlow && <div className="provider-quick-oauth-options">
       {services.map(([service, nameKey, hintKey, actionKey]) => <div className="provider-quick-oauth-option" key={service}>
         <div><strong>{t(nameKey)}</strong><span>{t(hintKey)}</span></div>
-        <button type="button" className={`btn ${service === 'codex-oauth' ? 'btn-primary' : 'btn-ghost'} btn-sm`} disabled={oauthBusy || busy || localBusy} onClick={() => void onConnectOAuth(service)}>{oauthBusy ? t('providerQuickOAuthStarting') : t(actionKey)}</button>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={oauthBusy || busy || localBusy} onClick={() => void onConnectOAuth(service)}>{oauthBusy ? t('providerQuickOAuthStarting') : t(actionKey)}</button>
       </div>)}
     </div>}
     {oauthFlow && <div className="provider-authorization-device provider-quick-device" data-provider-quick-authorization-flow>
@@ -123,6 +121,76 @@ function ProviderQuickAccountOptions({ oauthFlow, oauthBusy, busy, localBusy, on
       {localBusy ? t('assistantComputeCheckingLocal') : t('providerQuickUseLocal')}
     </button>
   </>
+}
+
+function ProviderConnectionDetails({
+  open,
+  name,
+  baseUrl,
+  modelsText,
+  busy,
+  probingGeneration,
+  generationProbe,
+  onToggle,
+  onNameChange,
+  onBaseUrlChange,
+  onModelsChange,
+  onProbe
+}: {
+  open: boolean
+  name: string
+  baseUrl: string
+  modelsText: string
+  busy: boolean
+  probingGeneration: boolean
+  generationProbe: ProviderGenerationProbeResult | null
+  onToggle: (open: boolean) => void
+  onNameChange: (value: string) => void
+  onBaseUrlChange: (value: string) => void
+  onModelsChange: (value: string) => void
+  onProbe: () => void
+}): React.JSX.Element {
+  const t = useT()
+  return <details
+    className="provider-quick-connection-details"
+    data-provider-quick-connection-details
+    open={open}
+    onToggle={(event) => onToggle(event.currentTarget.open)}
+  >
+    <summary>{t('providerQuickConnectionDetails')}</summary>
+    <p className="provider-quick-connection-hint">{t('providerQuickConnectionDetailsHint')}</p>
+    <div className="provider-quick-api-grid">
+      <label className="field-label">
+        {t('nameLabel')}
+        <input className="input input-block" data-provider-quick-field="name" value={name} onChange={(event) => onNameChange(event.target.value)} />
+      </label>
+    </div>
+    <label className="field-label">
+      {t('baseUrlLabel')}
+      <input
+        className="input input-block"
+        data-provider-quick-field="base-url"
+        value={baseUrl}
+        placeholder="https://your-gateway.example.com"
+        onChange={(event) => onBaseUrlChange(event.target.value)}
+      />
+    </label>
+    <label className="field-label">
+      {t('providerQuickFallbackModelsLabel')}
+      <textarea
+        className="input input-block textarea"
+        data-provider-quick-field="models"
+        rows={3}
+        value={modelsText}
+        placeholder="gpt-4.1\nclaude-sonnet-4"
+        onChange={(event) => onModelsChange(event.target.value)}
+      />
+    </label>
+    <button type="button" className="btn btn-ghost" disabled={busy || probingGeneration || !baseUrl.trim()} onClick={onProbe}>
+      {probingGeneration ? t('providerGenerationProbeRunning') : t('providerGenerationProbeButton')}
+    </button>
+    {generationProbe && <ProviderGenerationProbe result={generationProbe} />}
+  </details>
 }
 
 export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: ProviderQuickSetupProps): React.JSX.Element {
@@ -150,9 +218,11 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
   const [oauthBusy, setOauthBusy] = useState(false)
   const [oauthFlow, setOauthFlow] = useState<ProviderQuickDeviceAuthorizationView | null>(null)
   const [nextPollAt, setNextPollAt] = useState(0)
+  const [showConnectionDetails, setShowConnectionDetails] = useState(false)
 
   useEffect(() => {
     if (!diagnostic) return
+    setShowConnectionDetails(true)
     const frame = requestAnimationFrame(() => {
       setupRef.current?.querySelector('[data-provider-connection-diagnostic]')?.scrollIntoView({
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -343,6 +413,7 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
   }
 
   const handleDiagnosticAction = (action: ProviderModelSuggestedAction): void => {
+    setShowConnectionDetails(true)
     if (action === 'enter_models_manually') {
       setupRef.current?.querySelector<HTMLElement>('[data-provider-quick-field="models"]')?.focus()
       return
@@ -370,27 +441,6 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
         <div className="provider-quick-divider"><span>{t('providerQuickOrKey')}</span></div>
         <label className="field-label">{t('providerQuickTemplateLabel')}</label>
         <ProviderPresetCatalog compact presets={QUICK_API_PRESETS} onSelect={(next) => selectPreset(next.key)} />
-        <div className="provider-quick-api-grid">
-          <label className="field-label">
-            {t('nameLabel')}
-            <input
-              className="input input-block"
-              data-provider-quick-field="name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-        </div>
-        <label className="field-label">
-          {t('baseUrlLabel')}
-          <input
-            className="input input-block"
-            data-provider-quick-field="base-url"
-            value={baseUrl}
-            placeholder="https://your-gateway.example.com"
-            onChange={(event) => { setBaseUrl(event.target.value); setDiagnostic(null); setGenerationProbe(null); setError('') }}
-          />
-        </label>
         <div className="provider-quick-protocol">
           <span>{preset?.engine === 'anthropic'
             ? t('providerEngineAnthropic')
@@ -413,17 +463,20 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) void connect()
           }}
         />
-        <label className="field-label">
-          {t('providerQuickFallbackModelsLabel')}
-          <textarea
-            className="input input-block textarea"
-            data-provider-quick-field="models"
-            rows={3}
-            value={modelsText}
-            placeholder="gpt-4.1\nclaude-sonnet-4"
-            onChange={(event) => { setModelsText(event.target.value); setGenerationProbe(null) }}
-          />
-        </label>
+        <ProviderConnectionDetails
+          open={showConnectionDetails}
+          name={name}
+          baseUrl={baseUrl}
+          modelsText={modelsText}
+          busy={busy}
+          probingGeneration={probingGeneration}
+          generationProbe={generationProbe}
+          onToggle={setShowConnectionDetails}
+          onNameChange={setName}
+          onBaseUrlChange={(value) => { setBaseUrl(value); setDiagnostic(null); setGenerationProbe(null); setError('') }}
+          onModelsChange={(value) => { setModelsText(value); setGenerationProbe(null) }}
+          onProbe={() => void probeGeneration()}
+        />
         {diagnostic && (
           <ProviderConnectionDiagnostic
             error={diagnostic}
@@ -435,15 +488,6 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
             {t('providerQuickUseManualModels')}
           </button>
         )}
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={busy || probingGeneration || !baseUrl.trim()}
-          onClick={() => void probeGeneration()}
-        >
-          {probingGeneration ? t('providerGenerationProbeRunning') : t('providerGenerationProbeButton')}
-        </button>
-        {generationProbe && <ProviderGenerationProbe result={generationProbe} />}
         <ProviderQuickErrorNotice error={error} localReason={localReason} />
       </div>
       <div className="provider-editor-actions">

@@ -11,11 +11,11 @@ import {
   WebGLRenderer
 } from 'three'
 
-let attempted = false
+let outcome: boolean | null = null
 
-export function prewarmOfficeGraphics(): void {
-  if (attempted || typeof document === 'undefined') return
-  attempted = true
+export function prewarmOfficeGraphics(): boolean {
+  if (outcome !== null || typeof document === 'undefined') return outcome ?? false
+  outcome = false
 
   try {
     const canvas = document.createElement('canvas')
@@ -53,7 +53,9 @@ export function prewarmOfficeGraphics(): void {
     standardMaterial.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
+    outcome = true
   } catch {
     // Office still opens normally when WebGL is unavailable during background prefetch.
   }
+  return outcome
 }

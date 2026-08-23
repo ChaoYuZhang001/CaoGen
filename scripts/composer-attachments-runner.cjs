@@ -149,7 +149,11 @@ async function chooseMention(win, query, expected) {
 async function createSession(providerId, title) {
   return invoke('sessions:create', {
     cwd: projectDir, engine: 'openai', providerId, model: 'mock-attachments',
-    routingScope: 'fixed', permissionMode: 'default', isolated: false, title
+    routingScope: 'fixed', permissionMode: 'default', isolated: false,
+    // This fixture exercises the Assistant composer. A temporary cwd is still
+    // required for @file resolution, but must not auto-project the session into
+    // the Project sidebar via a legacy path-derived projectId.
+    unassigned: true, experienceModeOverride: 'assistant', title
   })
 }
 

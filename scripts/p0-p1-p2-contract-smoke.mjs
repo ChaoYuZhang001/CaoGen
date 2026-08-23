@@ -146,7 +146,10 @@ function verifyPackageGateContracts() {
     'test:plan-contract',
     'test:search-replace',
     'test:chat-virtual-list',
-    'test:git-tools'
+    'test:git-tools',
+    'test:p2-release-scope:required',
+    'test:china-real-network:required',
+    'test:china-tool-call-parity:required'
   ]) {
     assert(packageJson.scripts?.[scriptName], `package.json missing ${scriptName}`)
   }
@@ -188,10 +191,10 @@ function verifyChinaExternalSourceContracts() {
     'Every configured baseline provider must pass every golden tool-call case'
   )
 
-  const chinaParityGuide = readFileSync(path.join(repoRoot, 'docs/P2-EXTERNAL-REQUIRED.md'), 'utf8')
+  const projectRules = readFileSync(path.join(repoRoot, 'caogen.md'), 'utf8')
   assert(
-    chinaParityGuide.includes('every configured baseline provider must pass every golden tool-call case'),
-    'China tool-call parity operator guide must document strict baseline health semantics'
+    projectRules.includes('国产模型工具调用 parity') && projectRules.includes('不能用普通 smoke 代替'),
+    'public project rules must keep real China provider parity separate from ordinary smoke evidence'
   )
 
   const chinaRealNetwork = readFileSync(path.join(repoRoot, 'scripts/china-real-network-smoke.mjs'), 'utf8')

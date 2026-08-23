@@ -15,6 +15,7 @@ process.env.CAOGEN_USER_DATA_DIR = userDataRoot
 
 try {
   mkdirSync(path.join(projectRoot, '.caogen', 'skills', 'react-review'), { recursive: true })
+  mkdirSync(path.join(projectRoot, '.caogen', 'mcp'), { recursive: true })
   writeFileSync(
     path.join(projectRoot, '.caogen', 'skills', 'react-review', 'SKILL.md'),
     [
@@ -40,7 +41,7 @@ try {
   )
   writeFileSync(mcpServerPath, fakeMcpServer(), 'utf8')
   writeFileSync(
-    path.join(projectRoot, '.mcp.json'),
+    path.join(projectRoot, '.caogen', 'mcp', 'mcp.json'),
     JSON.stringify({
       mcpServers: {
         workspace: {
@@ -64,7 +65,7 @@ try {
 
   approveRegistryItems(
     registry,
-    [path.join(projectRoot, '.caogen', 'skills'), path.join(projectRoot, '.claude')],
+    [path.join(projectRoot, '.caogen')],
     (item) =>
       (item.kind === 'skill' && item.name === 'React Review Workflow') ||
       (item.kind === 'mcp' && item.name === 'workspace')
@@ -187,7 +188,7 @@ try {
 }
 
 function approveRegistryItems(registry, roots, select) {
-  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const view = registry.scanPluginRegistry(roots)
   const items = view.items.filter(select)
   assertEqual(items.length, 2)
   const state = items.reduce(

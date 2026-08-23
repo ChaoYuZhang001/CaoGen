@@ -24,7 +24,7 @@ export async function startOfficeViewDiagnostics(page) {
         officeEmpty: Boolean(document.querySelector('.office-empty')),
         officeLoading: Boolean(document.querySelector('.office-loading')),
         settings: Boolean(document.querySelector('.settings-page')),
-        list: Boolean(document.querySelector('.sidebar-office')),
+        list: Boolean(document.querySelector('[data-sidebar-action="control-room"]')),
         focused: document.hasFocus(),
         hidden: document.hidden
       }

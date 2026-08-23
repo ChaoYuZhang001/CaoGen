@@ -109,6 +109,23 @@ try {
   assertEqual(pluginMcp.summary, 'transport: http')
   assertEqual(pluginView.diagnostics.length, 0)
 
+  const managedRoot = path.join(tempRoot, 'managed', '.caogen', 'plugins')
+  const nativePluginRoot = path.join(managedRoot, 'native-plugin')
+  mkdirSync(path.join(nativePluginRoot, '.caogen-plugin'), { recursive: true })
+  mkdirSync(path.join(nativePluginRoot, 'skills', 'native-skill'), { recursive: true })
+  writeFileSync(
+    path.join(nativePluginRoot, '.caogen-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'native-plugin', description: 'CaoGen managed package.' })
+  )
+  writeFileSync(
+    path.join(nativePluginRoot, 'skills', 'native-skill', 'SKILL.md'),
+    ['---', 'name: Native Skill', 'description: CaoGen managed skill.', '---', '', '# Native'].join('\n')
+  )
+  const managedView = pluginRegistry.scanPluginRegistry([managedRoot])
+  assertItem(managedView, 'plugin', 'native-plugin')
+  assertItem(managedView, 'skill', 'Native Skill')
+  assertEqual(managedView.diagnostics.length, 0)
+
   const approvedState = [pluginPackage, pluginSkill, pluginMcp].reduce(
     (state, item) => pluginRegistry.approvePluginRegistryItem(state, item, new Date('2026-07-04T07:00:00.000Z')),
     pluginRegistry.emptyPluginRegistryState()

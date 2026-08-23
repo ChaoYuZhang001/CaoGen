@@ -3,7 +3,6 @@ import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { useThemeEffect } from './theme'
 import type { MenuCommand } from '../../shared/types'
-import SettingsPage from './components/SettingsModal'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
@@ -11,16 +10,10 @@ import AppListView from './components/AppListView'
 import { APP_ICON_URL, APP_NAME } from './brand'
 import { loadOfficeView } from './components/office/loadOffice'
 import type { ExperienceMode } from './store/experience-mode'
+import { sessionExperienceMode } from './store/session-experience'
 
-// 3D 办公区体积较大且依赖 WebGL,懒加载,不拖累列表视图首屏
 const OfficeView = lazy(loadOfficeView)
-
-function useMobileSidebar(): [boolean, () => void, () => void] {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
-  const toggle = useCallback(() => setOpen((current) => !current), [])
-  return [open, close, toggle]
-}
+const SettingsPage = lazy(() => import('./components/SettingsModal'))
 
 function useStudioVisited(experienceMode: ExperienceMode): boolean {
   const [visited, setVisited] = useState(experienceMode === 'studio')
@@ -38,11 +31,39 @@ function useVideoVisited(experienceMode: ExperienceMode): boolean {
   return visited
 }
 
+function useVisitedExperiences(mode: ExperienceMode): [boolean, boolean] {
+  return [useStudioVisited(mode), useVideoVisited(mode)]
+}
+
+function startPrimaryCreation(
+  mode: ExperienceMode,
+  actions: { newProject: () => void; newSession: () => void; selectMode: (mode: ExperienceMode) => void }
+): void {
+  if (mode === 'studio') return actions.newProject()
+  if (mode === 'assistant') return actions.newSession()
+  actions.selectMode('video')
+  requestAnimationFrame(() => window.dispatchEvent(new Event('caogen:video-new')))
+}
+
+function sessionOrderForMode(
+  mode: ExperienceMode,
+  order: string[],
+  sessions: ReturnType<typeof useStore.getState>['sessions']
+): string[] {
+  if (mode === 'video') return []
+  return order.filter((id) => {
+    const meta = sessions[id]?.meta
+    if (!meta) return false
+    return mode === sessionExperienceMode(meta)
+  })
+}
+
 export default function App(): React.JSX.Element {
   const init = useStore((s) => s.init)
   const activeId = useStore((s) => s.activeId)
   const hasActive = useStore((s) => (activeId ? Boolean(s.sessions[activeId]) : false))
   const order = useStore((s) => s.order)
+  const sessions = useStore((s) => s.sessions)
   const view = useStore((s) => s.view)
   const experienceMode = useStore((s) => s.experienceMode)
   const language = useStore((s) => s.settings.language)
@@ -55,12 +76,9 @@ export default function App(): React.JSX.Element {
   const selectSession = useStore((s) => s.selectSession)
   const setView = useStore((s) => s.setView)
   const setExperienceMode = useStore((s) => s.setExperienceMode)
-  const [mobileSidebarOpen, closeMobileSidebar, toggleMobileSidebar] = useMobileSidebar()
-  const studioVisited = useStudioVisited(experienceMode)
-  const videoVisited = useVideoVisited(experienceMode)
-
+  const openNewProjectWorkspace = useStore((s) => s.openNewProjectWorkspace)
+  const [studioVisited, videoVisited] = useVisitedExperiences(experienceMode)
   useThemeEffect()
-
   const focusSidebarSearch = useCallback((): void => {
     setView('list')
     requestAnimationFrame(() => {
@@ -75,7 +93,11 @@ export default function App(): React.JSX.Element {
     (command: MenuCommand): void => {
       if (command.type === 'new-session') {
         setShowSettings(false)
-        setShowNewSession(true)
+        startPrimaryCreation(experienceMode, {
+          newProject: openNewProjectWorkspace,
+          newSession: () => setShowNewSession(true),
+          selectMode: setExperienceMode
+        })
         return
       }
       if (command.type === 'settings') {
@@ -93,13 +115,13 @@ export default function App(): React.JSX.Element {
         focusSidebarSearch()
         return
       }
-      const id = order[command.index]
+      const id = sessionOrderForMode(experienceMode, order, sessions)[command.index]
       if (id) {
         setShowSettings(false)
         selectSession(id)
       }
     },
-    [focusSidebarSearch, order, selectSession, setShowCommandPalette, setShowNewSession, setShowSettings]
+    [experienceMode, focusSidebarSearch, openNewProjectWorkspace, order, selectSession, sessions, setExperienceMode, setShowCommandPalette, setShowNewSession, setShowSettings]
   )
 
   useEffect(() => {
@@ -111,10 +133,6 @@ export default function App(): React.JSX.Element {
     if (typeof window.agentDesk === 'undefined') return
     return window.agentDesk.onMenuCommand(handleMenuCommand)
   }, [handleMenuCommand])
-
-  useEffect(() => {
-    closeMobileSidebar()
-  }, [activeId, closeMobileSidebar, view])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -163,7 +181,9 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       {showSettings ? (
-        <SettingsPage />
+        <Suspense fallback={<div className="office-loading">加载设置…</div>}>
+          <SettingsPage />
+        </Suspense>
       ) : view === 'office' ? (
         <Suspense fallback={<div className="office-loading">加载办公区…</div>}>
           <OfficeView />
@@ -174,13 +194,10 @@ export default function App(): React.JSX.Element {
           experienceMode={experienceMode}
           hasActive={hasActive}
           language={language}
-          mobileSidebarOpen={mobileSidebarOpen}
           showNewSession={showNewSession}
           studioVisited={studioVisited}
           videoVisited={videoVisited}
-          onCloseMobileSidebar={closeMobileSidebar}
           onExperienceModeChange={setExperienceMode}
-          onToggleMobileSidebar={toggleMobileSidebar}
         />
       )}
       {showCommandPalette && <CommandPalette />}

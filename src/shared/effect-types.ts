@@ -377,6 +377,7 @@ export type EffectTarget =
       kind: 'webhook_message_send'
       connectorId: string
       connectorRevision: number
+      /** `wecom` is retained only so historical Effect records remain readable. */
       channel: 'feishu' | 'dingtalk' | 'wecom'
       webhookDigest: string
       payloadDigest: string

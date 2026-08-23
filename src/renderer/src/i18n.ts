@@ -155,7 +155,7 @@ const DICT: Dict = {
   // 欢迎页
   welcomeSub: { zh: '多厂商 AI 工作桌面', en: 'Multi-vendor AI work desktop' },
   welcomeCta: { zh: '选择项目目录,开始工作', en: 'Pick a project folder to start' },
-  welcomeAsk: { zh: '开始一个任务', en: 'Start a task' },
+  welcomeAsk: { zh: '今天想完成什么？', en: 'What do you want to get done today?' },
   welcomeInputPlaceholder: { zh: '描述你希望 CaoGen 完成的工作', en: 'Describe what you want CaoGen to do' },
   welcomePresetStartsNow: { zh: '点击即开始', en: 'Click to start' },
   firstTaskRecommended: { zh: '推荐', en: 'Recommended' },
@@ -213,6 +213,7 @@ const DICT: Dict = {
   welcomeFixIssuePrompt: { zh: '请诊断当前问题，实现修复并完成验证。', en: 'Diagnose the current issue, implement a fix, and verify it.' },
   welcomeToolRequiresSession: { zh: '先发起会话后即可打开该工具。', en: 'Start a session to open this tool.' },
   welcomePickProject: { zh: '选择项目', en: 'Choose project' },
+  welcomeAttachProject: { zh: '关联项目', en: 'Attach project context' },
   welcomeNeedProject: { zh: '请先选择项目目录', en: 'Pick a project folder first' },
   welcomeBrowse: { zh: '浏览…', en: 'Browse…' },
   featParallel: { zh: '多会话并行', en: 'Parallel sessions' },
@@ -298,6 +299,9 @@ const DICT: Dict = {
   officeBusinessProject: { zh: '项目', en: 'Projects' },
   officeBusinessVideo: { zh: '视频', en: 'Video' },
   officeMetricSessions: { zh: '会话', en: 'Sessions' },
+  officeMetricHiddenSessions: { zh: '隐藏', en: 'Hidden' },
+  officeHiddenSessionsAction: { zh: '查看其余 {count} 个运行', en: 'View {count} more runs' },
+  officeHiddenSessionsTitle: { zh: '其余运行', en: 'More runs' },
   officeMetricWorking: { zh: '运行', en: 'Running' },
   officeMetricAwaiting: { zh: '待授权', en: 'Approvals' },
   officeMetricCompleted: { zh: '完成', en: 'Done' },
@@ -613,11 +617,10 @@ const DICT: Dict = {
   notificationConnectorDefault: { zh: '默认', en: 'Default' },
   notificationChannelFeishu: { zh: '飞书', en: 'Feishu' },
   notificationChannelDingTalk: { zh: '钉钉', en: 'DingTalk' },
-  notificationChannelWeCom: { zh: '企业微信', en: 'WeCom' },
   migrateTitle: { zh: '导入历史工具资产', en: 'Import existing tool assets' },
   migrateHint: {
-    zh: '扫描 Codex、OpenClaw、Hermes Agent、CC Switch 等本机资产。记忆仅进入待确认草稿，自动化强制禁用、计划模式且零预算，频道仅保留脱敏统计；Provider、凭据和发送权限不会自动复制。',
-    en: 'Scan local assets from Codex, OpenClaw, Hermes Agent, CC Switch, and others. Memories remain approval drafts, automations are disabled with plan-only permission and zero budget, and channels become sanitized indexes; providers, credentials, and send authority are never copied.'
+    zh: '扫描 Codex、Cline、OpenClaw、Hermes Agent 等本机资产。记忆仅进入待确认草稿，自动化强制禁用、计划模式且零预算，频道仅保留脱敏统计；Provider、凭据和发送权限不会自动复制。',
+    en: 'Scan local assets from Codex, Cline, OpenClaw, Hermes Agent, and others. Memories remain approval drafts, automations are disabled with plan-only permission and zero budget, and channels become sanitized indexes; providers, credentials, and send authority are never copied.'
   },
   migrateScan: { zh: '扫描', en: 'Scan' },
   migrateScanning: { zh: '扫描中…', en: 'Scanning…' },
@@ -626,10 +629,6 @@ const DICT: Dict = {
   migrateScopeProject: { zh: '项目级迁移', en: 'Project migration' },
   migrateScopeConversation: { zh: '对话级迁移', en: 'Conversation migration' },
   migrateFound: { zh: '发现 {n} 项', en: '{n} found' },
-  migrateClaudeNative: {
-    zh: 'Claude 原生资产已直接可用',
-    en: 'Claude native assets are already available'
-  },
   migrateNothing: {
     zh: '未检测到可导入的规则、Skill、MCP、记忆草稿、自动化草稿或频道索引。',
     en: 'No importable rules, Skills, MCP entries, memory drafts, automation drafts, or channel indexes detected.'

@@ -241,7 +241,9 @@ async function runViewportPhase(viewport, controlledMock, attempt) {
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.setViewport(viewport)
     await page.bringToFront()
+    // Verify persistence while keeping the Assistant shell cold for the first Studio activation.
     await waitForApp(page, true)
+    await assertPersistedSession(page, phase.sessionId)
     await installSessionEventProbe(page, phase.sessionId)
     const requestOrdinal = controlledMock.requests.length + 1
     await page.evaluate((id) => window.agentDesk.sendMessage(id, {
@@ -433,7 +435,7 @@ async function createCanonicalFixture(page, name, cwd, baseUrl) {
       cwd: projectRoot,
       workspaceId: projectId,
       goalId,
-      workItemId,
+      workItemId, experienceModeOverride: 'assistant',
       engine: 'openai',
       providerId: provider.id,
       model: `nfr-perf-001-${phaseName}-model`,
@@ -627,10 +629,10 @@ async function measureModeSwitch(page, mode, temperature, ordinal) {
         if (!focusableAndUnblocked(control)) return { ready: false, reason: 'studio-control-blocked' }
         return { ready: true, reason: 'ready' }
       }
-      const composer = document.querySelector('.composer-input')
+      const composer = document.querySelector('.composer-input, .welcome-composer-input')
       if (!visible('#studio-projection-panel-session')) return { ready: false, reason: 'assistant-panel-not-visible' }
       if (!(composer instanceof HTMLElement)) return { ready: false, reason: 'assistant-composer-missing' }
-      if (!visible('.composer-input')) return { ready: false, reason: 'assistant-composer-not-visible' }
+      if (!visible('.composer-input, .welcome-composer-input')) return { ready: false, reason: 'assistant-composer-not-visible' }
       if (!focusableAndUnblocked(composer)) return { ready: false, reason: 'assistant-composer-blocked' }
       return { ready: true, reason: 'ready' }
     }
@@ -1030,15 +1032,15 @@ async function captureScreenshot(page, phase, name) {
   phase.screenshots.push(file)
   report.screenshots.push(file)
 }
-
 async function waitForApp(page, expectSession) {
   await page.waitForSelector('.app', { timeout: 20_000 })
   await page.waitForFunction(() => typeof window.agentDesk?.createProvider === 'function', { timeout: 15_000 })
   await page.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
-  await page.waitForSelector(expectSession ? '.composer-input' : '.welcome-composer-input', {
-    visible: true,
-    timeout: 15_000
-  })
+  await page.waitForSelector(expectSession ? '.composer-input' : '.welcome-composer-input', { visible: true, timeout: 15_000 })
+}
+async function assertPersistedSession(page, sessionId) {
+  const inventory = await waitForValue(() => page.evaluate(async (id) => (await window.agentDesk.listSessions()).find((item) => item.id === id), sessionId), Boolean, 15_000, 'waiting for persisted performance session inventory after renderer reload')
+  assert(inventory.id === sessionId, `reloaded performance session identity changed: ${inventory.id}`)
 }
 
 async function waitForElectronPage(browser, timeoutMs) {

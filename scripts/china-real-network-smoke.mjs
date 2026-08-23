@@ -19,12 +19,9 @@ const configurationGuide = 'docs/P2-EXTERNAL-REQUIRED.md'
 const supportedTargets = [
   'feishu',
   'dingtalk',
-  'wecom',
   'gitee_issue',
   'gitee_pull_request',
-  'aliyun_yunxiao_api',
-  'tencent_coding_api',
-  'wechat_miniprogram_api'
+  'aliyun_yunxiao_api'
 ]
 const unsupportedRequiredTargets = requiredTargets.filter((target) => !supportedTargets.includes(target))
 class ConfigurationError extends Error {}
@@ -60,7 +57,6 @@ try {
     [
       'src/main/notification/feishu.ts',
       'src/main/notification/dingtalk.ts',
-      'src/main/notification/wecom.ts',
       'src/main/agent/tools/gitee-tools.ts'
     ],
     outDir
@@ -68,7 +64,6 @@ try {
 
   const feishu = await import(pathToFileURL(findCompiled(outDir, 'feishu.js')).href)
   const dingtalk = await import(pathToFileURL(findCompiled(outDir, 'dingtalk.js')).href)
-  const wecom = await import(pathToFileURL(findCompiled(outDir, 'wecom.js')).href)
   const gitee = await import(pathToFileURL(findCompiled(outDir, 'gitee-tools.js')).href)
 
   await runOptional('feishu', Boolean(process.env.FEISHU_WEBHOOK_URL), async () => {
@@ -87,15 +82,6 @@ try {
       { webhookUrl: process.env.DINGTALK_WEBHOOK_URL, secret: process.env.DINGTALK_WEBHOOK_SECRET, dryRun: false }
     )
     return normalizeSendResult(result, process.env.DINGTALK_WEBHOOK_URL)
-  })
-
-  await runOptional('wecom', Boolean(process.env.WECOM_WEBHOOK_URL), async () => {
-    assertRequiredPublicEndpoint(process.env.WECOM_WEBHOOK_URL, 'wecom')
-    const result = await wecom.sendWeComNotification(
-      { title: 'CaoGen P2-004 real network smoke', text: `timestamp=${new Date().toISOString()}` },
-      { webhookUrl: process.env.WECOM_WEBHOOK_URL, dryRun: false }
-    )
-    return normalizeSendResult(result, process.env.WECOM_WEBHOOK_URL)
   })
 
   await runOptional(
@@ -153,25 +139,6 @@ try {
       authPrefix: process.env.ALIYUN_YUNXIAO_AUTH_PREFIX
     })
   )
-  await runOptional('tencent_coding_api', Boolean(process.env.TENCENT_CODING_API_URL || process.env.TENCENT_CODING_CHECK_URL), async () =>
-    requestConfiguredApi({
-      url: process.env.TENCENT_CODING_API_URL || process.env.TENCENT_CODING_CHECK_URL,
-      token: process.env.TENCENT_CODING_TOKEN,
-      method: process.env.TENCENT_CODING_METHOD,
-      bodyText: process.env.TENCENT_CODING_BODY,
-      authPrefix: process.env.TENCENT_CODING_AUTH_PREFIX
-    })
-  )
-  await runOptional('wechat_miniprogram_api', Boolean(process.env.WECHAT_MINIPROGRAM_API_URL || process.env.WECHAT_MINIPROGRAM_CHECK_URL), async () =>
-    requestConfiguredApi({
-      url: process.env.WECHAT_MINIPROGRAM_API_URL || process.env.WECHAT_MINIPROGRAM_CHECK_URL,
-      token: process.env.WECHAT_MINIPROGRAM_TOKEN,
-      method: process.env.WECHAT_MINIPROGRAM_METHOD,
-      bodyText: process.env.WECHAT_MINIPROGRAM_BODY,
-      authPrefix: process.env.WECHAT_MINIPROGRAM_AUTH_PREFIX
-    })
-  )
-
   const active = results.filter((item) => item.status !== 'skipped')
   const configurationBlockers = []
   const executionFailures = []
@@ -421,7 +388,6 @@ function missingRealNetworkConfiguration() {
   const missing = []
   if (targetSelected('feishu') && !process.env.FEISHU_WEBHOOK_URL) missing.push({ target: 'feishu', env: ['FEISHU_WEBHOOK_URL'] })
   if (targetSelected('dingtalk') && !process.env.DINGTALK_WEBHOOK_URL) missing.push({ target: 'dingtalk', env: ['DINGTALK_WEBHOOK_URL'] })
-  if (targetSelected('wecom') && !process.env.WECOM_WEBHOOK_URL) missing.push({ target: 'wecom', env: ['WECOM_WEBHOOK_URL'] })
   if (targetSelected('gitee_issue') && !(process.env.GITEE_ACCESS_TOKEN && process.env.GITEE_OWNER && process.env.GITEE_REPO)) {
     missing.push({ target: 'gitee_issue', env: ['GITEE_ACCESS_TOKEN', 'GITEE_OWNER', 'GITEE_REPO'] })
   }
@@ -433,12 +399,6 @@ function missingRealNetworkConfiguration() {
   }
   if (targetSelected('aliyun_yunxiao_api') && !(process.env.ALIYUN_YUNXIAO_API_URL || process.env.ALIYUN_DEVOPS_CHECK_URL)) {
     missing.push({ target: 'aliyun_yunxiao_api', env: ['ALIYUN_YUNXIAO_API_URL'] })
-  }
-  if (targetSelected('tencent_coding_api') && !(process.env.TENCENT_CODING_API_URL || process.env.TENCENT_CODING_CHECK_URL)) {
-    missing.push({ target: 'tencent_coding_api', env: ['TENCENT_CODING_API_URL'] })
-  }
-  if (targetSelected('wechat_miniprogram_api') && !(process.env.WECHAT_MINIPROGRAM_API_URL || process.env.WECHAT_MINIPROGRAM_CHECK_URL)) {
-    missing.push({ target: 'wechat_miniprogram_api', env: ['WECHAT_MINIPROGRAM_API_URL'] })
   }
   for (const target of unsupportedRequiredTargets) missing.push({ target, error: 'unsupported target' })
   return missing

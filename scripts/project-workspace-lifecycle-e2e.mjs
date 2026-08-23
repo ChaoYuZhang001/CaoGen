@@ -7,6 +7,7 @@ import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
 import { dismissRecoveryCenter } from './lib/project-workspace-lifecycle-ui.mjs'
+import { clickProjectResourceAdd, openProjectDetails, setControlledInputWhenStable } from './lib/project-workspace-lifecycle-actions.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -66,7 +67,7 @@ const report = {
       'directory-free managed ProjectWorkspace creation through Studio UI',
       'one-input Goal/WorkItem/Session startup with exact ownership and double-click locking',
       'directory-free Workspace execution root without a hidden legacy Project',
-      'Codex-style canonical Project grouping, controls, restart persistence, and mobile layout',
+      'canonical Project grouping, controls, restart persistence, and minimum desktop layout',
       'directory, file_set, repository, and connector resource lifecycle',
       'project edit, archive, restore, export, soft delete, and permanent delete',
       'sealed sanitized Project aggregate export and digest verification',
@@ -98,6 +99,12 @@ try {
       const project = await waitForProject(page, (candidate) => candidate.name === 'Directory Free Lifecycle Project')
       state.projectId = project.id
       assert(project.resources.length === 0, `new project unexpectedly has resources: ${project.resources.length}`)
+      const templateRows = await page.evaluate(async (projectId) => ({
+        goals: await window.agentDesk.listProjectGoals(projectId),
+        workItems: await window.agentDesk.listProjectWorkItems(projectId)
+      }), project.id)
+      assert(templateRows.goals.length === 1, `project create returned before template Goal initialization: ${templateRows.goals.length}`)
+      assert(templateRows.workItems.length === 3, `project create returned before template WorkItem initialization: ${templateRows.workItems.length}`)
       await waitForProjectStatus(page, 'active')
     })
 
@@ -108,7 +115,7 @@ try {
       () => verifyGoalTaskRetry(page))
 
     await check('resource form supports Escape without mutation', async () => {
-      await page.click('[data-project-action="add-resource"]')
+      await clickProjectResourceAdd(page)
       await page.waitForSelector('[data-project-form="resource"]', { visible: true, timeout: 5_000 })
       await page.keyboard.press('Escape')
       await page.waitForSelector('[data-project-form="resource"]', { hidden: true, timeout: 5_000 })
@@ -653,8 +660,15 @@ async function verifyOneInputGoalTask(page) {
     })
   })
   await page.waitForSelector('[data-goal-task-objective]', { visible: true, timeout: 15_000 })
+  const initialSurface = await page.evaluate(() => ({
+    detailsOpen: document.querySelector('[data-project-secondary-details]')?.hasAttribute('open') === true,
+    taskInputVisible: Boolean(document.querySelector('[data-goal-task-objective]')?.getClientRects().length),
+    remoteMounted: document.querySelector('.remote-continuation-panel') !== null
+  }))
+  assert(!initialSurface.detailsOpen && initialSurface.taskInputVisible && !initialSurface.remoteMounted,
+    `project primary surface did not start focused: ${JSON.stringify(initialSurface)}`)
   const objective = 'Prepare a verified directory-free project brief'
-  await page.type('[data-goal-task-objective]', objective)
+  await setControlledInputWhenStable(page, '[data-goal-task-objective]', objective)
   await page.$eval('[data-goal-task-start]', (button) => {
     button.click()
     button.click()
@@ -704,50 +718,41 @@ async function verifyOneInputGoalTask(page) {
   state.goalTaskSessionId = session.id
   await verifyCanonicalProjectGroup(page, { expectedSessionId: session.id, exerciseControls: true })
   await screenshot(page, '00-one-input-started')
-  await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
+  await page.setViewport({ width: 1024, height: 640, deviceScaleFactor: 1 })
   await sleep(250)
-  const sidebarExpanded = await page.$eval('.mobile-sidebar-toggle', (button) => button.getAttribute('aria-expanded') === 'true')
-  if (sidebarExpanded) {
-    await page.click('.mobile-sidebar-toggle')
-    await page.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
-  }
-  const mobileLayout = await page.evaluate(() => {
+  const desktopLayout = await page.evaluate((projectId) => {
+    const sidebar = document.querySelector('.sidebar')
+    const projectGroup = document.querySelector(`[data-project-kind="canonical"][data-project-id="${projectId}"]`)
     const starter = document.querySelector('[data-goal-task-starter]')
     const input = document.querySelector('[data-goal-task-objective]')
     const button = document.querySelector('[data-goal-task-start]')
+    const sidebarRect = sidebar?.getBoundingClientRect()
+    const groupRect = projectGroup?.getBoundingClientRect()
+    const starterRect = starter?.getBoundingClientRect()
     return {
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      sidebarOverflow: sidebar ? sidebar.scrollWidth - sidebar.clientWidth : -1,
+      sidebarVisible: Boolean(sidebarRect && sidebarRect.width > 0 && sidebarRect.left >= 0),
+      projectGroupVisible: Boolean(groupRect && groupRect.width > 0 && groupRect.left >= 0),
       starterOverflow: starter ? starter.scrollWidth - starter.clientWidth : -1,
       inputWidth: input?.getBoundingClientRect().width ?? 0,
       buttonWidth: button?.getBoundingClientRect().width ?? 0,
-      starterLeft: starter?.getBoundingClientRect().left ?? -1,
-      starterRight: starter?.getBoundingClientRect().right ?? -1
-    }
-  })
-  assert(mobileLayout.documentOverflow <= 1 && mobileLayout.starterOverflow <= 1,
-    `mobile Goal Task layout overflowed: ${JSON.stringify(mobileLayout)}`)
-  assert(mobileLayout.inputWidth > 0 && mobileLayout.buttonWidth > 0,
-    `mobile Goal Task controls are not visible: ${JSON.stringify(mobileLayout)}`)
-  assert(mobileLayout.starterLeft >= 0 && mobileLayout.starterRight <= 390,
-    `mobile Goal Task starter is outside the viewport: ${JSON.stringify(mobileLayout)}`)
-  await screenshot(page, '00-one-input-started-mobile')
-  await page.click('.mobile-sidebar-toggle')
-  await page.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar-mobile-open')).transform === 'matrix(1, 0, 0, 1, 0, 0)', { timeout: 5_000 })
-  const mobileSidebar = await page.evaluate((projectId) => {
-    const sidebar = document.querySelector('.sidebar-mobile-open')
-    const group = document.querySelector(`[data-project-kind="canonical"][data-project-id="${projectId}"]`)
-    const rect = group?.getBoundingClientRect()
-    return {
-      sidebarOverflow: sidebar ? sidebar.scrollWidth - sidebar.clientWidth : -1,
-      groupVisible: Boolean(rect && rect.width > 0 && rect.left >= 0 && rect.right <= window.innerWidth)
+      starterLeft: starterRect?.left ?? -1,
+      starterRight: starterRect?.right ?? -1,
+      mobileTogglePresent: document.querySelector('.mobile-sidebar-toggle') != null
     }
   }, state.projectId)
-  assert(mobileSidebar.sidebarOverflow <= 1 && mobileSidebar.groupVisible,
-    `mobile canonical Project group is clipped: ${JSON.stringify(mobileSidebar)}`)
-  await screenshot(page, '00-one-input-sidebar-mobile')
-  await page.click('.sidebar-mobile-close')
-  await page.waitForSelector('.sidebar-mobile-open', { hidden: true, timeout: 5_000 })
+  assert(desktopLayout.documentOverflow <= 1 && desktopLayout.starterOverflow <= 1,
+    `desktop Goal Task layout overflowed: ${JSON.stringify(desktopLayout)}`)
+  assert(desktopLayout.sidebarVisible && desktopLayout.projectGroupVisible,
+    `desktop Project navigation is not visible: ${JSON.stringify(desktopLayout)}`)
+  assert(desktopLayout.inputWidth > 0 && desktopLayout.buttonWidth > 0,
+    `desktop Goal Task controls are not visible: ${JSON.stringify(desktopLayout)}`)
+  assert(desktopLayout.starterLeft >= 0 && desktopLayout.starterRight <= 1024,
+    `desktop Goal Task starter is outside the viewport: ${JSON.stringify(desktopLayout)}`)
+  assert(desktopLayout.mobileTogglePresent === false,
+    `desktop-only shell rendered a mobile sidebar control: ${JSON.stringify(desktopLayout)}`)
+  await screenshot(page, '00-one-input-started-desktop-minimum')
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await page.evaluate((id) => window.agentDesk.closeSession(id), session.id)
   await waitForValue(
@@ -786,7 +791,10 @@ async function verifyCanonicalProjectGroup(page, { expectedSessionId, exerciseCo
     `canonical Project Session count mismatch: ${JSON.stringify(summary)}`)
   assert(summary.sessionInProject && !summary.sessionInConversation,
     `owned Session was not isolated from conversation grouping: ${JSON.stringify(summary)}`)
-  assert(summary.conversationCount === '0', `conversation group contains owned Sessions: ${JSON.stringify(summary)}`)
+  assert(
+    summary.conversationCount === undefined || summary.conversationCount === '0',
+    `conversation group contains owned Sessions: ${JSON.stringify(summary)}`
+  )
   if (!exerciseControls) return
 
   await page.click(`${group} .sidebar-group-head`)
@@ -852,8 +860,7 @@ async function verifyGoalTaskRetry(page) {
 }
 
 async function addResource(page, kind, label, location, expectedCount) {
-  await waitForEnabled(page, '[data-project-action="add-resource"]')
-  await page.click('[data-project-action="add-resource"]')
+  await clickProjectResourceAdd(page)
   await page.waitForSelector('[data-project-form="resource"]', { visible: true, timeout: 5_000 })
   await page.select('[data-project-form="resource"] [name="resourceKind"]', kind)
   await page.type('[data-project-form="resource"] [name="resourceLabel"]', label)
@@ -955,10 +962,11 @@ async function readProject(page, projectId) {
 }
 
 async function waitForProjectStatus(page, status) {
-  await page.waitForFunction(
-    (expected) => document.querySelector('[data-project-lifecycle]')?.getAttribute('data-project-status') === expected,
-    { timeout: 10_000 },
-    status
+  await waitForValue(
+    () => readProject(page, state.projectId),
+    (project) => project?.status === status,
+    10_000,
+    `waiting for ProjectWorkspace status ${status}`
   )
 }
 
@@ -985,6 +993,7 @@ async function waitForWorkItemLease(page, id, expected) {
 }
 
 async function waitForEnabled(page, selector) {
+  if (selector.includes('data-project-action')) await openProjectDetails(page)
   await page.waitForFunction(
     (candidate) => {
       const element = document.querySelector(candidate)

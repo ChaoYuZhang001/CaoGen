@@ -79,8 +79,18 @@ writeFileSync(path.join(ancestor, 'SKILL.md'), '# ancestor')
 r = installLocalPlugin(ancestor, path.join(ancestor, 'managed-plugins'))
 assert(!r.ok && /不能包含托管插件目录/.test(r.error), `ancestor source rejected: ${JSON.stringify(r)}`)
 
+// 10. CaoGen-native manifest remains installable alongside compatibility manifests
+const caogenNative = mkdtempSync(path.join(tmpdir(), 'caogen-native-plugin-'))
+mkdirSync(path.join(caogenNative, '.caogen-plugin'), { recursive: true })
+writeFileSync(path.join(caogenNative, '.caogen-plugin', 'plugin.json'), JSON.stringify({ name: 'caogen-native' }))
+writeFileSync(path.join(caogenNative, 'SKILL.md'), '# native')
+r = installLocalPlugin(caogenNative, root)
+assert(r.ok && r.name === 'caogen-native', `CaoGen-native manifest install: ${JSON.stringify(r)}`)
+assert(existsSync(path.join(root, 'caogen-native', '.caogen-plugin', 'plugin.json')), 'native manifest copied')
+
 rmSync(root, { recursive: true, force: true }); rmSync(src, { recursive: true, force: true })
 rmSync(empty, { recursive: true, force: true }); rmSync(evil, { recursive: true, force: true })
 rmSync(oversized, { recursive: true, force: true }); rmSync(ancestor, { recursive: true, force: true })
+rmSync(caogenNative, { recursive: true, force: true })
 rmSync(buildDir, { recursive: true, force: true })
 console.log('pluginInstall smoke ok')

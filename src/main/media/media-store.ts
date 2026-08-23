@@ -1532,7 +1532,7 @@ function parseVideoScript(script: string): Array<{
     const first = lines[0] ?? `Scene ${sceneIndex + 1}`
     const explicitTitle = /^(?:#{1,3}\s*)?(?:scene|场景|第\s*\d+\s*场)\b[:：\s-]*(.*)$/iu.exec(first)
     const title = (explicitTitle?.[1] || `Scene ${sceneIndex + 1}`).slice(0, 240)
-    const body = explicitTitle ? lines.slice(1).join('\n') : lines.join('\n')
+    const body = explicitTitle ? (lines.slice(1).join('\n') || explicitTitle[1] || sceneText) : lines.join('\n')
     const shotParts = body.split(/\n(?=(?:[-*]\s*)?(?:shot|镜头|分镜|\d+[.)、])\s*)/iu)
       .map((part) => part.replace(/^(?:[-*]\s*)?(?:shot|镜头|分镜|\d+[.)、])\s*[:：-]?\s*/iu, '').trim())
       .filter(Boolean)

@@ -1,7 +1,7 @@
 {
   "name": "caogen",
   "productName": "CaoGen",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "AGPL-3.0-only",
   "author": {
     "name": "Chaoyu Zhang",
@@ -34,6 +34,9 @@
     "update:public-status": "node scripts/update-public-status.mjs",
     "test:product-positioning": "node scripts/product-positioning-audit.mjs",
     "test:product-positioning:required": "node scripts/product-positioning-audit.mjs --required",
+    "test:external-product-boundary": "node scripts/external-product-code-boundary.mjs",
+    "test:external-product-boundary:required": "npm run test:external-product-boundary",
+    "test:external-product-boundary-smoke": "node scripts/external-product-code-boundary-smoke.mjs",
     "test:community-feedback": "node scripts/community-feedback-audit.mjs",
     "test:community-feedback:required": "node scripts/community-feedback-audit.mjs --required",
     "test:community-feedback:live:required": "node scripts/community-feedback-audit.mjs --required --live",
@@ -140,6 +143,8 @@
     "test:verified-delivery-flow:required": "npm run test:verified-delivery-flow",
     "test:assistant-studio-ui": "node scripts/assistant-studio-ui-e2e.mjs",
     "test:assistant-studio-ui:required": "npm run build && npm run test:assistant-studio-ui",
+    "test:video-studio-golden": "node scripts/video-studio-golden-e2e.mjs",
+    "test:video-studio-golden:required": "npm run build && npm run test:video-studio-golden",
     "test:assistant-studio-consistency": "node scripts/assistant-studio-consistency-e2e.mjs",
     "test:assistant-studio-consistency:required": "npm run build && npm run test:assistant-studio-consistency",
     "test:session-model-switch-policy": "node scripts/session-model-switch-policy-smoke.mjs",

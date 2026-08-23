@@ -131,7 +131,7 @@ try {
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
-  await waitForApp(page, false)
+  await waitForApp(page)
 
   await check('Assistant creates one owned Project, Goal, WorkItem, and production Run', async () => {
     const created = await page.evaluate(async ({ entityIds, cwd, baseUrl }) => {
@@ -281,7 +281,7 @@ try {
 
   await check('renderer reload preserves the same store and Studio rows', async () => {
     await page.reload({ waitUntil: 'domcontentloaded' })
-    await waitForApp(page, true)
+    await waitForApp(page)
     assertSnapshotEqual(baseline, await readCanonicalSnapshot(page), 'renderer reload')
     await clickMode(page, 'studio')
     await clickStudioSurface(page, 'workspace')
@@ -541,13 +541,13 @@ async function clickStudioSurface(targetPage, surface) {
   })
 }
 
-async function waitForApp(targetPage, expectSession) {
+async function waitForApp(targetPage) {
   await targetPage.waitForSelector('.app', { timeout: 20_000 })
   await targetPage.waitForFunction(() =>
     typeof window.agentDesk?.createProjectWorkspace === 'function' &&
     typeof window.agentDesk?.createWorkflowArtifact === 'function', { timeout: 15_000 })
   await targetPage.waitForSelector('[data-experience-mode-switcher]', { visible: true, timeout: 15_000 })
-  await targetPage.waitForSelector(expectSession ? '.composer-input' : '.welcome-composer-input', {
+  await targetPage.waitForSelector('.welcome-composer-input, .composer-input', {
     visible: true,
     timeout: 15_000
   })

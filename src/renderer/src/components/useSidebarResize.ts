@@ -3,7 +3,7 @@ import type * as React from 'react'
 import type { LayoutSettings } from '../../../shared/types'
 
 const SIDEBAR_MIN_WIDTH = 208
-const SIDEBAR_MAX_WIDTH = 360
+const SIDEBAR_MAX_WIDTH = 420
 
 type UpdateSettings = (settings: { layout: LayoutSettings }) => Promise<unknown>
 

@@ -1,4 +1,4 @@
-export type NotificationConnectorChannel = 'feishu' | 'dingtalk' | 'wecom'
+export type NotificationConnectorChannel = 'feishu' | 'dingtalk'
 
 export interface NotificationConnectorInput {
   name?: string

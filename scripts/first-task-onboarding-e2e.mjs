@@ -357,10 +357,10 @@ if (onboarding) {
     assert.match(sendMessage, /const id = sessionId \?\? get\(\)\.activeId/)
 
     const welcomeSubmit = welcome.slice(
-      welcome.indexOf('  const submit = async ('),
-      welcome.indexOf('  const startPreset = (tool: WelcomeTool): void => {')
+      welcome.indexOf('function useWelcomeSubmitAction('),
+      welcome.indexOf('function useWelcomeRetryAction(')
     )
-    assert.match(welcomeSubmit, /const candidateSessionId = await startSessionWithPrompt\(/)
+    assert.match(welcomeSubmit, /const candidateSessionId = await input\.startSessionWithPrompt\(/)
     assert.match(welcomeSubmit, /patchFirstTaskOnboardingRecord\(\{\s*candidateSessionId,/)
     assert.doesNotMatch(welcomeSubmit, /getState\(\)\.activeId/)
   })
@@ -381,7 +381,7 @@ if (onboarding) {
     assert.match(result, /getStudioResultSnapshot\(sessionId\)/)
     assert.match(result, /WorkflowAcceptanceRow/)
     assert.match(welcome, /tool\.key !== 'understand'/)
-    assert.match(welcome, /const candidateSessionId = await startSessionWithPrompt\(/)
+    assert.match(welcome, /const candidateSessionId = await input\.startSessionWithPrompt\(/)
     assert.match(welcome, /clearWelcomeDraft\(\)/)
     assert.match(store, /WelcomeDraftSlice/)
     assert.match(store, /\.\.\.createWelcomeDraftSlice\(/)

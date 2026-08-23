@@ -1,5 +1,6 @@
 import type { Provider, ProviderInput } from '../../shared/types'
 import {
+  inspectProviderAuthorizationHeaders,
   inspectProviderCustomHeaders,
   isAllowedProviderManagedCredentialHeaderName
 } from '../providerCredentialBroker'
@@ -27,7 +28,18 @@ type ProviderCredentialHeaderDefaults = Partial<Pick<
 >>
 
 export function normalizedCustomHeaders(value: string | undefined): string | undefined {
-  const inspected = inspectProviderCustomHeaders(value ?? '')
+  return normalizeCustomHeaders(value, inspectProviderCustomHeaders)
+}
+
+export function normalizedAuthorizationHeaders(value: string | undefined): string | undefined {
+  return normalizeCustomHeaders(value, inspectProviderAuthorizationHeaders)
+}
+
+function normalizeCustomHeaders(
+  value: string | undefined,
+  inspect: (value: string) => { safeValue: string; rejectedNames: string[] }
+): string | undefined {
+  const inspected = inspect(value ?? '')
   if (inspected.rejectedNames.length > 0) {
     throw new Error(`自定义请求头只允许非敏感路由元数据字段;已拒绝: ${inspected.rejectedNames.join(', ')}。凭据请使用 API 密钥字段。`)
   }

@@ -1633,6 +1633,41 @@ textarea {
   font-size: 12.5px;
 }
 
+.sidebar-video-entry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-video-entry:hover,
+.sidebar-video-entry:focus-visible {
+  background: var(--surface-hover);
+}
+
+.sidebar-video-entry-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sidebar-video-entry-body strong,
+.sidebar-video-entry-body small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-video-entry-body strong { font-size: 12px; font-weight: 600; }
+.sidebar-video-entry-body small { color: var(--text-dim); font-size: 10px; }
+
 .sidebar-empty-hero {
   min-height: 220px;
   display: flex;
@@ -2208,6 +2243,10 @@ textarea {
   color: var(--text-dim);
 }
 
+.welcome-project-bar[hidden] {
+  display: none;
+}
+
 .welcome-project-select,
 .welcome-project-path {
   min-width: 0;
@@ -2256,6 +2295,29 @@ textarea {
 
 .welcome-project-browse:active {
   transform: scale(0.97);
+}
+
+.welcome-project-trigger {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.welcome-project-trigger:hover,
+.welcome-project-trigger:focus-visible,
+.welcome-project-trigger[aria-pressed='true'] {
+  border-color: var(--text-faint);
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .welcome-composer {
@@ -2385,7 +2447,8 @@ textarea {
   color: var(--text);
 }
 
-.task-strategy-control button.active {
+.task-strategy-control button.active,
+.task-strategy-control button.active:hover:not(:disabled) {
   background: var(--accent);
   color: var(--accent-text);
 }
@@ -5715,7 +5778,7 @@ textarea {
   width: 100%;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 959px) {
   .workbench {
     flex-direction: column;
   }
@@ -7076,6 +7139,26 @@ textarea {
   gap: 6px 12px;
   color: var(--text-dim);
   font-size: 11px;
+}
+
+.provider-quick-connection-details {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+
+.provider-quick-connection-details > summary {
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  list-style-position: inside;
+}
+
+.provider-quick-connection-hint {
+  margin: 7px 0 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .provider-quick-oauth-options {
@@ -12932,6 +13015,92 @@ textarea {
   margin-top: 1px;
   font-size: 13px;
   line-height: 1.1;
+}
+
+.office-hidden-sessions {
+  position: relative;
+  grid-column: 1 / -1;
+  pointer-events: auto;
+}
+
+.office-hidden-sessions-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 27px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-raised) 78%, transparent);
+  color: var(--text);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.office-hidden-sessions-toggle:hover,
+.office-hidden-sessions-toggle[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-raised));
+}
+
+.office-hidden-sessions-list {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 5;
+  display: grid;
+  gap: 3px;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(280px, 45vh);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-raised) 94%, transparent);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+}
+
+.office-hidden-sessions-title {
+  padding: 3px 6px 5px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.office-hidden-session {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.office-hidden-session:hover,
+.office-hidden-session:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.office-hidden-session span,
+.office-hidden-session small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-hidden-session span {
+  font-size: 11px;
+}
+
+.office-hidden-session small {
+  color: var(--text-dim);
+  font-size: 9px;
 }
 
 .office-camera-strip {

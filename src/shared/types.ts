@@ -2713,9 +2713,9 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Pr
   ): Promise<PluginRegistryTrustMutationResult>
   /** MCP 运行态探测:stdio 真握手 / http 可达性(最多 20 项) */
   probeMcpServers(items: PluginRegistryItem[], sessionId?: string): Promise<import('./mcp-probe-types').McpProbeOperationResult>
-  /** 本地安装插件:不传路径则弹目录选择器;仅复制入 ~/.claude/plugins */
+  /** 本地安装插件:不传路径则弹目录选择器;仅复制入 ~/.caogen/plugins */
   installLocalPlugin(sourcePath?: string, overwrite?: boolean): Promise<PluginInstallResult>
-  /** 卸载托管插件:移入回收站(可恢复),仅限 ~/.claude/plugins 内 */
+  /** 卸载托管插件:移入回收站(可恢复),仅限 ~/.caogen/plugins 内 */
   uninstallPlugin(targetPath: string): Promise<PluginUninstallResult>
   listRoutines(): Promise<Routine[]>
   createRoutine(input: CreateRoutineInput): Promise<Routine>

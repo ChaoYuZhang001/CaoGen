@@ -74,39 +74,26 @@ async function runX1Scenario() {
         assert(providers.length === 0, `first launch must not inject provider defaults: ${JSON.stringify(providers)}`)
       })
 
-      await check(cdp, 'X1 new session is an inline workspace with no engine selector', async () => {
+      await check(cdp, 'X1 Assistant starts directly without technical routing controls', async () => {
         await clickByText(cdp, '新建会话')
-        await waitForText(cdp, '开始一个任务')
+        await waitForSelector(cdp, '[data-welcome-heading="true"]')
         await chooseSelectOptionByText(cdp, '新项目目录')
         await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-        await clickByText(cdp, '工作台')
-        await clickByText(cdp, '会话与工具')
         const selected = await selectedNewSessionValues(cdp)
         assert(selected.modalCount === 0, `new session must not open a modal: ${JSON.stringify(selected)}`)
         assert(selected.engineSelectCount === 0, `conversation engine selector must be absent: ${JSON.stringify(selected)}`)
-        assert(selected.routingModeCount === 3, `three routing modes must be available: ${JSON.stringify(selected)}`)
-        assert(selected.activeRoutingMode.includes('跨厂商自动'), `global auto should be the default: ${JSON.stringify(selected)}`)
-        assert(selected.providerSelectCount === 0, `global auto should not require a Provider selector: ${JSON.stringify(selected)}`)
-        assert(selected.modelSelectCount === 0, `global auto should not require a model selector: ${JSON.stringify(selected)}`)
-
-        await clickByText(cdp, '厂商内自动')
-        const providerAuto = await selectedNewSessionValues(cdp)
-        assert(providerAuto.providerSelectCount === 1, `provider auto must ask for one Provider: ${JSON.stringify(providerAuto)}`)
-        assert(providerAuto.modelSelectCount === 0, `provider auto must not ask for a fixed model: ${JSON.stringify(providerAuto)}`)
-
-        await clickByText(cdp, '指定模型')
-        const fixed = await selectedNewSessionValues(cdp)
-        assert(fixed.providerSelectCount === 1, `fixed mode must ask for one Provider: ${JSON.stringify(fixed)}`)
-        assert(fixed.modelSelectCount === 1, `fixed mode must ask for one model: ${JSON.stringify(fixed)}`)
-        await clickByText(cdp, '跨厂商自动')
+        assert(selected.routingModeCount === 0, `Assistant must hide technical routing controls: ${JSON.stringify(selected)}`)
+        assert(selected.providerSelectCount === 0, `Assistant must not require a Provider selector: ${JSON.stringify(selected)}`)
+        assert(selected.modelSelectCount === 0, `Assistant must not require a model selector: ${JSON.stringify(selected)}`)
+        assert(selected.projectChoice === '__new_project__', `optional project attachment was not retained: ${JSON.stringify(selected)}`)
       })
 
-      await check(cdp, 'X1 send is blocked only until a keyed Provider is selected', async () => {
+      await check(cdp, 'X1 Assistant send exposes non-technical compute recovery', async () => {
         await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', '检查项目')
         await clickSelector(cdp, '.welcome-send')
-        await waitForText(cdp, '请选择已配置 API key 的 Provider', 10_000)
+        await waitForSelector(cdp, '[data-assistant-start-state="compute-unavailable"]', 10_000)
         const body = await visibleText(cdp)
-        assert(!body.includes('请选择 Agent 引擎'), 'engine selection error must not be shown')
+        assert(!/Provider|model|模型|API|Key|引擎/i.test(body), `technical recovery text leaked: ${body}`)
       })
       await screenshot(cdp, 'x1-02-inline-provider-required')
     })
@@ -151,6 +138,9 @@ async function runS3Scenario() {
   const app = await startElectron(userDataDir, 9800)
   try {
     await withCdp(app, async (cdp) => {
+      await waitForSelector(cdp, '[data-experience-mode-option="studio"]', 20_000)
+      await waitForText(cdp, 'Loose Conversation', 20_000)
+      await clickSelector(cdp, '[data-experience-mode-option="studio"]')
       await waitForText(cdp, 'Alpha Keep Current', 20_000)
       await evalValue(cdp, 'window.confirm = () => true')
       await screenshot(cdp, 's3-01-history')
@@ -163,8 +153,6 @@ async function runS3Scenario() {
         assert(alpha?.cards.includes('Gamma Archive Candidate'), `Alpha group missing gamma: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Beta Pin Candidate'), `Beta group wrong: ${JSON.stringify(groups)}`)
         assert(beta?.cards.includes('Delete Target'), `Beta group missing delete target: ${JSON.stringify(groups)}`)
-        const unassigned = groups.find((group) => group.title === '对话')
-        assert(unassigned?.cards.includes('Loose Conversation'), `unassigned group wrong: ${JSON.stringify(groups)}`)
       })
 
       await check(cdp, 'S3 project section exposes hover actions and direct project creation', async () => {
@@ -173,7 +161,7 @@ async function runS3Scenario() {
 
       await check(cdp, 'S3 project plus opens inline new session with project preselected', async () => {
         await clickProjectNew(cdp, 'Alpha Project')
-        await waitForText(cdp, '开始一个任务')
+        await waitForSelector(cdp, '[data-welcome-heading="true"]')
         const state = await inlineNewSessionState(cdp)
         assert(state.modalCount === 0, `project new session must not open a modal: ${JSON.stringify(state)}`)
         assert(state.projectText === 'Alpha Project', `project context was not preselected: ${JSON.stringify(state)}`)
@@ -181,31 +169,33 @@ async function runS3Scenario() {
       })
 
       await check(cdp, 'S3 search filters by title/project/path', async () => {
-        await setInputByPlaceholder(cdp, '搜索标题、项目或路径', 'Beta')
+        await setInputByPlaceholder(cdp, '搜索项目或项目任务', 'Beta')
         await waitForText(cdp, 'Beta Pin Candidate')
         await waitForText(cdp, 'Delete Target')
         await waitForNoText(cdp, 'Alpha Keep Current')
         await waitForNoText(cdp, 'Gamma Archive Candidate')
-        await setInputByPlaceholder(cdp, '搜索标题、项目或路径', '')
+        await setInputByPlaceholder(cdp, '搜索项目或项目任务', '')
         await waitForText(cdp, 'Alpha Keep Current')
       })
 
-      await check(cdp, 'S3 pin moves session into pinned section and persists', async () => {
+      await check(cdp, 'S3 pin marks the project session and persists', async () => {
         await openMoreForCard(cdp, 'Beta Pin Candidate')
         await clickMenuItem(cdp, '置顶')
-        await waitForSectionCard(cdp, '置顶', 'Beta Pin Candidate')
         const after = readHistory(userDataDir)
         assert(after.find((entry) => entry.id === 'hist-beta')?.pinned === true, 'pinned flag not persisted')
+        const groups = await sidebarGroups(cdp)
+        const beta = groups.find((group) => group.title === 'Beta Project')
+        assert(beta?.cards.some((card) => card.includes('Beta Pin Candidate')), `pinned project session disappeared: ${JSON.stringify(groups)}`)
       })
 
-      await check(cdp, 'S3 archive hides from recent, expands archive section, and persists', async () => {
+      await check(cdp, 'S3 archive marks the project session and persists', async () => {
         await openMoreForCard(cdp, 'Gamma Archive Candidate')
         await clickMenuItem(cdp, '归档')
-        await waitForNoProjectCard(cdp, 'Alpha Project', 'Gamma Archive Candidate')
-        await clickArchiveToggle(cdp)
-        await waitForSectionCard(cdp, '归档', 'Gamma Archive Candidate')
         const after = readHistory(userDataDir)
         assert(after.find((entry) => entry.id === 'hist-gamma')?.archived === true, 'archived flag not persisted')
+        const groups = await sidebarGroups(cdp)
+        const alpha = groups.find((group) => group.title === 'Alpha Project')
+        assert(alpha?.cards.some((card) => card.includes('Gamma Archive Candidate')), `archived project session disappeared: ${JSON.stringify(groups)}`)
       })
 
       await check(cdp, 'S3 delete removes history entry from UI and disk after confirm', async () => {
@@ -426,13 +416,15 @@ async function selectedNewSessionValues(cdp) {
       const providerSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择 Provider')));
       const modelSelects = selects.filter((select) => [...select.options].some((option) => option.textContent?.includes('请选择模型')));
       const routingModes = [...document.querySelectorAll('.welcome-routing-modes button')];
+      const project = document.querySelector('.welcome-project-select');
       return {
         modalCount: document.querySelectorAll('.modal-backdrop').length,
         engineSelectCount: engineSelects.length,
         providerSelectCount: providerSelects.length,
         modelSelectCount: modelSelects.length,
         routingModeCount: routingModes.length,
-        activeRoutingMode: routingModes.find((button) => button.classList.contains('active'))?.textContent?.trim() || ''
+        activeRoutingMode: routingModes.find((button) => button.classList.contains('active'))?.textContent?.trim() || '',
+        projectChoice: project?.value || ''
       };
     })()`
   )
@@ -679,6 +671,16 @@ async function waitForText(cdp, text, timeout = 5_000) {
   }
   const body = await visibleText(cdp)
   throw new Error(`text not found: ${text}\nVisible text:\n${body.slice(0, 2000)}`)
+}
+
+async function waitForSelector(cdp, selector, timeout = 5_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const found = await evalValue(cdp, `!!document.querySelector(${JSON.stringify(selector)})`)
+    if (found) return
+    await sleep(150)
+  }
+  throw new Error(`selector not found: ${selector}`)
 }
 
 async function waitForNoText(cdp, text, timeout = 5_000) {

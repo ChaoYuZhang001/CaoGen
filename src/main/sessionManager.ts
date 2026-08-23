@@ -291,10 +291,11 @@ class SessionManager {
     if (!id) return false
     const history = listHistory().find((entry) => entry.id === id)
     if (!history) return false
+    const closing = this.closingSessions.get(history.id)
+    if (closing) await closing
     const active = [...this.sessions.values()].find((session) =>
       session.meta.id === history.id || session.meta.sdkSessionId === history.sdkSessionId)
     if (active) throw new Error('活动会话不能删除；请先停止并关闭会话。')
-
     await this.workflow.flush(history.id)
     this.workflow.assertRecoveryResolved(history.id)
     const snapshot = await getTaskSnapshot(history.id)
@@ -306,7 +307,6 @@ class SessionManager {
     if (this.dagFinalizationCoordinator.hasIncomplete(history.id)) {
       throw new Error('DAG finalizer 尚未完成，不能删除父任务会话。')
     }
-
     const worktree = inspectManagedWorktreeRegistryRecord(history.id)
     if ('error' in worktree) throw new Error(worktree.error)
     if (worktree.record?.state === 'active') {

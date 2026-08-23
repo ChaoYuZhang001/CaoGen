@@ -8,11 +8,51 @@ import {
   type CommandDescriptor
 } from '../commands'
 import { projectedPaletteItems } from './experience/projectedComposerCommands'
+import type { HistoryEntry, SessionMeta } from '../../../shared/types'
+import type { ExperienceMode } from '../store/experience-mode'
+import { sessionExperienceMode } from '../store/session-experience'
 
 type PaletteSection = 'command' | 'session' | 'history' | 'plugin'
 
 interface PaletteItem extends CommandDescriptor {
   section: PaletteSection
+}
+
+function belongsToEntrance(
+  mode: ExperienceMode,
+  record: Pick<SessionMeta, 'workspaceId' | 'projectId' | 'goalId' | 'workItemId' | 'experienceModeOverride'>
+): boolean {
+  if (mode === 'video') return false
+  return mode === sessionExperienceMode(record)
+}
+
+function activeSessionPaletteItems(
+  mode: ExperienceMode,
+  order: string[],
+  sessions: ReturnType<typeof useStore.getState>['sessions'],
+  selectSession: (id: string) => void
+): PaletteItem[] {
+  return order.flatMap((id, index) => {
+    const session = sessions[id]
+    if (!session || !belongsToEntrance(mode, session.meta)) return []
+    return [{ id: `session:${id}`, title: session.meta.title, hint: session.meta.cwd,
+      searchText: `${session.meta.title} ${session.meta.cwd} ${session.meta.sourceCwd ?? ''} ${index + 1}`,
+      section: 'session' as const, run: () => selectSession(id) }]
+  })
+}
+
+function historyPaletteItems(
+  mode: ExperienceMode,
+  history: HistoryEntry[],
+  openSessionIds: Set<string>,
+  openSdkIds: Set<string>,
+  resume: (entry: HistoryEntry) => Promise<void>
+): PaletteItem[] {
+  return history.filter((entry) => !openSessionIds.has(entry.id) && !openSdkIds.has(entry.sdkSessionId))
+    .filter((entry) => belongsToEntrance(mode, entry))
+    .map((entry) => ({ id: `history:${entry.id}`, title: entry.title, hint: entry.sourceCwd ?? entry.cwd,
+      searchText: `${entry.title} ${entry.cwd} ${entry.sourceCwd ?? ''}`,
+      section: 'history' as const, run: () => void resume(entry) }))
 }
 
 function useCloseOnEscape(setVisible: (visible: boolean) => void): void {
@@ -46,6 +86,8 @@ export default function CommandPalette(): React.JSX.Element {
   const setShowCommandPalette = useStore((s) => s.setShowCommandPalette)
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const openNewProjectWorkspace = useStore((s) => s.openNewProjectWorkspace)
+  const setExperienceMode = useStore((s) => s.setExperienceMode)
   const selectSession = useStore((s) => s.selectSession)
   const resumeFromHistory = useStore((s) => s.resumeFromHistory)
   const setView = useStore((s) => s.setView)
@@ -64,15 +106,11 @@ export default function CommandPalette(): React.JSX.Element {
   const dispatchPluginAgent = useStore((s) => s.dispatchPluginAgent)
   const updateSettings = useStore((s) => s.updateSettings)
   const setModel = useStore((s) => s.setModel)
-  useEffect(() => {
-    requestAnimationFrame(() => inputRef.current?.focus())
-  }, [])
+  useEffect(() => { requestAnimationFrame(() => inputRef.current?.focus()) }, [])
   useCloseOnEscape(setShowCommandPalette)
-
   useEffect(() => {
     if (!pluginRegistry && !pluginRegistryLoading) void loadPluginRegistryForSlash()
   }, [loadPluginRegistryForSlash, pluginRegistry, pluginRegistryLoading])
-
   const close = (): void => setShowCommandPalette(false)
 
   const focusSidebarSearch = (): void => {
@@ -93,6 +131,7 @@ export default function CommandPalette(): React.JSX.Element {
     const activeMeta = activeId ? sessions[activeId]?.meta : undefined
     const commandItems: PaletteItem[] = buildPaletteCommands({
       t,
+      experienceMode,
       modelOptions: modelOptionsForProvider(
         providers,
         activeMeta?.providerId ?? '',
@@ -103,6 +142,12 @@ export default function CommandPalette(): React.JSX.Element {
       setShowNewSession,
       setShowSettings,
       focusSidebarSearch,
+      openNewProject: openNewProjectWorkspace,
+      openNewVideo: () => {
+        setExperienceMode('video')
+        requestAnimationFrame(() => window.dispatchEvent(new Event('caogen:video-new')))
+      },
+      openControlRoom: () => setView('office'),
       openLatestRewindPanel,
       openDiffPanel,
       openBrowserPanel,
@@ -117,47 +162,29 @@ export default function CommandPalette(): React.JSX.Element {
       setModel
     }).map((item) => ({ ...item, section: 'command' }))
 
-    const activeSessionItems: PaletteItem[] = order.flatMap((id, index) => {
-      const session = sessions[id]
-      if (!session) return []
-      return [
-        {
-          id: `session:${id}`,
-          title: session.meta.title,
-          hint: session.meta.cwd,
-          searchText: `${session.meta.title} ${session.meta.cwd} ${session.meta.sourceCwd ?? ''} ${index + 1}`,
-          section: 'session' as const,
-          run: () => selectSession(id)
-        }
-      ]
-    })
-
-    const historyItems: PaletteItem[] = history
-      .filter((entry) => !openSessionIds.has(entry.id) && !openSdkIds.has(entry.sdkSessionId))
-      .map((entry) => ({
-        id: `history:${entry.id}`,
-        title: entry.title,
-        hint: entry.sourceCwd ?? entry.cwd,
-        searchText: `${entry.title} ${entry.cwd} ${entry.sourceCwd ?? ''}`,
-        section: 'history' as const,
-        run: () => void resumeFromHistory(entry)
-      }))
+    const activeSessionItems = activeSessionPaletteItems(experienceMode, order, sessions, selectSession)
+    const historyItems = historyPaletteItems(experienceMode, history, openSessionIds, openSdkIds, resumeFromHistory)
 
     const pluginItems: PaletteItem[] = buildPluginCommands(pluginRegistry?.items ?? [], {
       sendPluginRegistryItemToAgent,
       dispatchPluginAgent
     }).map((item) => ({ ...item, section: 'plugin' }))
 
-    return projectedPaletteItems(projection, [...commandItems, ...activeSessionItems, ...historyItems, ...pluginItems])
+    const projected = projectedPaletteItems(projection, [...commandItems, ...activeSessionItems, ...historyItems, ...pluginItems])
+    return experienceMode === 'video'
+      ? projected.filter((item) => item.section === 'command' && !item.id.startsWith('slash:'))
+      : projected
   }, [
     activeId,
     dispatchPluginAgent,
+    experienceMode,
     history,
     openBrowserPanel,
     openDiffPanel,
     openFilesPanel,
     openLatestRewindPanel,
     openMemoryPanel,
+    openNewProjectWorkspace,
     openPluginRegistryPanel,
     openRoutinePanel,
     openSubagentPanel,
@@ -172,6 +199,7 @@ export default function CommandPalette(): React.JSX.Element {
     sendPluginRegistryItemToAgent,
     sessions,
     setModel,
+    setExperienceMode,
     setShowNewSession,
     setShowSettings,
     setView,
@@ -244,6 +272,7 @@ export default function CommandPalette(): React.JSX.Element {
             matches.map((item, index) => (
               <button
                 key={item.id}
+                data-command-id={item.id}
                 className={`command-palette-item ${index === activeIndex ? 'active' : ''}`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => runItem(item)}

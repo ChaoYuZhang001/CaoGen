@@ -88,7 +88,7 @@ if (writeBaseline) {
 
 const baseline = loadBaseline()
 const checks = [
-  checkStandardsDocument(),
+  checkPublicStandardsSources(),
   checkPackageScripts(),
   checkBaselineContract(baseline),
   checkFileMetrics(codeMetrics),
@@ -132,39 +132,20 @@ writeFileSync(path.join(reportRoot, 'latest.md'), renderMarkdown(report), 'utf8'
 console.log(renderConsole(report))
 process.exitCode = status === 'pass' ? 0 : 1
 
-function checkStandardsDocument() {
-  const file = 'docs/CODING-STANDARDS.md'
-  if (!existsSync(path.join(repoRoot, file))) {
-    return [fail('standards-document', file, 'Coding standards document is missing')]
-  }
-  const standards = read(file)
+function checkPublicStandardsSources() {
   const contributing = read('CONTRIBUTING.md')
   const projectRules = read('caogen.md')
-  const requiredSections = [
-    '## Core Rules',
-    '## Behavior Chain',
-    '## Size And Complexity Rules',
-    '## Hotspot File Policy',
-    '## TypeScript Rules',
-    '## Comment Rules',
-    '## Architecture And Design Pattern Rules',
-    '## Exception Rules',
-    '## IPC And Preload Rules',
-    '## 3D Office Rules',
-    '## Testing Rules',
-    '## Completion Checklist'
+  const contributingContracts = [
+    '以 `package.json` 中当前可用的 required gate 为准',
+    'required gates in `package.json` as the public source of truth'
   ]
-  const missing = requiredSections.filter((section) => !standards.includes(section))
   return [
-    missing.length === 0
-      ? pass('standards-sections', file, 'Required coding-standard sections are present')
-      : fail('standards-sections', file, `Missing sections: ${missing.join(', ')}`),
-    contributing.includes('docs/CODING-STANDARDS.md')
-      ? pass('standards-link', 'CONTRIBUTING.md', 'Contributing guide links to coding standards')
-      : fail('standards-link', 'CONTRIBUTING.md', 'Contributing guide must link to docs/CODING-STANDARDS.md'),
-    projectRules.includes('docs/CODING-STANDARDS.md') && projectRules.includes('test:coding-standards:required')
-      ? pass('project-rules-link', 'caogen.md', 'Project Agent rules link the standard and required gate')
-      : fail('project-rules-link', 'caogen.md', 'Project Agent rules must link the standard and required gate')
+    contributingContracts.every((contract) => contributing.includes(contract))
+      ? pass('standards-source', 'CONTRIBUTING.md', 'Chinese and English guides identify package.json required gates as the public source of truth')
+      : fail('standards-source', 'CONTRIBUTING.md', 'Chinese and English guides must identify package.json required gates as the public source of truth'),
+    projectRules.includes('npm.cmd run test:coding-standards:required')
+      ? pass('project-rules-gate', 'caogen.md', 'Project Agent rules require the coding standards gate')
+      : fail('project-rules-gate', 'caogen.md', 'Project Agent rules must require the executable coding standards gate')
   ]
 }
 

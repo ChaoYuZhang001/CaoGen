@@ -113,6 +113,7 @@ import {
   writePluginRegistryState
 } from './pluginRegistry'
 import { defaultClaudeDesktopConfigPath } from './mcp/mcp-client'
+import { caogenManagedPluginsRoot } from './plugin/caogen-extension-roots'
 import { listRoutines, markRun, updateRoutine, createRoutine, deleteRoutine } from './routineStore'
 import { runRoutineNow } from './routines/routine-executor'
 import { listRoutineRuns } from './routines/routine-runner'
@@ -240,6 +241,7 @@ function pluginRegistryRoots(sessionId?: string): string[] {
   )
   for (const cwd of projectCwds) roots.push(join(cwd, '.claude'))
   for (const cwd of projectCwds) roots.push(join(cwd, '.caogen', 'skills'))
+  roots.push(caogenManagedPluginsRoot())
   roots.push(join(homedir(), '.claude'))
   roots.push(join(homedir(), '.caogen', 'skills'))
   roots.push(dirname(defaultClaudeDesktopConfigPath()))
@@ -289,7 +291,7 @@ function normalizePluginScanOptions(options?: PluginRegistryScanOptions): Plugin
 
 /** CaoGen 托管插件目录:本地安装/卸载的唯一操作区 */
 function caogenPluginsRoot(): string {
-  return join(homedir(), '.claude', 'plugins')
+  return caogenManagedPluginsRoot()
 }
 
 function clampPositiveInt(value: number | undefined, fallback: number, max: number): number {

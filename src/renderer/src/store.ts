@@ -96,6 +96,7 @@ import { sendActiveSessionMessage } from './store/session-send'
 import { sendStartSuggestionMessage } from './store/start-suggestion-send'
 import { mergeHydratedSessionPermissions, SessionTranscriptHydrator } from './store/session-transcript-hydrator'
 import { createTerminalActions } from './store/terminal-actions'
+import { historyResumeOptions, sessionExperienceMode, sessionProjectionPatch } from './store/session-experience'
 import { createBrowserActions } from './store/browser-actions'
 import {
   activeFileTab,
@@ -1319,6 +1320,10 @@ export const useStore = create<AppStore>((set, get) => {
       window.agentDesk.getSettings()
     ])
     const initialActiveId = get().activeId ?? metas[0]?.id ?? null
+    const activeMeta = metas.find((meta) => meta.id === initialActiveId)
+    const restoredProjection = activeMeta && settings.experienceMode !== 'video'
+      ? sessionProjectionPatch(get().studioSessionNavigationNonce, activeMeta)
+      : { experienceMode: settings.experienceMode, studioSessionNavigationNonce: get().studioSessionNavigationNonce }
     set((s) => {
       const sessions = { ...s.sessions }
       const order = [...s.order]
@@ -1334,7 +1339,7 @@ export const useStore = create<AppStore>((set, get) => {
         sessions,
         order,
         settings,
-        experienceMode: settings.experienceMode,
+        ...restoredProjection,
         activeId
       }
     })
@@ -1496,6 +1501,7 @@ export const useStore = create<AppStore>((set, get) => {
       },
       order: s.order.includes(meta.id) ? s.order : [...s.order, meta.id],
       activeId: meta.id,
+      ...sessionProjectionPatch(s.studioSessionNavigationNonce, meta),
       showNewSession: false,
       newSessionProjectId: null
     }))
@@ -1662,19 +1668,7 @@ export const useStore = create<AppStore>((set, get) => {
   },
 
   async resumeFromHistory(entry) {
-    await get().createSession({
-      cwd: entry.cwd,
-      projectId: entry.projectId,
-      unassigned: entry.unassigned,
-      model: entry.model,
-      providerId: entry.providerId,
-      routingScope: entry.routingScope,
-      engine: entry.engine,
-      taskStrategy: entry.taskStrategy,
-      resumeSdkSessionId: entry.sdkSessionId,
-      resumeSessionAt: entry.resumeSessionAt,
-      title: entry.title
-    })
+    await get().createSession(historyResumeOptions(entry))
   },
 
   forkFromHistory(entry) {
@@ -1721,8 +1715,8 @@ export const useStore = create<AppStore>((set, get) => {
     const previousId = get().activeId
     if (previousId && previousId !== id) closeNativeBrowserView(previousId)
     set((s) => ({
-      activeId: id, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode),
-      experienceMode: s.experienceMode === 'video' ? 'assistant' : s.experienceMode,
+      activeId: id,
+      ...sessionProjectionPatch(s.studioSessionNavigationNonce, s.sessions[id]?.meta ?? {}),
       showNewSession: false,
       newSessionProjectId: null,
       workbench:
@@ -3490,7 +3484,7 @@ export const useStore = create<AppStore>((set, get) => {
     }
     set((s) => ({
       showNewSession: v, studioSessionNavigationNonce: nextStudioSessionNonce(s.studioSessionNavigationNonce, s.experienceMode, v),
-      experienceMode: v && s.experienceMode === 'video' ? 'assistant' : s.experienceMode,
+      experienceMode: v ? (projectId ? 'studio' : 'assistant') : s.experienceMode,
       newSessionProjectId: v ? projectId ?? null : null,
       showSettings: v ? false : s.showSettings,
       settingsContext: v ? null : s.settingsContext,

@@ -229,21 +229,9 @@ export function useStudioCreateActions({
     setError('')
     setAnnouncement('')
     try {
-      const created = await window.agentDesk.createProjectWorkspace(input)
-      let templateError = ''
-      try {
-        await window.agentDesk.applyProjectWorkspaceTemplate({
-          requestId: newProjectTemplateRequestId(),
-          projectId: created.id,
-          templateId: created.kind
-        })
-      } catch (cause) {
-        templateError = errorText(cause)
-      }
-
+      const created = await window.agentDesk.createProjectWorkspaceWithTemplate(input)
       await refreshProjects(created.id)
       setAnnouncement(TEXT.projectCreated)
-      if (templateError) setError(`${TEXT.projectCreatedTemplatePending}：${templateError}`)
       onSuccess()
     } catch (cause) {
       setError(errorText(cause))
@@ -329,10 +317,6 @@ export function useProjectGoalTaskStart(refreshContents: () => Promise<void>): {
 
 function newGoalTaskRequestId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `goal-task-${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
-
-function newProjectTemplateRequestId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `project-template-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function chooseProjectId(projects: ProjectWorkspace[], preferredId?: string): string {

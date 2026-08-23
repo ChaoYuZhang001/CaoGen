@@ -23,6 +23,7 @@ const RUNTIME_REQUIRED = {
 const commandDefinitions = [
   { name: 'typecheck', ...commandSpec('npm', ['run', 'typecheck']), category: 'static' },
   { name: 'coding standards required', command: 'node', args: ['scripts/coding-standards-audit.mjs', '--required'], category: 'static' },
+  { name: 'external product code boundary required', command: 'node', args: ['scripts/external-product-code-boundary.mjs'], category: 'static' },
   { name: 'build', ...commandSpec('npm', ['run', 'build']), category: 'build' },
   { name: 'Assistant/Studio performance required UI e2e', command: 'node', args: ['scripts/assistant-studio-performance-e2e.mjs'], category: 'ui' },
   { name: 'accessibility required UI e2e', command: 'node', args: ['scripts/accessibility-required.mjs'], category: 'ui' },
@@ -141,7 +142,9 @@ const commandDefinitions = [
   { name: 'acceptance repair and retest smoke', command: 'node', args: ['scripts/acceptance-repair-retest-smoke.mjs'], category: 'smoke' },
   { name: 'acceptance failure ingress smoke', command: 'node', args: ['scripts/workflow-acceptance-failure-ingress-smoke.mjs'], category: 'smoke' },
   { name: 'workflow test failure runtime smoke', command: 'node', args: ['scripts/workflow-test-failure-runtime-smoke.mjs'], category: 'smoke' },
+  { name: 'session experience projection smoke', command: 'node', args: ['scripts/session-experience-projection-smoke.mjs'], category: 'smoke' },
   { name: 'Assistant/Studio required UI e2e', command: 'node', args: ['scripts/assistant-studio-ui-e2e.mjs'], category: 'ui' },
+  { name: 'Video Studio golden path required UI e2e', command: 'node', args: ['scripts/video-studio-golden-e2e.mjs'], category: 'ui' },
   { name: 'Assistant/Studio canonical consistency required UI e2e', command: 'node', args: ['scripts/assistant-studio-consistency-e2e.mjs'], category: 'ui' },
   { name: 'Session model switch policy smoke', command: 'node', args: ['scripts/session-model-switch-policy-smoke.mjs'], category: 'smoke' },
   { name: 'Assistant/Studio live switch required UI e2e', command: 'node', args: ['scripts/assistant-studio-live-switch-e2e.mjs'], category: 'ui' },

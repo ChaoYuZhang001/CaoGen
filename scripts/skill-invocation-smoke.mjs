@@ -69,7 +69,7 @@ try {
 
   approveRegistryItems(
     registry,
-    [path.join(projectRoot, '.caogen', 'skills')],
+    [path.join(projectRoot, '.caogen')],
     (item) => item.kind === 'skill' && item.name === 'Tailwind Config Builder'
   )
 
@@ -97,7 +97,7 @@ try {
 }
 
 function approveRegistryItems(registry, roots, select) {
-  const view = registry.scanPluginRegistry(roots, { includeSiblingProjectMcp: true })
+  const view = registry.scanPluginRegistry(roots)
   const items = view.items.filter(select)
   assert(items.length > 0, 'expected Plugin Registry fixture items to approve')
   const state = items.reduce(

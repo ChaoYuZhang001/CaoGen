@@ -13,6 +13,7 @@ const userData = path.join(tempRoot, 'user-data')
 const checks = []
 const require = createRequire(import.meta.url)
 const refreshCanary = ['refresh', 'credential', 'canary'].join('-')
+const expectedAppVersion = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version
 
 const openaiEngineSource = readFileSync(path.join(repoRoot, 'src/main/openaiEngine.ts'), 'utf8')
 if (!openaiEngineSource.includes('issueProviderAuthorizationAccountLease')
@@ -344,6 +345,8 @@ try {
   equal(authorizedProvider.authorization?.accountId, 'acct-service', 'Provider binds the authorized account')
   equal(authorizedProvider.models[0], 'gpt-service', 'Provider receives the Codex model list')
   equal(authorizedProvider.credentialHeaderNames[0], 'authorization', 'Provider uses a managed bearer header')
+  assert(authorizedProvider.customHeaders.includes(`version: ${expectedAppVersion}`),
+    'Codex Provider identifies the current CaoGen package version')
   assert(authorizedProvider.ready, 'authorized Provider is ready')
   assert(!JSON.stringify(serviceResult).includes('service-access-token'), 'access token never enters the renderer result')
   assert(!JSON.stringify(serviceResult).includes('service-refresh-token'), 'refresh token never enters the renderer result')
@@ -732,7 +735,7 @@ function installElectronStub() {
   writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'electron', version: '0.0.0', main: 'index.js' }))
   writeFileSync(path.join(root, 'index.js'), `'use strict'
 module.exports = {
-  app: { getPath() { return ${JSON.stringify(userData)} }, getVersion() { return '0.1.8' } },
+  app: { getPath() { return ${JSON.stringify(userData)} }, getVersion() { return ${JSON.stringify(expectedAppVersion)} } },
   safeStorage: {
     isEncryptionAvailable() { return true },
     encryptString(value) { return Buffer.from('sealed:' + value, 'utf8') },

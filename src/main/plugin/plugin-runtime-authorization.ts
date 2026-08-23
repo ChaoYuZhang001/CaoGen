@@ -18,6 +18,7 @@ import {
   writePluginRegistryState
 } from '../pluginRegistry'
 import { inspectPluginRegistryItemTrust } from './plugin-trust'
+import { caogenExtensionRegistryRoots } from './caogen-extension-roots'
 
 export interface AuthorizedMcpRuntimeConfig {
   serverId: string
@@ -280,10 +281,9 @@ function authorizationDiagnostic(path: string, message: string): SkillLoadDiagno
 }
 
 function skillRegistryRoots(projectRoot?: string): string[] {
-  return uniqueExistingRoots([
-    ...(projectRoot?.trim() ? [join(resolve(projectRoot), '.caogen', 'skills')] : []),
-    join(homedir(), '.caogen', 'skills')
-  ])
+  // Keep the registry anchor at `.caogen` so approvals made by the Plugin
+  // Registry and runtime Skill filtering derive the same stable item key.
+  return uniqueExistingRoots(caogenExtensionRegistryRoots([projectRoot]))
 }
 
 function mcpRegistryRoots(projectRoot?: string): string[] {
@@ -292,13 +292,17 @@ function mcpRegistryRoots(projectRoot?: string): string[] {
     : undefined
   return [...new Set([
     // Keep the absent project .claude root: Plugin Registry uses it as the
-    // ownership anchor for the sibling project-level .mcp.json file.
+    // ownership anchor for the sibling project-level .mcp.json file. Scan it
+    // before user roots so a large registry cannot exhaust the shared budget.
     ...(projectClaudeRoot ? [projectClaudeRoot] : []),
     ...uniqueExistingRoots([
-    join(homedir(), '.claude'),
-    dirname(defaultClaudeDesktopConfigPath()),
-    ...codexPluginPackageRoots()
-    ])
+      join(homedir(), '.claude'),
+      dirname(defaultClaudeDesktopConfigPath()),
+      ...codexPluginPackageRoots()
+    ]),
+    // Explicit interoperability roots must remain discoverable even when the
+    // CaoGen-managed tree is large enough to exhaust the shared scan budget.
+    ...uniqueExistingRoots(caogenExtensionRegistryRoots([projectRoot]))
   ])]
 }
 

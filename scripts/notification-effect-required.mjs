@@ -81,14 +81,11 @@ assertNoSensitive(output, 'notification gate stdout')
 console.log(output)
 
 async function runNotificationEffectGate() {
-  const connectorApi = await importCompiled('main/notification/notification-connector-store.js')
-  const notificationApi = await importCompiled('main/notification/notification-effect.js')
-  const effectRuntime = await importCompiled('main/task/effect-runtime.js')
-  const snapshotApi = await importCompiled('main/task/task-snapshot.js')
-  const runtimeRegistry = await importCompiled('main/task/task-runtime-registry.js')
-  const idempotencyApi = await importCompiled('main/task/tool-idempotency.js')
-  const workspaceApi = await importCompiled('main/project-workspace/index.js')
-  const workspaceCommands = await importCompiled('main/project-workspace/command-service.js')
+  const apis = await loadNotificationGateApis()
+  const {
+    connectorApi, effectRuntime, idempotencyApi, notificationApi,
+    runtimeRegistry, snapshotApi, workspaceApi, workspaceCommands
+  } = apis
 
   const connectors = createConnectorFixtures(connectorApi)
   verifyConnectorStore(connectorApi, connectors)
@@ -149,18 +146,13 @@ async function runNotificationEffectGate() {
     fetchHarness,
     testCase: cases.crash
   })
-  const restart = runRestartChild({
-    outDir,
-    userData,
-    sessionId: run.sessionId,
-    crashEffectId: crash.effectId,
-    confirmedEffectIds: confirmed.map((item) => item.effectId),
-    waitingEffectIds: waiting.map((item) => item.effectId),
-    confirmedInput: cases.confirmed[0].input,
-    crashInput: cases.crash.input,
-    cwd: workspaceRoot,
-    expectedConnectorIds: Object.values(connectors).map((item) => item.id)
+  const retiredWeComId = seedRetiredWeComConnector(userData)
+  const legacyWeCom = await verifyLegacyWeComCompatibility({
+    ...apis, fetchHarness, retiredWeComId, run
   })
+  const restart = runRestartChild(notificationRestartPayload({
+    cases, confirmed, connectors, crash, legacyWeCom, retiredWeComId, run, waiting
+  }))
   assertEqual(restart.fetchCalls, 0, 'restart reconciliation fetch count')
   assertEqual(restart.crashStatus, 'waiting_reconciliation', 'crash Effect restart status')
   assertEqual(restart.confirmedCount, confirmed.length, 'confirmed Effect restart count')
@@ -171,9 +163,13 @@ async function runNotificationEffectGate() {
   assertEqual(restart.connectorCount, Object.keys(connectors).length, 'connector restart readback count')
   assertEqual(restart.availableConnectorCount, Object.keys(connectors).length, 'available connector restart count')
   assertEqual(restart.encryptedConnectorCount, Object.keys(connectors).length, 'encrypted connector restart count')
+  assertEqual(restart.legacyWeComStatus, 'waiting_reconciliation', 'legacy WeCom Effect restart status')
+  verifyRetiredWeComMigration(userData, retiredWeComId, restart)
   check('independent restart keeps sent-before-complete Effect unresolved with zero automatic resend', 'negative')
   check('restart reconciliation is idempotent and duplicate decisions remain fail-closed', 'negative')
   check('encrypted notification connectors remain available after independent restart')
+  check('restart preserves retired WeCom records without exposing or executing them')
+  check('legacy WeCom TaskRun and receipt manifest remain readable while create and execute stay blocked', 'negative')
 
   const recovered = await snapshotApi.getTaskSnapshot(run.sessionId, userData)
   assert(recovered?.run, 'restarted TaskSnapshot must remain readable')
@@ -192,9 +188,210 @@ async function runNotificationEffectGate() {
     restartFetchCalls: restart.fetchCalls,
     restartReconciliation: 'idempotent',
     automaticResends: 0,
+    readableLegacyWeComEffects: 1,
     rawCredentialLeaks: 0,
     negativePaths: report.checks.filter((item) => item.kind === 'negative').length
   }
+}
+
+async function loadNotificationGateApis() {
+  const load = (suffix) => importCompiled(suffix)
+  return {
+    connectorApi: await load('main/notification/notification-connector-store.js'),
+    notificationApi: await load('main/notification/notification-effect.js'),
+    effectRuntime: await load('main/task/effect-runtime.js'),
+    effectLedger: await load('main/task/effect-ledger.js'),
+    effectTargetValidation: await load('main/task/effect-target-validation.js'),
+    notificationArtifact: await load('main/task/notification-artifact-producer.js'),
+    snapshotApi: await load('main/task/task-snapshot.js'),
+    taskRunApi: await load('main/task/task-run.js'),
+    runtimeRegistry: await load('main/task/task-runtime-registry.js'),
+    idempotencyApi: await load('main/task/tool-idempotency.js'),
+    workspaceApi: await load('main/project-workspace/index.js'),
+    workspaceCommands: await load('main/project-workspace/command-service.js')
+  }
+}
+
+function notificationRestartPayload(input) {
+  const { cases, confirmed, connectors, crash, legacyWeCom, retiredWeComId, run, waiting } = input
+  return {
+    outDir,
+    userData,
+    sessionId: run.sessionId,
+    crashEffectId: crash.effectId,
+    confirmedEffectIds: confirmed.map((item) => item.effectId),
+    waitingEffectIds: waiting.map((item) => item.effectId),
+    confirmedInput: cases.confirmed[0].input,
+    crashInput: cases.crash.input,
+    cwd: workspaceRoot,
+    expectedConnectorIds: Object.values(connectors).map((item) => item.id),
+    retiredWeComId,
+    legacyWeComEffectId: legacyWeCom.effectId
+  }
+}
+
+async function verifyLegacyWeComCompatibility(input) {
+  const {
+    effectLedger,
+    effectRuntime,
+    effectTargetValidation,
+    fetchHarness,
+    idempotencyApi,
+    notificationApi,
+    notificationArtifact,
+    retiredWeComId,
+    run,
+    snapshotApi,
+    taskRunApi
+  } = input
+  const snapshot = await snapshotApi.getTaskSnapshot(run.sessionId, userData)
+  const currentRun = snapshot?.run
+  assert(currentRun, 'legacy WeCom fixture requires a persisted TaskRun')
+  const source = currentRun.effects?.find((effect) =>
+    effect.status === 'confirmed' && effect.target?.kind === 'webhook_message_send')
+  assert(source, 'legacy WeCom fixture requires a confirmed notification Effect')
+  const fixture = buildLegacyWeComFixture(currentRun, source, retiredWeComId, idempotencyApi)
+
+  assertEqual(effectTargetValidation.isEffectTarget(fixture.target), true, 'legacy WeCom EffectTarget persisted validation')
+  assertEqual(effectTargetValidation.isEffectTargetCreatable(fixture.target), false, 'legacy WeCom EffectTarget create policy')
+  assertEqual(taskRunApi.isTaskRunRecord(fixture.legacyRun), true, 'legacy WeCom TaskRun schema validation')
+  assertEqual(
+    notificationArtifact.isNotificationDeliveryManifest(fixture.manifest),
+    true,
+    'legacy WeCom receipt manifest validation'
+  )
+  await verifyLegacyWeComPolicies({
+    currentRun, effectLedger, fetchHarness, fixture, notificationApi, retiredWeComId, source
+  })
+
+  const legacySnapshot = {
+    ...snapshot,
+    updatedAt: fixture.legacyRun.updatedAt,
+    run: fixture.legacyRun
+  }
+  const callsBeforeRecovery = fetchHarness.calls()
+  const reconciled = await effectRuntime.reconcilePersistedTaskSnapshot(legacySnapshot, userData)
+  const recovered = requireSnapshotEffect(reconciled, fixture.effectId)
+  assertEqual(recovered.status, 'waiting_reconciliation', 'legacy WeCom recovery status')
+  assertEqual(recovered.target.channel, 'wecom', 'legacy WeCom recovery channel')
+  assertEqual(fetchHarness.calls(), callsBeforeRecovery, 'legacy WeCom recovery fetch count')
+  return { effectId: fixture.effectId }
+}
+
+function buildLegacyWeComFixture(currentRun, source, retiredWeComId, idempotencyApi) {
+  const target = { ...source.target, connectorId: retiredWeComId, channel: 'wecom' }
+  const targetDigest = idempotencyApi.stableValueDigest(target)
+  const intentDigest = idempotencyApi.stableValueDigest({
+    toolName: source.toolName, targetDigest, inputDigest: source.inputDigest
+  })
+  const effectId = 'effect-legacy-wecom-readonly'
+  const legacyEffect = {
+    ...source,
+    id: effectId,
+    effectKey: `effect-v1:${idempotencyApi.stableValueDigest({ effectId, targetDigest })}`,
+    resourceKey: `resource-v1:${idempotencyApi.stableValueDigest({
+      scope: 'webhook-message', connectorId: retiredWeComId, payloadDigest: target.payloadDigest
+    })}`,
+    toolUseId: 'notification-legacy-wecom-readonly',
+    toolExecutionId: undefined,
+    status: 'waiting_reconciliation',
+    target,
+    targetDigest,
+    intentDigest,
+    evidence: source.evidence.map((item, index) => ({
+      ...item, id: `evidence-legacy-wecom-${index + 1}`
+    })),
+    lease: undefined,
+    terminalAt: undefined,
+    error: undefined
+  }
+  const legacyRun = {
+    ...currentRun,
+    revision: currentRun.revision + 1,
+    updatedAt: Math.max(Date.now(), currentRun.updatedAt + 1),
+    effects: [...(currentRun.effects ?? []), legacyEffect]
+  }
+  return {
+    effectId,
+    target,
+    legacyRun,
+    descriptor: {
+      target, targetDigest, inputDigest: source.inputDigest, intentDigest, reconcilability: 'opaque'
+    },
+    manifest: {
+      schemaVersion: 1,
+      kind: 'notification_delivery',
+      effectId,
+      channel: 'wecom',
+      connectorId: retiredWeComId,
+      connectorRevision: target.connectorRevision,
+      endpointDigest: target.webhookDigest,
+      payloadDigest: target.payloadDigest,
+      titleDigest: target.titleDigest,
+      textDigest: target.textDigest,
+      ...(target.linkUrlDigest ? { linkDigest: target.linkUrlDigest } : {}),
+      confirmationSource: 'runtime_receipt',
+      confirmationVerifier: source.evidence.at(-1)?.verifier ?? 'legacy-runtime-receipt',
+      confirmationEvidenceDigest: source.evidence.at(-1)?.digest ?? target.payloadDigest
+    }
+  }
+}
+
+async function verifyLegacyWeComPolicies(input) {
+  const { currentRun, effectLedger, fetchHarness, fixture, notificationApi, retiredWeComId, source } = input
+  const callsBeforeCreate = fetchHarness.calls()
+  await assertRejects(
+    () => effectLedger.prepareEffect(currentRun, {
+      sessionId: currentRun.sessionId,
+      cwd: workspaceRoot,
+      toolUseId: 'notification-legacy-wecom-new-attempt',
+      toolName: source.toolName,
+      descriptor: fixture.descriptor,
+      ownerId: 'notification-required-gate'
+    }),
+    /历史通知|仅供读取|禁止创建/i,
+    'legacy WeCom Effect creation must fail closed'
+  )
+  assertEqual(fetchHarness.calls(), callsBeforeCreate, 'legacy WeCom create fetch count')
+
+  const callsBeforeExecute = fetchHarness.calls()
+  await assertRejects(
+    () => notificationApi.executeWebhookMessageEffectTarget(fixture.target, {
+      connectorId: retiredWeComId,
+      title: 'Legacy WeCom delivery',
+      text: 'This historical target must never be sent.'
+    }),
+    /历史通知|仅供读取|禁止执行|禁止重发/i,
+    'legacy WeCom Effect execution must fail closed'
+  )
+  assertEqual(fetchHarness.calls(), callsBeforeExecute, 'legacy WeCom execute fetch count')
+}
+
+function seedRetiredWeComConnector(root) {
+  const file = path.join(root, 'notification-connectors.json')
+  const stored = JSON.parse(readFileSync(file, 'utf8'))
+  assert(Array.isArray(stored) && stored.length > 0, 'notification store must be seeded before retired connector migration')
+  const retiredId = 'legacy-wecom-connector'
+  stored.push({
+    ...stored[0],
+    id: retiredId,
+    name: 'Retired WeCom connector',
+    channel: 'wecom',
+    isDefault: false
+  })
+  writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  return retiredId
+}
+
+function verifyRetiredWeComMigration(root, retiredId, restart) {
+  assertEqual(restart.retiredWeComPresent, false, 'retired WeCom connector restart visibility')
+  const file = path.join(root, 'notification-connectors.json')
+  const stored = JSON.parse(readFileSync(file, 'utf8'))
+  assert(Array.isArray(stored), 'notification connector store must remain an array')
+  const retired = stored.find((item) => item?.id === retiredId && item?.channel === 'wecom')
+  assert(retired?.name === 'Retired WeCom connector', 'retired WeCom metadata must remain on disk')
+  assertEqual(stored.length, restart.connectorIds.length + 1, 'preserved connector store count')
+  assert(restart.connectorIds.every((id) => stored.some((item) => item?.id === id)), 'supported connector records must survive migration')
 }
 
 function createConnectorFixtures(connectorApi) {
@@ -210,12 +407,6 @@ function createConnectorFixtures(connectorApi) {
       channel: 'dingtalk',
       webhookUrl: 'https://oapi.dingtalk.com/robot/send?access_token=test-only-dingtalk-token',
       secret: 'secret-for-smoke-notification-dingtalk'
-    },
-    wecom: {
-      name: 'WeCom required gate',
-      channel: 'wecom',
-      webhookUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test-only-wecom-key',
-      secret: 'secret-for-smoke-notification-wecom'
     },
     feishuSecondary: {
       name: 'Feishu revision replacement',
@@ -255,8 +446,7 @@ function verifyConnectorStore(connectorApi, connectors) {
   }
   assertEqual(connectors.feishu.channel, 'feishu', 'official Feishu URL channel')
   assertEqual(connectors.dingtalk.channel, 'dingtalk', 'official DingTalk URL channel')
-  assertEqual(connectors.wecom.channel, 'wecom', 'official WeCom URL channel')
-  check('three official webhook URL shapes resolve to Feishu, DingTalk, and WeCom')
+  check('official Feishu and DingTalk webhook URL shapes resolve to their connector channels')
   check('connector store contains only encrypted credentials and digests', 'negative')
   check('connector store uses owner-only POSIX permissions')
 }
@@ -276,13 +466,6 @@ function notificationCases(connectors) {
       input: message(connectors.dingtalk.id, 'DingTalk confirmed'),
       response: { ok: true, status: 200, body: '{"errcode":0,"errmsg":"ok"}' },
       expectedHost: 'oapi.dingtalk.com'
-    },
-    {
-      name: 'wecom',
-      toolUseId: 'notification-confirmed-wecom',
-      input: message(connectors.wecom.id, 'WeCom confirmed'),
-      response: { ok: true, status: 200, body: '{"errcode":0,"errmsg":"ok"}' },
-      expectedHost: 'qyapi.weixin.qq.com'
     }
   ]
   const waiting = [
@@ -303,7 +486,7 @@ function notificationCases(connectors) {
     {
       name: 'transport-failure',
       toolUseId: 'notification-transport-failure',
-      input: message(connectors.wecom.id, 'Transport failure'),
+      input: message(connectors.dingtalk.id, 'Transport failure'),
       response: { throwsWithRequest: true },
       expectedSent: false
     }
@@ -320,7 +503,7 @@ function notificationCases(connectors) {
     },
     crash: {
       toolUseId: 'notification-crash-after-send',
-      input: message(connectors.wecom.id, 'Crash after send'),
+      input: message(connectors.dingtalk.id, 'Crash after send'),
       response: { ok: true, status: 200, body: '{"errcode":0,"errmsg":"ok"}' }
     },
     allExecutionCases() {
@@ -662,6 +845,7 @@ async function runRestartProbe(payload) {
   const firstRevision = first.run?.revision
   const second = await effectRuntime.reconcilePersistedTaskSnapshot(first)
   const secondEffect = requireSnapshotEffect(second, payload.crashEffectId)
+  const legacyWeComEffect = requireSnapshotEffect(second, payload.legacyWeComEffectId)
   const confirmedIds = new Set(payload.confirmedEffectIds)
   const waitingIds = new Set(payload.waitingEffectIds)
   const effects = second.run?.effects ?? []
@@ -691,6 +875,9 @@ async function runRestartProbe(payload) {
     confirmedDuplicateDecision: confirmedDuplicate.kind,
     unresolvedDuplicateDecision: unresolvedDuplicate.kind,
     connectorCount: views.length,
+    connectorIds: views.map((item) => item.id),
+    retiredWeComPresent: views.some((item) => item.id === payload.retiredWeComId || item.channel === 'wecom'),
+    legacyWeComStatus: legacyWeComEffect.status,
     availableConnectorCount: views.filter((item) => item.available).length,
     encryptedConnectorCount: views.filter((item) => item.credentialStorage === 'encrypted').length
   })}\n`)

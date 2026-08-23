@@ -1,6 +1,7 @@
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ContactShadows } from '@react-three/drei'
+import { List } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import AgentWalkers from './kit/AgentWalkers'
@@ -23,9 +24,12 @@ import { buildOfficeModel, officeActivityForSessionId } from './model'
 import type { OfficeRealtimeSummary, OfficeSessionActivity } from './model'
 import OfficeFailoverSignals from './OfficeFailoverSignals'
 import { useOfficeBootStages } from './useOfficeBootStages'
+import { useOfficeGitStatus } from './useOfficeGitStatus'
+import { EMPTY_MEDIA_SNAPSHOT, useOfficeOperationalData } from './useOfficeOperationalData'
 import type { OfficeContactShadowMode } from './quality'
-import type { GitStatus, SchedulerStrategy } from '../../../../shared/types'
-import type { MediaJobStatus, MediaStudioSnapshot } from '../../../../shared/media-types'
+import type { SchedulerStrategy } from '../../../../shared/types'
+import type { MediaJobStatus } from '../../../../shared/media-types'
+import type { MediaStudioSnapshot } from '../../../../shared/media-types'
 import type { ProjectWorkspace, WorkItem } from '../../../../shared/project-workspace-types'
 import {
   resolveWatercolorRole,
@@ -81,6 +85,7 @@ const OFFICE_CAMERA_POSITION = CONTROL_ROOM_LAYOUT.overview.position
 const OFFICE_CAMERA_TARGET = CONTROL_ROOM_LAYOUT.overview.target
 const OFFICE_CAMERA_FOV = CONTROL_ROOM_LAYOUT.overview.fov
 const WALKER_VISUAL_SCALE = 1.18
+const OFFICE_MAX_VISIBLE_SESSIONS = 12
 const DEFAULT_OFFICE_SETTINGS = {
   qualityMode: 'auto' as const, showBadges: true, liveliness: 1, catEars: false,
   spaceTheme: 'control-room' as const, outfitPalette: 'role-default' as const,
@@ -92,14 +97,13 @@ type OfficeBusinessView = 'all' | 'assistant' | 'project' | 'video'
 const CAMERA_PRESETS: CameraPreset[] = ['overview', 'agent', 'facilities', 'incidents']
 const BUSINESS_VIEWS: OfficeBusinessView[] = ['all', 'assistant', 'project', 'video']
 
-const EMPTY_MEDIA_SNAPSHOT: MediaStudioSnapshot = {
-  schemaVersion: 12,
-  revision: 0,
-  productions: [],
-  jobs: [],
-  providers: [],
-  projectStorage: [],
-  snapshotDigest: ''
+/** Keep the control-room floor bounded while retaining the selected and newest sessions. */
+function prioritizeOfficeSessionIds(ids: string[], activeId: string | null): string[] {
+  const recentIds = [...new Set(ids)].reverse()
+  const prioritized = activeId && recentIds.includes(activeId)
+    ? [activeId, ...recentIds.filter((id) => id !== activeId)]
+    : recentIds
+  return prioritized.slice(0, OFFICE_MAX_VISIBLE_SESSIONS)
 }
 
 interface MediaOperationalSummary {
@@ -123,7 +127,6 @@ interface ProjectOperationalSummary {
 }
 
 const RUNNING_MEDIA_STATUSES = new Set<MediaJobStatus>(['requested', 'submitting', 'running', 'downloading'])
-
 function summarizeMedia(snapshot: MediaStudioSnapshot): MediaOperationalSummary {
   return snapshot.jobs.reduce<MediaOperationalSummary>((summary, job) => {
     summary.jobs += 1
@@ -302,19 +305,6 @@ function workspaceChangeShort(signal: {
   return `${signal.changedFiles} · +${signal.insertions}/-${signal.deletions}`
 }
 
-function gitStatusError(id: string, err: unknown): GitStatus {
-  return {
-    ok: false,
-    cwd: '',
-    branch: '',
-    files: [],
-    staged: 0,
-    unstaged: 0,
-    untracked: 0,
-    error: `office git status failed for ${id}: ${err instanceof Error ? err.message : String(err)}`
-  }
-}
-
 export default function OfficeView(): React.JSX.Element {
   const t = useT()
   const hydrated = useStore((s) => s.hydrated)
@@ -336,12 +326,8 @@ export default function OfficeView(): React.JSX.Element {
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('facilities')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(initialBusinessViewRef.current)
   const officeHitRef = useRef({ seq: 0, kind: '', id: '' })
-  const [officeGitStatusBySession, setOfficeGitStatusBySession] = useState<Record<string, GitStatus | undefined>>({})
   const [watercolorRoleByWorkerId, setWatercolorRoleByWorkerId] = useState<Record<string, WatercolorCharacterRole>>({})
-  const [mediaSnapshot, setMediaSnapshot] = useState<MediaStudioSnapshot>(EMPTY_MEDIA_SNAPSHOT)
-  const [projectSnapshot, setProjectSnapshot] = useState<{ projects: ProjectWorkspace[]; workItems: WorkItem[] }>({ projects: [], workItems: [] })
-  const [operationalDataReady, setOperationalDataReady] = useState(false)
-  const operationalRefreshSequence = useRef(0)
+  const { mediaSnapshot, projectSnapshot, operationalDataReady } = useOfficeOperationalData()
   const renderQuality = useOfficeRenderQuality(office.qualityMode)
   const qualityDprMaximum = Array.isArray(renderQuality.profile.dpr) ? renderQuality.profile.dpr[1] : renderQuality.profile.dpr
   const { bootCharactersEnabled, sceneDetailEnabled, sceneAssetsEnabled, handleOfficeFrame } =
@@ -356,14 +342,18 @@ export default function OfficeView(): React.JSX.Element {
       : (isLight ? { bg: '#d8dde0' } : { bg: '#1c2024' })
 
   const ids = order.filter((id) => sessions[id])
-  const visibleIds = businessView === 'video'
+  const businessSessionIds = businessView === 'video'
     ? []
     : businessView === 'project'
       ? ids.filter((id) => Boolean(sessions[id]?.meta.workspaceId || sessions[id]?.meta.projectId || sessions[id]?.meta.workItemId))
       : businessView === 'assistant'
         ? ids.filter((id) => !sessions[id]?.meta.workspaceId && !sessions[id]?.meta.projectId && !sessions[id]?.meta.workItemId)
         : ids
+  const visibleIds = prioritizeOfficeSessionIds(businessSessionIds, activeId)
+  const hiddenSessionCount = Math.max(0, businessSessionIds.length - visibleIds.length)
+  const hiddenSessionIds = businessSessionIds.filter((id) => !visibleIds.includes(id))
   const visibleIdsKey = visibleIds.join('\0')
+  const officeGitStatusBySession = useOfficeGitStatus(visibleIds, visibleIdsKey)
   const assignedWorkerIdsKey = visibleIds
     .map((id) => sessions[id]?.meta.digitalWorkerBinding)
     .filter((binding) => binding?.kind === 'assigned')
@@ -393,66 +383,6 @@ export default function OfficeView(): React.JSX.Element {
     return () => { cancelled = true }
   }, [assignedWorkerIdsKey])
   const positions = gridPositions(visibleIds.length, office.teamLayout === 'team-photo')
-  useEffect(() => {
-    if (typeof window.agentDesk === 'undefined') return
-    let cancelled = false
-    const refresh = async (): Promise<void> => {
-      const sequence = ++operationalRefreshSequence.current
-      try {
-        const [media, projects, workItems] = await Promise.all([
-          window.agentDesk.getMediaStudio(),
-          window.agentDesk.listProjectWorkspaces({ includeArchived: true }),
-          window.agentDesk.listProjectWorkItems()
-        ])
-        if (!cancelled && sequence === operationalRefreshSequence.current) {
-          setMediaSnapshot(media)
-          setProjectSnapshot({ projects, workItems })
-        }
-      } catch (error) {
-        if (!cancelled) console.error('[agent-desk] Failed to load CaoGen Control Room operations', error)
-      } finally {
-        if (!cancelled && sequence === operationalRefreshSequence.current) setOperationalDataReady(true)
-      }
-    }
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 5_000)
-    const refreshOnFocus = (): void => { void refresh() }
-    window.addEventListener('focus', refreshOnFocus)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-      window.removeEventListener('focus', refreshOnFocus)
-    }
-  }, [])
-  useEffect(() => {
-    if (typeof window.agentDesk === 'undefined') return
-    let cancelled = false
-    const refresh = async (): Promise<void> => {
-      if (visibleIds.length === 0) {
-        if (!cancelled) setOfficeGitStatusBySession({})
-        return
-      }
-      const entries = await Promise.all(
-        visibleIds.map(async (id) => {
-          try {
-            return [id, await window.agentDesk.gitStatus(id)] as const
-          } catch (err) {
-            return [id, gitStatusError(id, err)] as const
-          }
-        })
-      )
-      if (cancelled) return
-      const next: Record<string, GitStatus | undefined> = {}
-      for (const [id, status] of entries) next[id] = status
-      setOfficeGitStatusBySession(next)
-    }
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 60_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [visibleIdsKey])
   const officeModel = useMemo(
     () => buildOfficeModel(visibleIds, sessions, officeGitStatusBySession),
     [visibleIds, sessions, officeGitStatusBySession]
@@ -790,6 +720,8 @@ export default function OfficeView(): React.JSX.Element {
           className="office-canvas-wrap"
           data-office-business-view={businessView}
           data-office-return-mode={experienceMode}
+          data-office-session-capacity={OFFICE_MAX_VISIBLE_SESSIONS}
+          data-office-hidden-sessions={hiddenSessionCount}
           data-office-sessions={visibleIds.length}
           data-office-assistant-sessions={assistantSessionCount}
           data-office-project-sessions={projectSessionCount}
@@ -965,6 +897,13 @@ export default function OfficeView(): React.JSX.Element {
             realtime={realtime}
             projects={projectSummary}
             media={mediaSummary}
+            hiddenSessionCount={hiddenSessionCount}
+            hiddenSessions={hiddenSessionIds.map((id) => ({
+              id,
+              title: sessions[id]?.meta.title ?? id,
+              model: sessions[id]?.meta.model ?? ''
+            }))}
+            onRevealSession={selectOfficeSession}
           />
           <div className="office-camera-strip no-drag" data-office-camera-preset-controls={CAMERA_PRESETS.length}>
             {CAMERA_PRESETS.map((preset) => (
@@ -1237,15 +1176,22 @@ function OfficeBusinessSwitcher({ value, onChange }: {
   )
 }
 
-function OfficeCommandStrip({ businessView, activity, packetCount, realtime, projects, media }: {
+function OfficeCommandStrip({ businessView, activity, packetCount, realtime, projects, media, hiddenSessionCount, hiddenSessions, onRevealSession }: {
   businessView: OfficeBusinessView
   activity: OfficeActivitySummary
   packetCount: number
   realtime: OfficeRealtimeSummary
   projects: ProjectOperationalSummary
   media: MediaOperationalSummary
+  hiddenSessionCount: number
+  hiddenSessions: Array<{ id: string; title: string; model: string }>
+  onRevealSession: (id: string) => void
 }): React.JSX.Element {
   const t = useT()
+  const [hiddenSessionsOpen, setHiddenSessionsOpen] = useState(false)
+  useEffect(() => {
+    if (hiddenSessionCount === 0) setHiddenSessionsOpen(false)
+  }, [hiddenSessionCount])
   const assistantMetrics: Array<[string, string | number]> = [
     ['officeMetricSessions', activity.total], ['officeMetricWorking', activity.working],
     ['officeMetricAwaiting', activity.awaiting], ['officeMetricCompleted', activity.completed],
@@ -1282,7 +1228,44 @@ function OfficeCommandStrip({ businessView, activity, packetCount, realtime, pro
             ['officeMetricFailed', activity.error + projects.failed + media.failed + media.waitingReconciliation],
             ...operationsMetrics
           ] as Array<[string, string | number]>
+  if (hiddenSessionCount > 0) {
+    metrics.push(['officeMetricHiddenSessions', hiddenSessionCount])
+  }
   return <div className="office-command-strip no-drag">
     {metrics.map(([label, value], index) => <div className="office-metric" key={`${label}:${index}`}><span>{t(label)}</span><strong>{value}</strong></div>)}
+    {hiddenSessionCount > 0 && (
+      <div className="office-hidden-sessions" data-office-hidden-sessions-menu={hiddenSessionsOpen ? 'open' : 'closed'}>
+        <button
+          type="button"
+          className="office-hidden-sessions-toggle"
+          data-office-hidden-sessions-toggle
+          aria-expanded={hiddenSessionsOpen}
+          onClick={() => setHiddenSessionsOpen((open) => !open)}
+        >
+          <List size={13} aria-hidden="true" />
+          <span>{t('officeHiddenSessionsAction', { count: hiddenSessionCount })}</span>
+        </button>
+        {hiddenSessionsOpen && (
+          <div className="office-hidden-sessions-list" role="list" aria-label={t('officeHiddenSessionsTitle')}>
+            <div className="office-hidden-sessions-title">{t('officeHiddenSessionsTitle')}</div>
+            {hiddenSessions.map((session) => (
+              <button
+                key={session.id}
+                type="button"
+                className="office-hidden-session"
+                data-office-hidden-session={session.id}
+                onClick={() => {
+                  onRevealSession(session.id)
+                  setHiddenSessionsOpen(false)
+                }}
+              >
+                <span>{session.title}</span>
+                {session.model && <small>{session.model}</small>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
   </div>
 }

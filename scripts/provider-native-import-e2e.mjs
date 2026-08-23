@@ -16,7 +16,9 @@ const statePath = path.join(tempRoot, 'state.json')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'provider-native-import-e2e', runId)
 const runner = path.join(repoRoot, 'scripts', 'provider-native-import-runner.cjs')
-const electron = path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+const electron = process.platform === 'win32'
+  ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
+  : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const secret = ['native', 'electron', 'secret', 'canary'].join('-')
 
 try {

@@ -492,12 +492,28 @@ async function renderShotSegment(
   fps: number
 ): Promise<void> {
   const duration = seconds(shot.durationMs)
+  // A local draft must remain visually inspectable even before real media is available.
+  // Use deterministic scene geometry instead of a flat black placeholder so a tester can
+  // distinguish shots and confirm that the preview actually rendered.
+  const placeholderPalette = createHash('sha256').update(shot.id).digest('hex')
+  const placeholderAccent = `0x${placeholderPalette.slice(0, 6)}`
+  const placeholderAccentAlt = `0x${placeholderPalette.slice(6, 12)}`
   const inputArgs = visual
     ? purpose === 'shot_keyframe'
       ? ['-loop', '1', '-i', visual.path]
       : ['-stream_loop', '-1', '-i', visual.path]
-    : ['-f', 'lavfi', '-i', `color=c=0x202124:s=${width}x${height}:r=${fps}:d=${duration}`]
+    : ['-f', 'lavfi', '-i', `color=c=0x263247:s=${width}x${height}:r=${fps}:d=${duration}`]
+  const placeholderVisual = visual ? [] : [
+    `drawbox=x=0:y=ih*0.72:w=iw:h=ih*0.28:color=0x101827:t=fill`,
+    `drawbox=x=iw*0.08:y=ih*0.43:w=iw*0.16:h=ih*0.29:color=${placeholderAccent}:t=fill`,
+    `drawbox=x=iw*0.31:y=ih*0.34:w=iw*0.12:h=ih*0.38:color=${placeholderAccentAlt}:t=fill`,
+    `drawbox=x=iw*0.56:y=ih*0.49:w=iw*0.18:h=ih*0.23:color=0x3b82f6:t=fill`,
+    `drawbox=x=iw*0.2:y=ih*0.16:w=iw*0.014:h=ih*0.2:color=0xffd166:t=fill`,
+    `drawbox=x=iw*0.64:y=ih*0.2:w=iw*0.014:h=ih*0.29:color=0xfca5a5:t=fill`,
+    'drawbox=x=iw*0.04:y=ih*0.08:w=iw*0.92:h=ih*0.012:color=0x8be9fd:t=fill'
+  ]
   const filter = [
+    ...placeholderVisual,
     `scale=w=${width}:h=${height}:force_original_aspect_ratio=decrease`,
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`,
     `fps=${fps}`,

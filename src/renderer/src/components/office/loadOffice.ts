@@ -12,8 +12,16 @@ export function loadOfficeView(): Promise<OfficeViewModule> {
   return officeViewPromise
 }
 
-export function preloadOfficeView(): void {
-  void loadOfficeView()
-    .then((module) => module.prewarmOfficeGraphics())
-    .catch(() => undefined)
+export function preloadOfficeView(): Promise<boolean> {
+  return loadOfficeView()
+    .then((module) => new Promise<boolean>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (document.querySelector('.office, .office-loading')) {
+          resolve(true)
+          return
+        }
+        resolve(module.prewarmOfficeGraphics())
+      }))
+    }))
+    .catch(() => false)
 }

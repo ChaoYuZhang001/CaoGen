@@ -148,7 +148,6 @@ function chinaRealNetworkCheck() {
   const targets = [
     target('feishu', ['FEISHU_WEBHOOK_URL'], ['FEISHU_WEBHOOK_SECRET']),
     target('dingtalk', ['DINGTALK_WEBHOOK_URL'], ['DINGTALK_WEBHOOK_SECRET']),
-    target('wecom', ['WECOM_WEBHOOK_URL'], []),
     target('gitee_issue', ['GITEE_ACCESS_TOKEN', 'GITEE_OWNER', 'GITEE_REPO'], ['GITEE_API_URL']),
     target('gitee_pull_request', ['GITEE_ACCESS_TOKEN', 'GITEE_OWNER', 'GITEE_REPO', 'GITEE_PR_HEAD', 'GITEE_PR_BASE'], ['GITEE_API_URL', 'GITEE_PR_DRAFT']),
     target(
@@ -156,18 +155,6 @@ function chinaRealNetworkCheck() {
       ['ALIYUN_YUNXIAO_API_URL'],
       ['ALIYUN_YUNXIAO_TOKEN', 'ALIYUN_YUNXIAO_METHOD', 'ALIYUN_YUNXIAO_BODY', 'ALIYUN_YUNXIAO_AUTH_PREFIX', 'ALIYUN_DEVOPS_TOKEN'],
       { ALIYUN_YUNXIAO_API_URL: ['ALIYUN_DEVOPS_CHECK_URL'] }
-    ),
-    target(
-      'tencent_coding_api',
-      ['TENCENT_CODING_API_URL'],
-      ['TENCENT_CODING_TOKEN', 'TENCENT_CODING_METHOD', 'TENCENT_CODING_BODY', 'TENCENT_CODING_AUTH_PREFIX'],
-      { TENCENT_CODING_API_URL: ['TENCENT_CODING_CHECK_URL'] }
-    ),
-    target(
-      'wechat_miniprogram_api',
-      ['WECHAT_MINIPROGRAM_API_URL'],
-      ['WECHAT_MINIPROGRAM_TOKEN', 'WECHAT_MINIPROGRAM_METHOD', 'WECHAT_MINIPROGRAM_BODY', 'WECHAT_MINIPROGRAM_AUTH_PREFIX'],
-      { WECHAT_MINIPROGRAM_API_URL: ['WECHAT_MINIPROGRAM_CHECK_URL'] }
     )
   ]
   const selectedTargets = chinaRequiredTargets.length > 0
@@ -899,17 +886,11 @@ function endpointForTarget(name) {
       return envText('FEISHU_WEBHOOK_URL')
     case 'dingtalk':
       return envText('DINGTALK_WEBHOOK_URL')
-    case 'wecom':
-      return envText('WECOM_WEBHOOK_URL')
     case 'gitee_issue':
     case 'gitee_pull_request':
       return envText('GITEE_API_URL') || 'https://gitee.com/api/v5'
     case 'aliyun_yunxiao_api':
       return envText('ALIYUN_YUNXIAO_API_URL') || envText('ALIYUN_DEVOPS_CHECK_URL')
-    case 'tencent_coding_api':
-      return envText('TENCENT_CODING_API_URL') || envText('TENCENT_CODING_CHECK_URL')
-    case 'wechat_miniprogram_api':
-      return envText('WECHAT_MINIPROGRAM_API_URL') || envText('WECHAT_MINIPROGRAM_CHECK_URL')
     default:
       return undefined
   }

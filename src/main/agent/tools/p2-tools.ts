@@ -5,7 +5,6 @@ import { proposeSkillOptimization, type SkillFeedbackOutcome } from '../../skill
 import { routeModel } from '../../model/model-router'
 import { buildFeishuWebhookPayload } from '../../notification/feishu'
 import { buildDingTalkWebhookPayload } from '../../notification/dingtalk'
-import { buildWeComWebhookPayload } from '../../notification/wecom'
 import {
   buildGiteeIssueApiRequest,
   buildGiteeIssueUrl,
@@ -70,12 +69,12 @@ export const P2_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'send_notification',
-      description: '通过 CaoGen 中已保存的飞书、钉钉或企业微信连接器发送消息。无需传 Webhook 或密钥；省略 connectorId 时使用该渠道默认连接器。',
+      description: '通过 CaoGen 中已保存的飞书或钉钉连接器发送消息。无需传 Webhook 或密钥；省略 connectorId 时使用该渠道默认连接器。',
       parameters: {
         type: 'object',
         properties: {
           connectorId: { type: 'string', description: '可选连接器 ID。' },
-          channel: { type: 'string', enum: ['feishu', 'dingtalk', 'wecom'], description: '使用默认连接器时必填。' },
+          channel: { type: 'string', enum: ['feishu', 'dingtalk'], description: '使用默认连接器时必填。' },
           title: { type: 'string' },
           text: { type: 'string' },
           linkUrl: { type: 'string' }
@@ -189,11 +188,11 @@ export const P2_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'china_notify',
-      description: '构造飞书/钉钉/企业微信机器人通知预览；只返回 payload，不接受 webhook 或签名密钥，也不会触网。',
+      description: '构造飞书或钉钉机器人通知预览；只返回 payload，不接受 webhook 或签名密钥，也不会触网。',
       parameters: {
         type: 'object',
         properties: {
-          channel: { type: 'string', enum: ['feishu', 'dingtalk', 'wecom'] },
+          channel: { type: 'string', enum: ['feishu', 'dingtalk'] },
           title: { type: 'string' },
           text: { type: 'string' },
           linkUrl: { type: 'string' }
@@ -444,9 +443,7 @@ function executeChinaNotifyPreview(args: Record<string, unknown>): P2ToolResult 
     ? buildFeishuWebhookPayload(input)
     : channel === 'dingtalk'
       ? buildDingTalkWebhookPayload(input)
-      : channel === 'wecom'
-        ? buildWeComWebhookPayload(input)
-        : undefined
+      : undefined
   if (!payload) return { ok: false, output: `不支持的通知渠道: ${channel}` }
   return {
     ok: true,

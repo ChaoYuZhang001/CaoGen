@@ -215,9 +215,11 @@ function allowedReleaseAssetName(name) {
     new RegExp(String.raw`^CaoGen-${version}(?:-arm64)?\.dmg(?:\.blockmap)?$`),
     new RegExp(String.raw`^CaoGen-${version}(?:-arm64)?-mac\.zip(?:\.blockmap)?$`),
     new RegExp(String.raw`^CaoGen\.Setup\.${version}\.exe(?:\.blockmap)?$`),
-    new RegExp(String.raw`^CaoGen-${version}-windows-x64-unsigned-preview\.exe$`),
+    new RegExp(String.raw`^CaoGen-Setup-${version}\.exe(?:\.blockmap)?$`),
+    new RegExp(String.raw`^CaoGen-${version}-windows-x64-unsigned-preview\.exe(?:\.blockmap)?$`),
     new RegExp(String.raw`^CaoGen-${version}\.AppImage(?:\.blockmap)?$`),
-    /^latest(?:-mac|-linux)?\.ya?ml$/i
+    /^latest(?:-mac|-linux)?\.ya?ml$/i,
+    /^SHA256SUMS\.txt$/
   ]
   return rules.some((rule) => rule.test(name))
 }

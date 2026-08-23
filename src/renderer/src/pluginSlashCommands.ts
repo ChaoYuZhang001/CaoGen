@@ -97,10 +97,9 @@ function comparePluginSlashItems(a: PluginRegistryItem, b: PluginRegistryItem): 
 }
 
 function sourceRank(source: PluginRegistrySourceKind | undefined): number {
-  if (source === 'codex') return 0
-  if (source === 'project') return 1
-  if (source === 'user') return 2
-  return 3
+  if (source === 'project') return 0
+  if (source === 'user') return 1
+  return 2
 }
 
 function kindRank(kind: PluginRegistryKind): number {

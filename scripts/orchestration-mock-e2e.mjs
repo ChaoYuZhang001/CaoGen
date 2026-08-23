@@ -272,7 +272,7 @@ try {
   await waitForAgentDesk(page, 60_000)
   await focusElectronPage(page, focusSession)
   await page.waitForFunction(() => document.body.innerText.includes('A3 orchestration parent'), { timeout: 15_000 })
-  await page.click('.sidebar-office')
+  await page.click('[data-sidebar-action="control-room"]')
   await page.waitForFunction(() => !document.querySelector('.task-recovery-drawer'), { timeout: 5_000 })
   await startOfficeViewDiagnostics(page)
   await page.waitForSelector('.office canvas', { timeout: 20_000 })
@@ -787,8 +787,7 @@ try {
       5_000,
       'waiting for overview before workstation object click'
     )
-    await sleep(900)
-    const clickPlan = await readOfficeCanvasClickPlan(page)
+    const clickPlan = await waitForValue(() => readOfficeCanvasClickPlan(page), (value) => value.workstationCount >= 2, 10_000, 'waiting for workstation hit targets after overview camera reset')
     assert(clickPlan.workstationCount >= 2, `expected multiple workstation hit targets: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.workstation?.id, `missing workstation click target: ${JSON.stringify(clickPlan)}`)
     assert(clickPlan.workstation.id !== clickPlan.selected, `workstation target did not change selection: ${JSON.stringify(clickPlan)}`)
@@ -977,7 +976,7 @@ try {
       8_000,
       'waiting for light theme after reload'
     )
-    await page.click('.sidebar-office')
+    await page.click('[data-sidebar-action="control-room"]')
     await page.waitForSelector('.office canvas', { timeout: 20_000 })
     await page.click('[data-office-business-view-option="all"]')
     await waitForValue(

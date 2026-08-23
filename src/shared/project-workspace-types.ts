@@ -1087,6 +1087,7 @@ export interface ProjectWorkspaceApi {
   previewProjectKnowledge(projectId: string): Promise<ProjectKnowledgePreview>
   searchProjectKnowledge(input: ProjectKnowledgeSearchInput): Promise<ProjectKnowledgeSearchResult>
   createProjectWorkspace(input: ProjectWorkspaceInput, options?: MutationOptions): Promise<ProjectWorkspace>
+  createProjectWorkspaceWithTemplate(input: ProjectWorkspaceInput, options?: MutationOptions): Promise<ProjectWorkspace>
   applyProjectWorkspaceTemplate(input: ProjectWorkspaceTemplateApplyInput): Promise<ProjectWorkspaceTemplateApplyResult>
   updateProjectWorkspace(id: string, patch: ProjectWorkspacePatch, options?: MutationOptions): Promise<ProjectWorkspace>
   mutateProjectConnector(
@@ -1185,7 +1186,6 @@ export function isWorkItemType(value: unknown): value is WorkItemType {
 export function isGoalRiskLevel(value: unknown): value is GoalRiskLevel {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'critical'
 }
-
 export function isAcceptanceSatisfied(value: AcceptanceResult | undefined): boolean {
   return value?.status === 'passed' || value?.status === 'waived'
 }

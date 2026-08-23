@@ -11,6 +11,7 @@ import type {
   ToolExecutionRecord
 } from '../../shared/types'
 import type { EffectDescriptor, EffectReconciliationResult } from './effect-reconciler'
+import { isEffectTargetCreatable } from './effect-target-validation'
 import { effectTargetsConflict } from './effect-target-conflict'
 import { normalizeToolName, stableValueDigest } from './tool-idempotency'
 
@@ -52,6 +53,9 @@ export function prepareEffect(
   run: TaskRunRecord,
   input: PrepareEffectInput
 ): PrepareEffectResult {
+  if (!isEffectTargetCreatable(input.descriptor.target)) {
+    throw new Error('历史通知 EffectTarget 仅供读取，禁止创建新的执行 lease')
+  }
   const now = input.now ?? Date.now()
   const toolName = normalizeToolName(input.toolName)
   const effectKey = buildEffectKey(input.cwd, toolName, input.descriptor)

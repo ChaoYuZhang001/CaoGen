@@ -2,8 +2,10 @@ import {
   Bookmark,
   Building2,
   Clock3,
+  Film,
   FileSearch,
   Files,
+  FolderKanban,
   GitBranch,
   Globe2,
   LayoutGrid,
@@ -24,6 +26,8 @@ import {
 
 export type HeaderIconName =
   | 'compose'
+  | 'project'
+  | 'video'
   | 'office'
   | 'recovery'
   | 'settings'
@@ -47,6 +51,8 @@ export type HeaderIconName =
 
 const ICONS: Record<HeaderIconName, LucideIcon> = {
   compose: SquarePen,
+  project: FolderKanban,
+  video: Film,
   office: Building2,
   recovery: RotateCcw,
   settings: Settings,

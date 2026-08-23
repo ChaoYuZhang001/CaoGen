@@ -216,7 +216,7 @@ export const GATEWAY_ACTION_EFFECT_ENTRY_POLICIES = {
     ], READ_ONLY),
     policyGroup([
       'connectors:mutate', 'knowledge:search',
-      'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'delete',
+      'archive', 'collaborationInbox:mark', 'comments:create', 'comments:delete', 'comments:update', 'create', 'createWithTemplate', 'delete',
       'export:data', 'goals:acceptance', 'goals:archive', 'goals:create', 'goals:restore',
       'goals:transition', 'goals:update', 'goalTask:create', 'restore',
       'invitations:accept', 'invitations:create', 'invitations:revoke',

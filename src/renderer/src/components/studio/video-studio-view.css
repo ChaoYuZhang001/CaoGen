@@ -6,11 +6,14 @@
   min-height: 0;
   flex-direction: column;
   overflow: auto;
+  container-name: video-studio;
+  container-type: inline-size;
   background: var(--bg);
 }
 
 .video-studio-shell-header {
   display: flex;
+  flex: 0 0 auto;
   min-height: 58px;
   align-items: center;
   justify-content: space-between;
@@ -66,15 +69,15 @@
 
 .video-studio-shell-empty h2 { margin: 0; color: var(--text); font-size: 16px; }
 .video-studio-shell-empty p { max-width: 460px; margin: 0; font-size: 11px; line-height: 1.6; }
-.video-studio-shell-empty form { display: flex; width: min(430px, 100%); gap: 8px; margin-top: 6px; }
-.video-studio-shell-empty form .input { min-width: 0; flex: 1; }
+.video-studio-shell-empty form { display: flex; width: min(430px, 100%); flex-direction: column; align-items: stretch; gap: 8px; margin-top: 6px; }
+.video-studio-shell-empty form .input { min-width: 0; width: 100%; }
+.video-studio-shell-empty form textarea { resize: vertical; }
 .video-studio-shell-spinner { animation: video-studio-shell-spin 900ms linear infinite; }
 
 @keyframes video-studio-shell-spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 680px) {
+@container video-studio (max-width: 680px) {
   .video-studio-shell-header { align-items: flex-start; flex-direction: column; }
   .video-studio-project-picker { width: 100%; }
   .video-studio-project-picker .input { min-width: 0; width: 100%; flex: 1; }
-  .video-studio-shell-empty form { flex-direction: column; }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -34,17 +34,22 @@ import type {
   VideoProduction,
   VideoShot
 } from '../../../../shared/types'
+import { videoStudioText } from '../../i18n/studioTranslations'
+import { useStore } from '../../store'
+import VideoContinuitySection, { type BibleDraft, type LockDraft } from './VideoContinuitySection'
 import './video-studio.css'
 
 const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation'])
 
-export function VideoStudioPanel({ active, projectId }: { active: boolean; projectId?: string }): React.JSX.Element | null {
+export function VideoStudioPanel({ active, projectId, productionId }: { active: boolean; projectId?: string; productionId?: string }): React.JSX.Element | null {
+  const language = useStore((state) => state.settings.language)
+  const text = videoStudioText(language)
   const [snapshot, setSnapshot] = useState<MediaStudioSnapshot | null>(null)
   const [ffmpeg, setFfmpeg] = useState<MediaFfmpegInfo | null>(null)
   const [selectedProductionId, setSelectedProductionId] = useState('')
   const [selectedShotId, setSelectedShotId] = useState('')
   const [selectedAssetId, setSelectedAssetId] = useState('')
-  const [title, setTitle] = useState('新短片')
+  const [title, setTitle] = useState<string>(text.defaultProductionTitle)
   const [script, setScript] = useState('')
   const [revisionScript, setRevisionScript] = useState('')
   const [shotDraft, setShotDraft] = useState({ title: '', prompt: '', durationMs: 5_000 })
@@ -60,15 +65,15 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
   const [cueDraft, setCueDraft] = useState({ speaker: '', text: '', startMs: 0, endMs: 2_000, audioAssetId: '', subtitleEnabled: true })
   const [editingCueId, setEditingCueId] = useState('')
   const [backgroundVolumeDraft, setBackgroundVolumeDraft] = useState(0.2)
-  const [bibleDraft, setBibleDraft] = useState({ name: '', summary: '', appearanceRules: '', voiceRules: '', behaviorRules: '' })
-  const [lockDraft, setLockDraft] = useState({ label: '', role: 'character' as 'character' | 'costume' | 'scene' | 'prop' | 'voice', bibleId: '' })
+  const [bibleDraft, setBibleDraft] = useState<BibleDraft>({ name: '', summary: '', appearanceRules: '', voiceRules: '', behaviorRules: '' })
+  const [lockDraft, setLockDraft] = useState<LockDraft>({ label: '', role: 'character', bibleId: '' })
   const [budgetLimitDraft, setBudgetLimitDraft] = useState('')
   const [storageQuotaDraft, setStorageQuotaDraft] = useState('20')
   const [retentionModeDraft, setRetentionModeDraft] = useState<'retain' | 'expire'>('retain')
   const [retentionUntilDraft, setRetentionUntilDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-
+  useLocalizedProductionTitle(text.defaultProductionTitle, setTitle)
   const refresh = useCallback(async (): Promise<void> => {
     if (!projectId) { setSnapshot(null); return }
     try {
@@ -84,15 +89,14 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
       setSelectedMediaProviderId((current) => next.providers.some((item) => item.id === current && item.enabled)
         ? current
         : next.providers.find((item) => item.enabled && item.defaultFor?.includes('video'))?.id ?? next.providers.find((item) => item.enabled)?.id ?? 'media-provider:mock-local')
-      setSelectedProductionId((current) => next.productions.some((item) => item.id === current)
+      setSelectedProductionId((current) => productionId && next.productions.some((item) => item.id === productionId) ? productionId : next.productions.some((item) => item.id === current)
         ? current
         : next.productions[0]?.id ?? '')
       setError('')
     } catch (cause) {
       setError(errorText(cause))
     }
-  }, [projectId])
-
+  }, [projectId, productionId])
   useEffect(() => { if (active) void refresh() }, [active, refresh])
   const production = snapshot?.productions.find((item) => item.id === selectedProductionId) ?? snapshot?.productions[0]
   const adoptedStructure = production?.structureRevisions.find((item) => item.id === production.adoptedStructureRevisionId)
@@ -101,6 +105,7 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
   const shots = visibleShotIds.map((id) => production?.shots.find((shot) => shot.id === id)).filter((shot): shot is VideoShot => Boolean(shot))
   const selectedShot = shots.find((item) => item.id === selectedShotId) ?? shots[0]
   const selectedAsset = production?.assets.find((item) => item.id === selectedAssetId) ?? production?.assets[0]
+  const previewAsset = finalAssetFor(production)
   const audioAssets = production?.assets.filter((asset) => asset.contentStatus === 'available' &&
     (asset.kind === 'audio' || asset.kind === 'voice' || asset.mediaType?.startsWith('audio/'))) ?? []
   const finalAsset = production?.assets.find((asset) => asset.id === production.finalAssetId)
@@ -117,7 +122,6 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
     ?? mediaProviders.find((item) => item.enabled && item.id === 'media-provider:mock-local')
   const storage = useMemo(() => mediaStorageSummary(snapshot, projectId), [snapshot?.snapshotDigest, projectId])
   const selectedAssetAvailable = selectedAsset?.contentStatus === 'available'
-
   useEffect(() => {
     if (!production) return
     setRevisionScript(production.script)
@@ -130,23 +134,11 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
     setShotDraft({ title: selectedShot.title, prompt: selectedShot.prompt, durationMs: selectedShot.durationMs })
   }, [selectedShot?.id, selectedShot?.revision])
   useEffect(() => { if (selectedAsset) setSelectedAssetId(selectedAsset.id) }, [selectedAsset?.id])
-  useEffect(() => {
-    setStorageQuotaDraft(storage ? bytesToGiBInput(storage.quotaBytes) : '20')
-  }, [storage?.quotaBytes])
-  useEffect(() => {
-    setRetentionModeDraft(selectedAsset?.retention.mode ?? 'retain')
-    setRetentionUntilDraft(selectedAsset?.retention.retainUntil ? timestampToLocalInput(selectedAsset.retention.retainUntil) : '')
-  }, [selectedAsset?.id, selectedAsset?.retention.revision])
-
-  const run = async (operation: () => Promise<unknown>): Promise<void> => {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    try { await operation(); await refresh() } catch (cause) { setError(errorText(cause)) } finally { setBusy(false) }
-  }
-
+  useStorageQuotaDraft(storage?.quotaBytes, setStorageQuotaDraft)
+  useAssetRetentionDraft(selectedAsset, setRetentionModeDraft, setRetentionUntilDraft)
+  const run = useStudioOperationRunner(busy, refresh, setBusy, setError)
   const createProduction = (): void => void run(async () => {
-    if (!projectId || !title.trim() || !script.trim()) throw new Error('请填写制作标题和剧本')
+    if (!projectId || !title.trim() || !script.trim()) throw new Error(text.productionInputRequired)
     const created = await window.agentDesk.createVideoProduction({ projectId, title, script, autoStructure: true })
     setSelectedProductionId(created.id)
     setScript('')
@@ -389,38 +381,49 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
     const result = await window.agentDesk.composeMediaProduction({ projectId, productionId: production.id, shotIds: shots.map((shot) => shot.id), subtitleMode: production.timeline.subtitleMode })
     setSelectedAssetId(result.asset.id)
   })
+  const adoptPreview = (): void => void run(async () => {
+    if (!production || !previewAsset) return
+    await window.agentDesk.setMediaAdoption({ productionId: production.id, assetId: previewAsset.id, adopted: true })
+  })
   const advance = (id: string): void => void run(() => window.agentDesk.advanceMediaJob(id))
   const reconcile = (id: string): void => void run(() => window.agentDesk.reconcileMediaJob(id))
   const cancel = (id: string): void => void run(() => window.agentDesk.cancelMediaJob(id))
   const activeJobCount = useMemo(() => jobs.filter((job) => !terminalStatuses.has(job.status)).length, [jobs])
   const costSummary = useMemo(() => summarizeMediaCost(production, jobs), [production?.revision, jobs])
-
   if (!projectId) return null
   return <section className="video-studio-panel" aria-labelledby="video-studio-title">
     <header className="video-studio-header">
       <div className="video-studio-heading">
-        <h2 id="video-studio-title"><Film size={16} aria-hidden="true" />视频工作室</h2>
-        <span>{production ? `${visibleScenes.length} 场 / ${shots.length} 镜头 / ${production.assets.length} 素材` : '未创建制作'}</span>
+        <h2 id="video-studio-title"><Film size={16} aria-hidden="true" />{text.overviewTitle}</h2>
+        <span>{production ? text.productionSummary(visibleScenes.length, shots.length, production.assets.length) : text.noProduction}</span>
       </div>
       <div className="video-studio-header-actions">
-        {production && <select className="input" value={production.id} onChange={(event) => setSelectedProductionId(event.target.value)} aria-label="选择视频制作">
+        {production && <select className="input" value={production.id} onChange={(event) => setSelectedProductionId(event.target.value)} aria-label={text.selectProduction}>
           {snapshot?.productions.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
         </select>}
-        <span className={ffmpeg?.available ? 'video-studio-runtime is-ready' : 'video-studio-runtime'}>{ffmpeg?.available ? 'FFmpeg 就绪' : 'FFmpeg 不可用'}</span>
-        <button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => void refresh()} disabled={busy} aria-label="刷新视频工作室" title="刷新"><RefreshCw size={14} aria-hidden="true" /></button>
+        <span className={ffmpeg?.available ? 'video-studio-runtime is-ready' : 'video-studio-runtime'}>{ffmpeg?.available ? text.ffmpegReady : text.ffmpegUnavailable}</span>
+        <button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => void refresh()} disabled={busy} aria-label={text.refreshStudio} title={text.refresh}><RefreshCw size={14} aria-hidden="true" /></button>
       </div>
     </header>
 
     {error && <p className="video-studio-error" role="alert">{error}</p>}
     {!production ? <div className="video-studio-create">
-      <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="制作标题" aria-label="制作标题" />
-      <textarea className="input" value={script} onChange={(event) => setScript(event.target.value)} placeholder="短剧本或大纲" aria-label="短剧本" rows={5} />
-      <button type="button" className="btn btn-primary btn-sm" disabled={busy || !title.trim() || !script.trim()} onClick={createProduction}><Sparkles size={14} aria-hidden="true" />结构化制作</button>
+      <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={text.productionTitlePlaceholder} aria-label={text.productionTitleLabel} />
+      <textarea className="input" value={script} onChange={(event) => setScript(event.target.value)} placeholder={text.productionScriptPlaceholder} aria-label={text.productionScriptLabel} rows={5} />
+      <button type="button" className="btn btn-primary btn-sm" disabled={busy || !title.trim() || !script.trim()} onClick={createProduction}><Sparkles size={14} aria-hidden="true" />{text.createStoryboard}</button>
     </div> : <div className="video-studio-workspace">
+      <VideoPreviewFlow
+        busy={busy}
+        onCompose={compose}
+        onAdopt={adoptPreview}
+        previewAsset={previewAsset}
+        shotCount={shots.length}
+        ffmpegAvailable={Boolean(ffmpeg?.available)}
+      />
       <section className="video-studio-script" aria-label="剧本结构">
         <div className="video-studio-section-title"><strong>剧本与分镜</strong><span>结构修订 {production.structureRevisions.length}</span></div>
         <textarea className="input" value={revisionScript} onChange={(event) => setRevisionScript(event.target.value)} rows={5} aria-label="制作剧本" />
-        <button type="button" className="btn btn-secondary btn-sm" disabled={busy || revisionScript.trim() === production.script} onClick={reviseProduction}><Sparkles size={14} aria-hidden="true" />生成新结构版本</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy || revisionScript.trim() === production.script} onClick={reviseProduction} data-video-revise><Sparkles size={14} aria-hidden="true" />生成新结构版本</button>
         <div className="video-studio-storyboard">
           {visibleScenes.map((scene) => <div className="video-studio-scene" key={scene.id}>
             <div className="video-studio-scene-title"><strong>{scene.title}</strong><span>{scene.shotIds.length} 镜头</span><button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => createShot(scene.id)} disabled={busy} aria-label={`向 ${scene.title} 添加镜头`} title="添加镜头"><Plus size={13} /></button></div>
@@ -437,7 +440,6 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
           </div>)}
         </div>
       </section>
-
       <section className="video-studio-inspector" aria-label="镜头检查器">
         <div className="video-studio-section-title"><strong>镜头</strong><span>{selectedShot?.revision ? `v${selectedShot.revision}` : '-'}</span></div>
         {selectedShot && <>
@@ -479,7 +481,8 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
           </div>
         </>}
       </section>
-
+      <details className="video-studio-advanced-section" data-video-advanced-section="assets">
+        <summary><strong>素材库</strong><span>{production.assets.length} 项 · 按需展开</span></summary>
       <section className="video-studio-assets" aria-label="资产库">
         <div className="video-studio-section-title"><strong>资产库</strong><span>{production.assets.filter((asset) => asset.adopted).length} 已采用</span></div>
         <div className="video-studio-storage-toolbar">
@@ -526,7 +529,9 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
           </div>}
         </>}
       </section>
-
+      </details>
+      <details className="video-studio-advanced-section" data-video-advanced-section="generation">
+        <summary><strong>生成与合成</strong><span>{activeJobCount} 个任务运行中 · 按需展开</span></summary>
       <section className="video-studio-queue" aria-label="媒体任务队列">
         <div className="video-studio-section-title"><strong>生成与合成</strong><span>{activeJobCount} 运行中</span></div>
         <div className="video-studio-provider-toolbar">
@@ -583,41 +588,134 @@ export function VideoStudioPanel({ active, projectId }: { active: boolean; proje
           </div>)}
         </div>
       </section>
-
-      <section className="video-studio-continuity" aria-label="角色与连续性">
-        <div className="video-studio-section-title"><strong>角色与连续性</strong><span>{production.characterBibles.length} Bible · {production.continuityLocks.length} 锁</span></div>
-        <div className="video-studio-continuity-grid">
-          <div>
-            <div className="video-studio-subheading"><strong>角色 Bible</strong><span>参考当前选中素材</span></div>
-            <input className="input" value={bibleDraft.name} onChange={(event) => setBibleDraft((value) => ({ ...value, name: event.target.value }))} placeholder="角色名称" aria-label="角色 Bible 名称" />
-            <textarea className="input" value={bibleDraft.summary} onChange={(event) => setBibleDraft((value) => ({ ...value, summary: event.target.value }))} placeholder="角色摘要" aria-label="角色 Bible 摘要" rows={2} />
-            <textarea className="input" value={bibleDraft.appearanceRules} onChange={(event) => setBibleDraft((value) => ({ ...value, appearanceRules: event.target.value }))} placeholder="外观规则，每行一条" aria-label="外观规则" rows={2} />
-            <textarea className="input" value={bibleDraft.voiceRules} onChange={(event) => setBibleDraft((value) => ({ ...value, voiceRules: event.target.value }))} placeholder="声音规则，每行一条" aria-label="声音规则" rows={2} />
-            <textarea className="input" value={bibleDraft.behaviorRules} onChange={(event) => setBibleDraft((value) => ({ ...value, behaviorRules: event.target.value }))} placeholder="行为规则，每行一条" aria-label="行为规则" rows={2} />
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !bibleDraft.name.trim() || !bibleDraft.summary.trim()} onClick={saveBible}><Save size={13} />保存 Bible</button>
-            <div className="video-studio-bible-list">{production.characterBibles.map((bible) => <div key={bible.id}><strong>{bible.name}</strong><span>v{bible.revision} · {bible.referenceAssetIds.length} 参考</span><button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => deleteBible(bible.id)} disabled={busy} aria-label={`删除 ${bible.name}`} title="删除 Bible"><CircleMinus size={13} /></button></div>)}</div>
-          </div>
-          <div>
-            <div className="video-studio-subheading"><strong>连续性锁</strong><span>锁定素材明确版本</span></div>
-            <input className="input" value={lockDraft.label} onChange={(event) => setLockDraft((value) => ({ ...value, label: event.target.value }))} placeholder="锁名称" aria-label="连续性锁名称" />
-            <select className="input" value={lockDraft.role} onChange={(event) => setLockDraft((value) => ({ ...value, role: event.target.value as typeof value.role }))} aria-label="连续性职责"><option value="character">角色</option><option value="costume">服装</option><option value="scene">场景</option><option value="prop">道具</option><option value="voice">声线</option></select>
-            <select className="input" value={lockDraft.bibleId} onChange={(event) => setLockDraft((value) => ({ ...value, bibleId: event.target.value }))} aria-label="关联角色 Bible"><option value="">不关联 Bible</option>{production.characterBibles.map((bible) => <option key={bible.id} value={bible.id}>{bible.name}</option>)}</select>
-            <button type="button" className="btn btn-secondary btn-sm" disabled={busy || !selectedAssetAvailable || shots.length === 0} onClick={saveContinuityLock}><Link2 size={13} />锁定选中素材到全部镜头</button>
-            <div className="video-studio-lock-list">{production.continuityLocks.map((lock) => <div key={lock.id}><strong>{lock.label}</strong><span>{lock.role} · v{lock.assetVersion} · {lock.targetShotIds.length} 镜头</span><button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => deleteContinuityLock(lock.id)} disabled={busy} aria-label={`删除 ${lock.label}`} title="删除连续性锁"><CircleMinus size={13} /></button></div>)}</div>
-            <div className="video-studio-continuity-result"><button type="button" className="btn btn-primary btn-sm" disabled={busy || production.continuityLocks.length === 0} onClick={checkContinuity}><Check size={13} />检查连续性</button><span data-passed={production.latestContinuityCheck?.passed}>{production.latestContinuityCheck ? `${production.latestContinuityCheck.passed ? '通过' : '需修复'} · ${production.latestContinuityCheck.findingCount} 项 · ${production.latestContinuityCheck.digest.slice(7, 19)}` : '尚未检查'}</span></div>
-          </div>
-        </div>
-      </section>
+      </details>
+      <VideoContinuitySection
+        busy={busy}
+        production={production}
+        shots={shots}
+        selectedAssetAvailable={selectedAssetAvailable}
+        bibleDraft={bibleDraft}
+        lockDraft={lockDraft}
+        onBibleDraftChange={setBibleDraft}
+        onLockDraftChange={setLockDraft}
+        onSaveBible={saveBible}
+        onDeleteBible={deleteBible}
+        onSaveContinuityLock={saveContinuityLock}
+        onDeleteContinuityLock={deleteContinuityLock}
+        onCheckContinuity={checkContinuity}
+      />
     </div>}
   </section>
 }
 
+function useLocalizedProductionTitle(
+  defaultTitle: string,
+  setTitle: Dispatch<SetStateAction<string>>
+): void {
+  useEffect(() => {
+    setTitle((current) => current === '新短片' || current === 'New video' ? defaultTitle : current)
+  }, [defaultTitle, setTitle])
+}
+
+function useStorageQuotaDraft(
+  quotaBytes: number | undefined,
+  setDraft: Dispatch<SetStateAction<string>>
+): void {
+  useEffect(() => {
+    setDraft(quotaBytes === undefined ? '20' : bytesToGiBInput(quotaBytes))
+  }, [quotaBytes, setDraft])
+}
+
+function useAssetRetentionDraft(
+  asset: MediaAsset | undefined,
+  setMode: Dispatch<SetStateAction<'retain' | 'expire'>>,
+  setUntil: Dispatch<SetStateAction<string>>
+): void {
+  const assetId = asset?.id
+  const revision = asset?.retention.revision
+  useEffect(() => {
+    setMode(asset?.retention.mode ?? 'retain')
+    setUntil(asset?.retention.retainUntil ? timestampToLocalInput(asset.retention.retainUntil) : '')
+  }, [assetId, asset, revision, setMode, setUntil])
+}
+
+function useStudioOperationRunner(
+  busy: boolean,
+  refresh: () => Promise<void>,
+  setBusy: Dispatch<SetStateAction<boolean>>,
+  setError: Dispatch<SetStateAction<string>>
+): (operation: () => Promise<unknown>) => Promise<void> {
+  return useCallback(async (operation) => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await operation()
+      await refresh()
+      window.dispatchEvent(new Event('caogen:video-updated'))
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, refresh, setBusy, setError])
+}
+
+function VideoPreviewFlow({
+  busy,
+  ffmpegAvailable,
+  onAdopt,
+  onCompose,
+  previewAsset,
+  shotCount
+}: {
+  busy: boolean
+  ffmpegAvailable: boolean
+  onAdopt: () => void
+  onCompose: () => void
+  previewAsset?: MediaAsset
+  shotCount: number
+}): React.JSX.Element {
+  return (
+    <section className="video-studio-preview-flow" aria-label="视频预览" data-video-preview-flow>
+      <div className="video-studio-preview-flow-heading">
+        <div>
+          <strong>预览</strong>
+          <span>{previewAsset ? '可播放本地草稿' : `${shotCount} 个镜头，尚未生成草稿`}</span>
+        </div>
+        <div className="video-studio-inline-actions">
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy || !ffmpegAvailable || shotCount === 0} onClick={onCompose} data-video-compose-preview>
+            <Film size={13} aria-hidden="true" />生成本地预览
+          </button>
+          {previewAsset && <button type="button" className="btn btn-secondary btn-sm" disabled={busy || previewAsset.adopted} onClick={onAdopt} data-video-adopt-preview>
+            <Check size={13} aria-hidden="true" />{previewAsset.adopted ? '已采用为成片' : '采用为成片'}
+          </button>}
+        </div>
+      </div>
+      {previewAsset?.contentStatus === 'available' && previewAsset.previewUrl && previewAsset.mediaType
+        ? <MediaPreview mediaType={previewAsset.mediaType} previewUrl={previewAsset.previewUrl} title={previewAsset.title} />
+        : <p className="video-studio-preview-empty">先点击“生成本地预览”，即可检查当前分镜的可播放结果。</p>}
+    </section>
+  )
+}
+
 function MediaPreview({ mediaType, previewUrl, title }: { mediaType?: string; previewUrl?: string; title: string }): React.JSX.Element | null {
   if (!previewUrl || !mediaType) return null
-  if (mediaType.startsWith('image/')) return <img className="video-studio-preview" src={previewUrl} alt={title} />
-  if (mediaType.startsWith('video/')) return <video className="video-studio-preview" src={previewUrl} controls preload="metadata" aria-label={title} />
+  if (mediaType.startsWith('image/')) return <img className="video-studio-preview" data-video-preview src={previewUrl} alt={title} />
+  if (mediaType.startsWith('video/')) return <video className="video-studio-preview" data-video-preview src={previewUrl} controls preload="auto" autoPlay muted playsInline aria-label={title} />
   if (mediaType.startsWith('audio/')) return <audio className="video-studio-audio" src={previewUrl} controls preload="metadata" aria-label={title} />
   return null
+}
+
+function finalAssetFor(production: VideoProduction | undefined): MediaAsset | undefined {
+  if (!production) return undefined
+  const final = production.finalAssetId
+    ? production.assets.find((asset) => asset.id === production.finalAssetId)
+    : undefined
+  if (final) return final
+  return production.assets
+    .filter((asset) => asset.kind === 'video' && asset.authorization?.source === 'local_composition')
+    .sort((left, right) => right.version - left.version || right.createdAt - left.createdAt)[0]
 }
 
 const assetKinds: Array<[MediaAssetKind, string]> = [['character', '角色'], ['scene', '场景'], ['prop', '道具'], ['voice', '声线'], ['image', '图片'], ['video', '视频'], ['audio', '音频'], ['subtitle', '字幕']]

@@ -24,7 +24,7 @@ const userDataDir = path.join(tempRoot, 'user-data')
 const sourcePath = path.join(tempRoot, 'PLUGIN_IPC_SOURCE_PATH_SENSITIVE')
 const sourceContent = 'PLUGIN_IPC_SOURCE_CONTENT_SENSITIVE'
 const pluginName = 'ipc-effect-plugin'
-const pluginRoot = path.join(fixtureHome, '.claude', 'plugins')
+const pluginRoot = path.join(fixtureHome, '.caogen', 'plugins')
 const activePath = path.join(pluginRoot, pluginName)
 const electronBin = process.platform === 'darwin'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron')

@@ -2,10 +2,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
-import {
-  derivePublicStatus,
-  publicStatusParagraph
-} from './lib/public-status-projection.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required') || process.env.CAOGEN_PRODUCT_POSITIONING_REQUIRED === '1'
@@ -17,10 +13,7 @@ const warnings = []
 
 const publicFiles = [
   'README.md',
-  'docs/CAOGEN-OPTIMIZATION-PLAN.md',
-  'docs/RELEASE-NOTES-DRAFT.md',
-  'docs/RELEASE-NOTES-FINAL.md',
-  'docs/RELEASE-GATE-DRAFT.md',
+  'README.en.md',
   'src/renderer/src/components/WelcomeView.tsx'
 ]
 
@@ -57,7 +50,7 @@ const forbiddenCompetitorNames = [
 
 const forbiddenComparisonInfo = [
   { name: 'external-product-comparison-zh', regex: /竞品|对标|同类产品|同类工具/g },
-  { name: 'external-product-comparison-en', regex: /\bcompetitor(?:s)?\b|\bcompeting products?\b|\bversus\b/gi },
+  { name: 'external-product-comparison-en', regex: /\bcompetitor(?:s)?\b|\bcompeting products?\b/gi },
   { name: 'comparison-vs-marker', regex: /(^|[\s([])vs\.?(?=$|[\s)\]])/g },
   { name: 'comparison-table-limits', regex: /常见限制|单厂商产品|闭源\s*SaaS|国际产品/g },
   { name: 'wrapper-or-cli-comparison', regex: /简单套壳|聊天套壳|CLI\s*强但不可视/g }
@@ -152,41 +145,27 @@ function validateCorePositioning() {
   requireText('README.md', '多厂商 AI 工作桌面', 'README first screen must say CaoGen is a multi-vendor AI work desktop')
   requireText('README.md', '多模型、多项目、多文件、多任务、多工具', 'README must state the multi-model/project/file/task/tool unification')
   requireText('README.md', '用户', 'README positioning must be broader than developers-only')
-  requireText('docs/CAOGEN-OPTIMIZATION-PLAN.md', 'multi-vendor AI work desktop', 'optimization plan must keep the English product definition')
-  requireText('docs/CAOGEN-OPTIMIZATION-PLAN.md', 'Project-level working rules', 'optimization plan must include project-level working rules')
-  requireText('docs/RELEASE-NOTES-DRAFT.md', 'multi-vendor AI work desktop', 'release notes must use the product definition')
-  requireText('docs/RELEASE-GATE-DRAFT.md', 'multi-vendor AI work desktop', 'release gate must enforce the product definition')
+  requireText('README.en.md', 'multi-vendor AI work desktop', 'English README must keep the product definition')
+  requireText('README.en.md', 'multiple models, projects, files, tasks, and tools', 'English README must state the unified work scope')
+  requireText('README.en.md', 'Users', 'English README positioning must be broader than developers-only')
 }
 
 function validateFormalStatusConsistency() {
-  const prdPath = path.join(repoRoot, 'docs', 'PRODUCT-REQUIREMENTS.md')
-  const statusPath = path.join(repoRoot, 'STATUS.md')
-  const publicStatusPath = path.join(repoRoot, 'docs', 'public-status.json')
-  if (!existsSync(prdPath) || !existsSync(statusPath) || !existsSync(publicStatusPath)) {
-    failures.push('cannot derive public status: PRD, STATUS.md, or docs/public-status.json is missing')
-    return null
+  const zh = readRequiredText('README.md')
+  const en = readRequiredText('README.en.md')
+  if (!zh || !en) return null
+  const zhVersion = zh.match(/`(v\d+\.\d+\.\d+)` 是当前公开正式版本/)?.[1]
+  const enVersion = en.match(/`(v\d+\.\d+\.\d+)` is the current public release/)?.[1]
+  if (!zhVersion) failures.push('README must identify exactly one current public semantic version')
+  if (!enVersion) failures.push('English README must identify exactly one current public semantic version')
+  if (zhVersion && enVersion && zhVersion !== enVersion) {
+    failures.push(`README current public release mismatch: ${zhVersion} versus ${enVersion}`)
   }
-
-  let snapshot
-  let recorded
-  try {
-    snapshot = derivePublicStatus({
-      productRequirements: readFileSync(prdPath, 'utf8'),
-      statusDocument: readFileSync(statusPath, 'utf8')
-    })
-    recorded = JSON.parse(readFileSync(publicStatusPath, 'utf8'))
-  } catch (error) {
-    failures.push(`cannot derive public status: ${error.message}`)
-    return null
+  if (zhVersion) {
+    requireText('README.md', `release-${zhVersion}`, 'README release badge must match the current public release')
+    requireText('README.en.md', `release-${zhVersion}`, 'English README release badge must match the current public release')
   }
-
-  if (JSON.stringify(recorded) !== JSON.stringify(snapshot)) {
-    failures.push('docs/public-status.json is stale; run npm run update:public-status')
-  }
-
-  requireText('README.md', publicStatusParagraph(snapshot, 'zh-CN'), 'README must match docs/public-status.json')
-  requireText('README.en.md', publicStatusParagraph(snapshot, 'en'), 'English README must match docs/public-status.json')
-  return snapshot
+  return zhVersion && enVersion ? { currentPublicRelease: zhVersion } : null
 }
 
 function validateBrandAssets() {
@@ -207,11 +186,7 @@ function validateBrandAssets() {
     rejectBrandPlaceholder('src/renderer/src/components/Sidebar.tsx', sidebar)
   }
 
-  if (welcome) {
-    requireSnippet(welcome, 'className="welcome-logo"', 'welcome screen must render the official CaoGen logo')
-    requireSnippet(welcome, 'src={APP_ICON_URL}', 'welcome logo must use the official app icon URL')
-    rejectBrandPlaceholder('src/renderer/src/components/WelcomeView.tsx', welcome)
-  }
+  if (welcome) requireSnippet(welcome, 'data-welcome-heading="true"', 'welcome screen must expose its primary heading')
 
   if (app) {
     requireSnippet(app, 'className="app-fallback-logo"', 'fallback screen must render the official CaoGen logo')

@@ -113,7 +113,8 @@ export function welcomeValidationKey(
   draft: WelcomeSessionDraft,
   computeAvailable: boolean
 ): string | null {
-  if (!draft.unassigned && !draft.cwd.trim()) return 'errNeedProjectDir'
+  const workspaceValidationKey = welcomeWorkspaceValidationKey(draft)
+  if (workspaceValidationKey) return workspaceValidationKey
   if (projection === 'assistant') return computeAvailable ? null : 'assistantComputeUnavailable'
   if (draft.routingMode === 'global' && !computeAvailable) return 'explicitProviderRequired'
   if (draft.routingMode !== 'global' && !draft.providerId) return 'explicitProviderRequired'
@@ -123,16 +124,23 @@ export function welcomeValidationKey(
   return null
 }
 
+export function welcomeWorkspaceValidationKey(
+  draft: Pick<WelcomeSessionDraft, 'cwd' | 'unassigned'>
+): 'errNeedProjectDir' | null {
+  return !draft.unassigned && !draft.cwd.trim() ? 'errNeedProjectDir' : null
+}
+
 export function welcomeSessionOptions(
   projection: SessionExperienceMode,
   draft: WelcomeSessionDraft,
   prompt: string
 ): CreateSessionOptions {
+  const sessionProjection = draft.unassigned ? projection : 'studio'
   const placement = {
     cwd: draft.cwd.trim(),
     projectId: draft.projectId,
     unassigned: draft.unassigned,
-    experienceModeOverride: projection,
+    experienceModeOverride: sessionProjection,
     initialPrompt: prompt,
     forkFromSdkSessionId: draft.forkFromSdkSessionId,
     forkCheckpointId: draft.forkCheckpointId

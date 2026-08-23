@@ -153,9 +153,18 @@
 .sidebar-collapsed .app-mode-switcher button,
 .sidebar-collapsed .sidebar-footer .sidebar-nav-item {
   width: 48px;
-  min-height: 30px;
-  justify-content: center;
+  height: 32px;
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  gap: 0;
   padding: 0;
+}
+
+.sidebar-collapsed .app-mode-switcher button > *,
+.sidebar-collapsed .sidebar-footer .sidebar-nav-item > .header-icon-glyph {
+  grid-area: 1 / 1;
 }
 
 .sidebar-collapsed .app-mode-icon {
@@ -341,7 +350,7 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .app-mode-switcher button:hover {
+  .app-mode-switcher button:hover:not(.active) {
     color: var(--text);
     background: var(--accent-soft);
   }

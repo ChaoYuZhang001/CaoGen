@@ -106,9 +106,9 @@ try {
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
   await waitForApp(page)
   await page.waitForFunction(
-    (expectedProjectId) => document.querySelector('.welcome-project-select')?.value === expectedProjectId,
-    { timeout: 10_000 },
-    projectId
+    () => document.querySelector('[data-welcome-project-trigger]') &&
+      document.querySelector('.welcome-project-select')?.value === '__unassigned__',
+    { timeout: 10_000 }
   )
 
   const recommendedReadOnlyPrompt = '阅读当前工作区可访问的代码和文档，不要修改文件。输出项目用途、目录与核心模块、关键入口和数据流、运行与测试方式、主要风险和建议的下一步。引用具体文件；如果没有可分析内容，请明确提示我选择目录或添加文件，不要臆测。'
@@ -116,6 +116,8 @@ try {
   const expectedReply = `Zero-choice route completed: ${prompt}`
 
   await check('recommended read-only preset fills the welcome composer without starting a session', async () => {
+    const initialProject = await page.$eval('.welcome-project-select', (select) => select.value)
+    assert(initialProject === '__unassigned__', `Assistant default Project choice drifted: ${initialProject}`)
     await page.click('[data-welcome-preset="understand"]')
     const value = await page.$eval('.welcome-composer-input', (input) => input.value)
     assert(value === recommendedReadOnlyPrompt, `recommended read-only prompt drifted: ${value}`)
@@ -123,13 +125,31 @@ try {
     assert(strategy === 'view', `recommended read-only preset selected ${strategy} instead of view`)
     const sessions = await page.evaluate(() => window.agentDesk.listSessions())
     assert(sessions.length === 0, 'selecting the recommended read-only preset created a session')
+    await page.select('.welcome-project-select', '__unassigned__')
+    await page.waitForFunction(
+      () => document.querySelector('.welcome-project-select')?.value === '__unassigned__',
+      { timeout: 5_000 }
+    )
   })
 
   await check('Assistant starts with no technical routing controls', async () => {
     await assertMode(page, 'assistant')
     await assertAssistantProjection(page)
     const selectedProject = await page.$eval('.welcome-project-select', (select) => select.value)
-    assert(selectedProject === projectId, `saved project was not selected: ${selectedProject}`)
+    assert(selectedProject === '__unassigned__', `Assistant should start without a Project: ${selectedProject}`)
+    await page.click('[data-welcome-project-trigger]')
+    await page.waitForFunction(
+      (expectedProjectId) => Array.from(document.querySelectorAll('.welcome-project-select option'))
+        .some((option) => option.value === expectedProjectId),
+      { timeout: 10_000 },
+      projectId
+    )
+    await page.select('.welcome-project-select', projectId)
+    await page.waitForFunction(
+      (expectedProjectId) => document.querySelector('.welcome-project-select')?.value === expectedProjectId,
+      { timeout: 5_000 },
+      projectId
+    )
     await setValue(page, '.welcome-composer-input', prompt)
     const computeState = await page.$eval('[data-assistant-compute-state]', (node) => ({
       available: node.getAttribute('data-compute-available'),
@@ -351,11 +371,12 @@ try {
     assert(persistedDraft === null, 'successful first-task start did not clear the persisted welcome draft')
     stableSnapshot = await readSessionSnapshot(page, sessionId)
     report.requests = mock.requests.map(({ authorization: _authorization, ...request }) => request)
-    await assertAssistantProjection(page)
+    await assertStudioExpertProjection(page)
     await screenshot(page, '02-assistant-zero-choice-complete')
   })
 
   await check('Assistant command surfaces omit expert-only commands', async () => {
+    await clickMode(page, 'assistant')
     await openCommandPalette(page)
     const text = await page.$eval('.command-palette', (node) => node.innerText)
     for (const forbidden of ['/model', '/terminal', '/plugins', '/subagents', '/diff', '/worktree']) {
@@ -366,10 +387,12 @@ try {
   })
 
   await check('Studio expert tab supports arrow keys and reveals the same session controls', async () => {
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.composer-input', { visible: true, timeout: 10_000 })
     await page.click('.composer-input')
     await page.type('.composer-input', 'projection draft remains local')
     const before = await readSessionSnapshot(page, sessionId)
-    await clickMode(page, 'studio')
     await page.click('[data-studio-projection-tab="workspace"]')
     await page.waitForSelector('[data-studio-projection-tab="workspace"][aria-selected="true"]', { visible: true })
     await page.focus('[data-studio-projection-tab="workspace"]')
@@ -399,7 +422,7 @@ try {
     await screenshot(page, '03-studio-expert-session')
   })
 
-  await check('workspace roundtrip and Assistant return preserve DOM draft and canonical state', async () => {
+  await check('workspace roundtrip and Assistant return preserve canonical state', async () => {
     await page.focus('[data-studio-projection-tab="session"]')
     await page.keyboard.press('ArrowLeft')
     await page.waitForSelector('[data-studio-projection-tab="result"][aria-selected="true"]', { visible: true })
@@ -419,13 +442,17 @@ try {
       'ArrowLeft did not move tab focus to workspace'
     )
     await clickMode(page, 'assistant')
-    await page.waitForSelector('.composer-input', { visible: true })
-    const draft = await page.$eval('.composer-input', (input) => input.value)
-    assert(draft === 'projection draft remains local', `Assistant draft changed after workspace roundtrip: ${draft}`)
+    await page.waitForSelector('.welcome-composer-input', { visible: true })
     await assertAssistantProjection(page)
     const after = await readSessionSnapshot(page, sessionId)
     assertSameSnapshot(stableSnapshot, after, 'Assistant return')
     assert(mock.requests.length === 1, 'projection roundtrip created a new model request')
+    await clickMode(page, 'studio')
+    await page.click('[data-studio-projection-tab="session"]')
+    await page.waitForSelector('.composer-input', { visible: true })
+    const draft = await page.$eval('.composer-input', (input) => input.value)
+    assert(draft === 'projection draft remains local', `Studio draft changed after roundtrip: ${draft}`)
+    await assertStudioExpertProjection(page)
   })
 } catch (error) {
   report.error = error instanceof Error ? error.stack || error.message : String(error)

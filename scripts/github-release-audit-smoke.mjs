@@ -98,6 +98,12 @@ try {
   const incompleteNotes = runNotesAudit()
   assert.notEqual(incompleteNotes.status, 0)
   assert(incompleteNotes.report.failures.some((failure) => failure.includes('must contain the same names')))
+
+  writeJson(fixturePath, historicalReleaseFixture())
+  const historical = runHistoricalAudit()
+  assert.equal(historical.status, 0, historical.stderr || historical.stdout)
+  assert.equal(historical.report.status, 'passed')
+  assert.deepEqual(historical.report.failures, [])
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
 }
@@ -187,6 +193,62 @@ function runNotesAudit() {
     stderr: result.stderr,
     report: JSON.parse(result.stdout)
   }
+}
+
+function runHistoricalAudit() {
+  const result = spawnSync(process.execPath, [
+    path.join(repoRoot, 'scripts', 'github-release-audit.mjs'),
+    '--required',
+    '--repo', 'ChaoYuZhang001/CaoGen',
+    '--json', fixturePath
+  ], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    report: JSON.parse(result.stdout)
+  }
+}
+
+function historicalReleaseFixture() {
+  const asset = (name) => ({
+    name,
+    size: 32,
+    state: 'uploaded',
+    content_type: 'application/octet-stream',
+    digest: `sha256:${'a'.repeat(64)}`,
+    url: '',
+    browser_download_url: ''
+  })
+  return [
+    {
+      tag_name: 'v0.1.8-windows-preview',
+      name: 'CaoGen v0.1.8 Windows preview',
+      html_url: 'https://example.invalid/releases/v0.1.8-windows-preview',
+      draft: false,
+      prerelease: true,
+      published_at: '2026-08-01T00:00:00.000Z',
+      body: 'Historical preview fixture.',
+      assets: [
+        asset('CaoGen-0.1.8-windows-x64-unsigned-preview.exe'),
+        asset('CaoGen-0.1.8-windows-x64-unsigned-preview.exe.blockmap'),
+        asset('SHA256SUMS.txt')
+      ]
+    },
+    {
+      tag_name: 'v0.1.7',
+      name: 'CaoGen v0.1.7',
+      html_url: 'https://example.invalid/releases/v0.1.7',
+      draft: false,
+      prerelease: false,
+      published_at: '2026-07-25T00:00:00.000Z',
+      body: 'Historical release fixture.',
+      assets: [
+        asset('CaoGen-Setup-0.1.7.exe'),
+        asset('CaoGen-Setup-0.1.7.exe.blockmap')
+      ]
+    }
+  ]
 }
 
 function sha256(filePath) {

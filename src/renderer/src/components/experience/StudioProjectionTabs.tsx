@@ -16,21 +16,24 @@ export const STUDIO_PROJECTION_PANEL_IDS: Record<StudioProjectionSurface, string
 
 export default function StudioProjectionTabs({
   hasResult,
+  hasSession,
   language,
   hidden,
   onChange,
   surface
 }: {
   hasResult: boolean
+  hasSession: boolean
   hidden: boolean
   language: 'zh' | 'en'
   onChange: (surface: StudioProjectionSurface) => void
   surface: StudioProjectionSurface
 }): React.JSX.Element {
   const labels = language === 'zh'
-    ? { navigation: '工作台区域', workspace: '项目工作台', result: '结果', session: '会话与工具' }
-    : { navigation: 'Studio area', workspace: 'Project workspace', result: 'Results', session: 'Session and tools' }
-  const surfaces = hasResult ? SURFACES : SURFACES.filter((surface) => surface !== 'result')
+    ? { navigation: '项目区域', workspace: '项目', result: '结果', session: '执行会话' }
+    : { navigation: 'Project area', workspace: 'Project', result: 'Results', session: 'Execution session' }
+  const surfaces = SURFACES.filter((option) =>
+    option === 'workspace' || (option === 'result' && hasResult) || (option === 'session' && hasSession))
   return (
     <nav className="studio-projection-tabs" role="tablist" aria-label={labels.navigation} data-studio-projection-tabs hidden={hidden}>
       {surfaces.map((option) => (

@@ -24,8 +24,8 @@ const combinations = [
   { language: 'en', theme: 'dark' }
 ]
 const viewports = [
-  { name: 'desktop', width: 1280, height: 800 },
-  { name: 'mobile', width: 390, height: 844 }
+  { name: 'desktop-standard', width: 1280, height: 800 },
+  { name: 'desktop-minimum', width: 1024, height: 640 }
 ]
 const report = {
   schemaVersion: 1,
@@ -108,8 +108,8 @@ async function createLongestStringFixture(targetPage) {
       id: 'i18n-layout-goal',
       projectId,
       title: '跨语言端到端目标 Worldwide end-to-end goal LONG-GOAL-END',
-      objective: '在不裁切关键操作的情况下完成超长中英文内容展示，并保持桌面与移动端所有控制可用。',
-      background: 'Verify Chinese and English content across desktop and mobile layouts without overlap or viewport overflow.',
+      objective: '在不裁切关键操作的情况下完成超长中英文内容展示，并保持支持的桌面窗口尺寸下所有控制可用。',
+      background: 'Verify Chinese and English content across supported desktop layouts without overlap or viewport overflow.',
       constraints: ['Preserve canonical identity', 'No clipped primary controls'],
       successCriteria: ['All eight presentation combinations remain operable'],
       acceptance: [
@@ -150,7 +150,7 @@ async function applyPresentation(targetPage, combination) {
     combination
   )
   await dismissTransientOverlays(targetPage)
-  await waitForSidebarSettled(targetPage)
+  await waitForDesktopSidebar(targetPage)
 }
 
 async function assertExperienceSwitcher(targetPage, combination) {
@@ -162,7 +162,7 @@ async function assertExperienceSwitcher(targetPage, combination) {
     }))
   )
   const expectedLabels = combination.language === 'zh'
-    ? ['助手', '项目工作台', '视频工作室']
+    ? ['助手', '项目', '视频']
     : ['Assistant', 'Projects', 'Video']
   assert.deepEqual(options.map((option) => option.mode), ['assistant', 'studio', 'video'],
     `${combination.language}/${combination.theme} experience switcher lost an entry`)
@@ -178,10 +178,7 @@ async function selectExperience(targetPage, mode) {
       const rect = button.getBoundingClientRect()
       return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth
     })
-    if (!clickable) {
-      await targetPage.click('.mobile-sidebar-toggle')
-      await targetPage.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
-    }
+    assert.ok(clickable, `${mode} workspace entry is outside the supported desktop viewport`)
     await targetPage.$eval(selector, (button) => button.click())
   }
   await targetPage.waitForFunction(
@@ -189,38 +186,25 @@ async function selectExperience(targetPage, mode) {
     { timeout: 10_000 },
     mode
   )
-  const backdrop = await targetPage.$('.mobile-sidebar-backdrop')
-  if (backdrop) {
-    await targetPage.$eval('.mobile-sidebar-backdrop', (button) => button.click())
-    await targetPage.waitForFunction(
-      () => !document.querySelector('.sidebar')?.classList.contains('sidebar-mobile-open'),
-      { timeout: 5_000 }
-    )
-    await waitForSidebarSettled(targetPage)
-  }
 }
 
-async function waitForSidebarSettled(targetPage) {
+async function waitForDesktopSidebar(targetPage) {
   await targetPage.waitForFunction(() => {
     const sidebar = document.querySelector('.sidebar')
-    if (!(sidebar instanceof HTMLElement) || window.innerWidth > 680) return true
+    if (!(sidebar instanceof HTMLElement)) return false
     const rect = sidebar.getBoundingClientRect()
-    return sidebar.classList.contains('sidebar-mobile-open') ? rect.left >= -1 : rect.right <= 1
+    return rect.width > 0 && rect.left >= -1 && rect.right <= window.innerWidth + 1
   }, { timeout: 5_000 })
 }
 
 async function openSettings(targetPage) {
-  const selector = '.sidebar-footer .sidebar-nav-item'
+  const selector = '[data-sidebar-action="settings"]'
   const visible = await targetPage.$eval(selector, (node) => {
     const rect = node.getBoundingClientRect()
     return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth
   })
-  if (visible) await targetPage.click(selector)
-  else {
-    await targetPage.click('.mobile-sidebar-toggle')
-    await targetPage.waitForSelector('.sidebar-mobile-open', { visible: true, timeout: 5_000 })
-    await targetPage.$eval(selector, (button) => button.click())
-  }
+  assert.ok(visible, 'Settings entry is outside the supported desktop viewport')
+  await targetPage.click(selector)
   await targetPage.waitForSelector('.settings-page', { visible: true, timeout: 10_000 })
 }
 
@@ -235,7 +219,11 @@ async function dismissTransientOverlays(targetPage) {
     timeout: 5_000
   }).catch(() => null)
   if (!drawer) return
-  await targetPage.click('.task-recovery-drawer-close')
+  await targetPage.waitForFunction(() => {
+    const close = document.querySelector('.task-recovery-drawer-close')
+    return close instanceof HTMLButtonElement && !close.disabled
+  }, { timeout: 15_000 })
+  await targetPage.$eval('.task-recovery-drawer-close', (button) => button.click())
   await targetPage.waitForSelector('.task-recovery-drawer', { hidden: true, timeout: 5_000 })
 }
 

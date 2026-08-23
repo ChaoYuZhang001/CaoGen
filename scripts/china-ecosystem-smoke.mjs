@@ -14,7 +14,6 @@ try {
     [
       'src/main/notification/feishu.ts',
       'src/main/notification/dingtalk.ts',
-      'src/main/notification/wecom.ts',
       'src/main/agent/tools/gitee-tools.ts'
     ],
     outDir
@@ -22,7 +21,6 @@ try {
 
   const feishu = await import(pathToFileURL(findCompiled(outDir, 'feishu.js')).href)
   const dingtalk = await import(pathToFileURL(findCompiled(outDir, 'dingtalk.js')).href)
-  const wecom = await import(pathToFileURL(findCompiled(outDir, 'wecom.js')).href)
   const gitee = await import(pathToFileURL(findCompiled(outDir, 'gitee-tools.js')).href)
   const webhookServer = await startJsonServer()
 
@@ -62,16 +60,6 @@ try {
     assert(dingtalkSignedDryRun.signedUrl.includes('sign='), 'DingTalk signed URL should include sign')
     assert(!dingtalkSignedDryRun.signedUrl.includes('%25'), 'DingTalk sign should not be double-encoded')
 
-    const wecomPayload = wecom.buildWeComWebhookPayload({ title: '任务', text: '已完成', mentionedList: ['zhangsan'] })
-    assertEqual(wecomPayload.msgtype, 'markdown')
-    assert(wecomPayload.markdown.content.includes('<@zhangsan>'), '企微 markdown 应包含成员提醒')
-    const wecomSent = await wecom.sendWeComNotification(
-      { title: '任务', text: 'send' },
-      { webhookUrl: webhookServer.url, dryRun: false }
-    )
-    assertEqual(wecomSent.sent, true)
-    assertEqual(webhookServer.requests.length, 2)
-
     const prUrl = gitee.buildGiteePullRequestUrl({
       owner: 'open-source',
       repo: 'caogen',
@@ -109,11 +97,9 @@ try {
       { accessToken: 'token-for-smoke', baseApiUrl: webhookServer.url, dryRun: false }
     )
     assertEqual(giteeSent.sent, true)
-    assertEqual(webhookServer.requests.length, 3)
+    assertEqual(webhookServer.requests.length, 2)
 
     assertSkill('aliyun-yunxiao-devops')
-    assertSkill('tencent-coding-devops')
-    assertSkill('wechat-miniprogram')
     await assertChinaPlatformApiMocks(webhookServer)
     assertRealNetworkScript()
     assertPackageScript('test:china-real-network', 'scripts/china-real-network-smoke.mjs')
@@ -235,8 +221,6 @@ function assertRealNetworkScript() {
   for (const marker of [
     'gitee_pull_request',
     'ALIYUN_YUNXIAO_API_URL',
-    'TENCENT_CODING_API_URL',
-    'WECHAT_MINIPROGRAM_API_URL',
     'requestConfiguredApi'
   ]) {
     assert(text.includes(marker), `china real-network smoke missing ${marker}`)
@@ -250,28 +234,20 @@ async function assertChinaPlatformApiMocks(webhookServer) {
     env: {
       ...process.env,
       CAOGEN_CHINA_REAL_NETWORK: '1',
-      CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS: 'aliyun_yunxiao_api,tencent_coding_api,wechat_miniprogram_api',
+      CAOGEN_CHINA_REAL_NETWORK_REQUIRED_TARGETS: 'aliyun_yunxiao_api',
       ALIYUN_YUNXIAO_API_URL: `${webhookServer.url}/aliyun/yunxiao`,
       ALIYUN_YUNXIAO_TOKEN: 'aliyun-token-for-smoke',
-      ALIYUN_YUNXIAO_BODY: JSON.stringify({ source: 'caogen-smoke', target: 'aliyun' }),
-      TENCENT_CODING_API_URL: `${webhookServer.url}/tencent/coding`,
-      TENCENT_CODING_TOKEN: 'coding-token-for-smoke',
-      TENCENT_CODING_BODY: JSON.stringify({ source: 'caogen-smoke', target: 'coding' }),
-      WECHAT_MINIPROGRAM_API_URL: `${webhookServer.url}/wechat/miniprogram`,
-      WECHAT_MINIPROGRAM_TOKEN: 'wechat-token-for-smoke',
-      WECHAT_MINIPROGRAM_BODY: JSON.stringify({ source: 'caogen-smoke', target: 'wechat' })
+      ALIYUN_YUNXIAO_BODY: JSON.stringify({ source: 'caogen-smoke', target: 'aliyun' })
     }
   })
   const report = JSON.parse(output.slice(output.indexOf('{')))
   assertEqual(report.status, 'passed')
-  for (const target of ['aliyun_yunxiao_api', 'tencent_coding_api', 'wechat_miniprogram_api']) {
+  for (const target of ['aliyun_yunxiao_api']) {
     const result = report.results.find((item) => item.name === target)
     assert(result?.status === 'pass', `local China API mock did not pass: ${target}`)
   }
-  assertEqual(webhookServer.requests.length, before + 3)
+  assertEqual(webhookServer.requests.length, before + 1)
   assert(webhookServer.requests.some((item) => item.url === '/aliyun/yunxiao'), 'missing Aliyun mock request')
-  assert(webhookServer.requests.some((item) => item.url === '/tencent/coding'), 'missing Tencent Coding mock request')
-  assert(webhookServer.requests.some((item) => item.url === '/wechat/miniprogram'), 'missing WeChat miniprogram mock request')
 }
 
 function runNode(args, options) {

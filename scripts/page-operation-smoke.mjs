@@ -546,13 +546,9 @@ try {
   })
 
   await check(cdp, 'inline new session workspace creates a Provider-scoped project session', async () => {
-    await clickByText(cdp, '新建会话'); await waitForText(cdp, '开始一个任务')
+    await clickByText(cdp, '新建会话'); await waitForSelector(cdp, '[data-welcome-heading="true"]'); await clickSelector(cdp, '[data-welcome-project-trigger]')
     await chooseSelectOptionByText(cdp, '新项目目录')
     await setInputByPlaceholder(cdp, '/path/to/project', projectDir)
-    await clickByText(cdp, '工作台'); await clickByText(cdp, '会话与工具')
-    await clickByText(cdp, '指定模型')
-    await chooseSelectOptionByText(cdp, PAGE_SMOKE_PROVIDER_NAME)
-    await chooseSelectOptionByText(cdp, PAGE_SMOKE_MODEL)
     await setInputByPlaceholder(cdp, '描述你希望 CaoGen 完成的工作', '请检查项目状态')
     await clickSelector(cdp, '.welcome-send')
     await waitForAriaLabel(cdp, '⎇ Worktree', 10_000) // 工具栏图标化后按 aria-label 断言
@@ -592,7 +588,7 @@ try {
   await screenshot(cdp, '03-project-rules')
 
   await check(cdp, 'chat layout controls resize and density toggle are interactive', async () => {
-    await clickByText(cdp, '会话与工具'); await waitForAriaLabel(cdp, '更多操作', 10_000)
+    await clickSelector(cdp, '[data-studio-projection-tab="session"]'); await waitForAriaLabel(cdp, '更多操作', 10_000)
     await clickByAriaLabel(cdp, '更多操作')
     await clickSelector(cdp, '[data-header-action="zoom-in"]')
     await waitForNoSelector(cdp, '[data-header-action="zoom-in"]', 5_000)
@@ -942,7 +938,7 @@ try {
   })
 
   await check(cdp, 'projects can be archived and restored from the sidebar', async () => {
-    await clickSelector(cdp, '.session-card.active')
+    await clickSelector(cdp, '[data-experience-mode-option="studio"]'); await waitForSelector(cdp, '[aria-label="项目操作: project"]', 10_000)
     await clickSelector(cdp, '[aria-label="项目操作: project"]')
     await clickByText(cdp, '归档项目')
     await waitForText(cdp, '已归档项目', 10_000)
@@ -959,6 +955,7 @@ try {
   })
 
   await check(cdp, 'discarding the managed worktree then deleting the last session leaves a usable new-session composer', async () => {
+    await clickSelector(cdp, '[data-studio-projection-tab="session"]'); await waitForAriaLabel(cdp, '⎇ Worktree', 10_000)
     await evalValue(cdp, `(() => { window.confirm = () => true; return true })()`); await clickByAriaLabel(cdp, '⎇ Worktree'); await waitForText(cdp, '状态\nactive', 10_000); await clickByText(cdp, '丢弃隔离副本'); await waitForText(cdp, '状态\nremoved', 30_000)
     await clickSelector(cdp, '.session-card.active .session-card-more')
     await clickByText(cdp, '关闭会话')
@@ -968,20 +965,22 @@ try {
     await clickSelector(cdp, '.history-card .session-card-more')
     await clickByText(cdp, '删除')
     await waitForNoSelector(cdp, '.history-card', 10_000)
-    await clickByText(cdp, '会话与工具'); await focusWelcomeComposer(cdp)
+    await clickSelector(cdp, '[data-experience-mode-option="assistant"]'); await focusWelcomeComposer(cdp)
     await typeText(cdp, '删除后仍可输入')
     const inputValue = await evalValue(cdp, `document.querySelector('.welcome-composer-input')?.value || ''`)
     assert(inputValue === '删除后仍可输入', `new-session composer rejected input after delete: ${JSON.stringify(inputValue)}`)
   })
 
   await check(cdp, 'projects can be deleted without deleting their directories', async () => {
+    await clickSelector(cdp, '[data-experience-mode-option="studio"]'); await waitForSelector(cdp, '[aria-label="项目操作: project"]', 10_000)
     await clickSelector(cdp, '[aria-label="项目操作: project"]')
     await clickByText(cdp, '删除项目')
     await waitForNoAriaLabel(cdp, '项目操作: project', 10_000)
     const savedProjects = readPersistedProjects(userDataDir)
     assert(savedProjects.length === 0, `project delete was not persisted: ${JSON.stringify(savedProjects)}`)
     assert(existsSync(projectDir), 'deleting a project must not delete its directory')
-    await waitForText(cdp, '对话', 10_000)
+    await clickSelector(cdp, '[data-experience-mode-option="assistant"]')
+    await waitForText(cdp, '暂无会话', 10_000)
   })
   await screenshot(cdp, '11-session-project-lifecycle')
 

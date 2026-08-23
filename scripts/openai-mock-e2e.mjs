@@ -248,7 +248,10 @@ try {
     await focusComposer(cdp)
     await typeText(cdp, `protocol failover e2e ${runId}`)
     await press(cdp, 'Enter')
-    await waitForText(cdp, '已自动改用 Chat Completions 重试', 15_000)
+    // Project sessions render the detailed protocol-failover notice; assistant
+    // sessions use the shorter projection copy. This E2E creates a project
+    // session, so assert the copy emitted by the project projection.
+    await waitForText(cdp, '已降级到 Chat Completions 并自动重试', 15_000)
     await waitForText(cdp, 'Protocol fallback handled', 15_000)
     const requests = mock.requests.slice(requestOffset).filter((request) => request.kind === 'protocol-failover')
     assert(
