@@ -483,8 +483,8 @@
     },
     "scripts/lib/product-acceptance-input.mjs": {
       "profile": "automation",
-      "lines": 547,
-      "contentHash": "3317e5521c43cc26913df3a6b0e221586c16caf446689796aa71d70eba6e4884",
+      "lines": 549,
+      "contentHash": "0dd763c5036098e50683f4295a66d4ef2b4f66bebace275dec59677d59bec749",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,

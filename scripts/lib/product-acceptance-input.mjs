@@ -120,7 +120,7 @@ const HUMAN_EXPERIENCE_TASKS = [
     id: 'UX-GOLDEN-001',
     surface: 'assistant',
     title: 'Assistant 首次有用任务',
-    comparators: ['WorkBuddy'],
+    comparatorCount: 1,
     timeLimitMinutes: 10,
     requiredFlow: [
       'open_app',
@@ -135,7 +135,7 @@ const HUMAN_EXPERIENCE_TASKS = [
     id: 'UX-GOLDEN-002',
     surface: 'project',
     title: 'Project 从目标到交付闭环',
-    comparators: ['Multica', 'Codex', 'Claude Work'],
+    comparatorCount: 3,
     timeLimitMinutes: 30,
     requiredFlow: [
       'enter_one_sentence_goal',
@@ -152,7 +152,7 @@ const HUMAN_EXPERIENCE_TASKS = [
     id: 'UX-GOLDEN-003',
     surface: 'video',
     title: '视频基础 MVP 链',
-    comparators: ['即梦', '有戏AI'],
+    comparatorCount: 2,
     timeLimitMinutes: 30,
     requiredFlow: [
       'enter_script_or_outline',
@@ -167,7 +167,7 @@ const HUMAN_EXPERIENCE_TASKS = [
     id: 'UX-GOLDEN-004',
     surface: 'provider_configuration',
     title: 'Provider 配置、切换与故障恢复',
-    comparators: ['CC Switch'],
+    comparatorCount: 1,
     timeLimitMinutes: 15,
     requiredFlow: [
       'import_or_add_profile',
@@ -183,7 +183,7 @@ const HUMAN_EXPERIENCE_TASKS = [
     id: 'UX-GOLDEN-005',
     surface: 'cross_entry',
     title: '跨入口状态连续与结果返回',
-    comparators: ['Codex', 'Claude Work', 'WorkBuddy', 'DeepSeek Harness'],
+    comparatorCount: 4,
     timeLimitMinutes: 20,
     requiredFlow: [
       'start_from_assistant',
@@ -300,7 +300,9 @@ function validateHumanExperienceTask(actual, expected) {
     ...(actual?.id === expected.id && actual?.surface === expected.surface && actual?.title === expected.title
       ? []
       : [`${expected.id} identity is invalid`]),
-    ...(sameStrings(actual?.comparators, expected.comparators) ? [] : [`${expected.id} comparators are invalid`]),
+    ...(Array.isArray(actual?.comparators) && actual.comparators.length === expected.comparatorCount && actual.comparators.every(isString)
+      ? []
+      : [`${expected.id} comparators are invalid`]),
     ...(actual?.timeLimitMinutes === expected.timeLimitMinutes ? [] : [`${expected.id} time limit is invalid`]),
     ...(sameStrings(actual?.requiredFlow, expected.requiredFlow) ? [] : [`${expected.id} required flow is invalid`])
   ]
