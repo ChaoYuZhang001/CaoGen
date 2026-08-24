@@ -126,6 +126,13 @@ function verifyContractDefinition(contract) {
   assert.equal(contract.additionalReleaseBlockingScope.items[2].itemCount, 11)
   assert.equal(contract.additionalReleaseBlockingScope.items[3].maxExpensiveWorkstations, 9)
   assert.equal(contract.additionalReleaseBlockingScope.items[3].overflowStartsAt, 10)
+  assert.equal(contract.humanExperienceAcceptance.participantCount, 5)
+  assert.deepEqual(
+    contract.humanExperienceAcceptance.tasks.map((task) => task.id),
+    ['UX-GOLDEN-001', 'UX-GOLDEN-002', 'UX-GOLDEN-003', 'UX-GOLDEN-004', 'UX-GOLDEN-005']
+  )
+  assert.equal(contract.humanExperienceAcceptance.tasks[0].timeLimitMinutes, 10)
+  assert.equal(contract.humanExperienceAcceptance.tasks[2].qualityBoundary.includes('does not claim remote generation quality parity'), true)
   assert.deepEqual(checkAcceptanceContractScripts(contract, {
     ...Object.fromEntries(contract.closurePolicy.requiredPackageScripts.map((name) => [name, 'node gate.mjs'])),
     'test:workitem-board:required': 'node board.mjs'
@@ -143,6 +150,9 @@ function verifyContractDefinition(contract) {
   const changedControlRoomScope = structuredClone(contract)
   changedControlRoomScope.additionalReleaseBlockingScope.items[3].maxExpensiveWorkstations = 12
   assert.match(validateProductAcceptanceContract(changedControlRoomScope).join('\n'), /CONTROL-ROOM-009/)
+  const changedHumanScope = structuredClone(contract)
+  changedHumanScope.humanExperienceAcceptance.participantCount = 4
+  assert.match(validateProductAcceptanceContract(changedHumanScope).join('\n'), /five participants/)
   const changedBinding = structuredClone(contract)
   changedBinding.closurePolicy.publicGateBindings = []
   assert.match(validateProductAcceptanceContract(changedBinding).join('\n'), /public gate bindings/)

@@ -102,6 +102,99 @@ const CONTROL_ROOM_SCOPE_SEMANTICS = {
   roleColorRepresents: 'job_role',
   providerBadgeRepresents: 'current_compute_source'
 }
+const HUMAN_EXPERIENCE_MEASUREMENT_FIELDS = [
+  'elapsedMs',
+  'clicks',
+  'keyboardInputs',
+  'requiredFields',
+  'modeSwitches',
+  'confirmationDialogs',
+  'recoveryActions',
+  'helpRequests',
+  'errors',
+  'completion',
+  'blindScores'
+]
+const HUMAN_EXPERIENCE_TASKS = [
+  {
+    id: 'UX-GOLDEN-001',
+    surface: 'assistant',
+    title: 'Assistant 首次有用任务',
+    comparators: ['WorkBuddy'],
+    timeLimitMinutes: 10,
+    requiredFlow: [
+      'open_app',
+      'enter_goal_without_project_or_internal_entity',
+      'search_or_execute',
+      'receive_verifiable_result',
+      'make_one_revision_or_follow_up',
+      'copy_or_export_result'
+    ]
+  },
+  {
+    id: 'UX-GOLDEN-002',
+    surface: 'project',
+    title: 'Project 从目标到交付闭环',
+    comparators: ['Multica', 'Codex', 'Claude Work'],
+    timeLimitMinutes: 30,
+    requiredFlow: [
+      'enter_one_sentence_goal',
+      'review_automatic_plan_and_route',
+      'approve_once',
+      'inspect_worktree_and_hunk_diff',
+      'run_test',
+      'undo_one_change',
+      'commit_and_deliver',
+      'restart_and_recover'
+    ]
+  },
+  {
+    id: 'UX-GOLDEN-003',
+    surface: 'video',
+    title: '视频基础 MVP 链',
+    comparators: ['即梦', '有戏AI'],
+    timeLimitMinutes: 30,
+    requiredFlow: [
+      'enter_script_or_outline',
+      'edit_storyboard',
+      'import_or_bind_material_version',
+      'produce_decodable_non_empty_preview',
+      'revise_or_reorder',
+      'export_traceable_artifact'
+    ]
+  },
+  {
+    id: 'UX-GOLDEN-004',
+    surface: 'provider_configuration',
+    title: 'Provider 配置、切换与故障恢复',
+    comparators: ['CC Switch'],
+    timeLimitMinutes: 15,
+    requiredFlow: [
+      'import_or_add_profile',
+      'discover_models',
+      'run_health_check',
+      'switch_default',
+      'simulate_provider_failure_and_failover',
+      'export_or_rollback_profile',
+      'restart_and_verify_credential_reference_only'
+    ]
+  },
+  {
+    id: 'UX-GOLDEN-005',
+    surface: 'cross_entry',
+    title: '跨入口状态连续与结果返回',
+    comparators: ['Codex', 'Claude Work', 'WorkBuddy', 'DeepSeek Harness'],
+    timeLimitMinutes: 20,
+    requiredFlow: [
+      'start_from_assistant',
+      'continue_in_project_or_video',
+      'observe_control_room_projection_without_new_workflow',
+      'return_to_source_entry',
+      'locate_current_result_and_audit_timeline',
+      'recover_after_restart'
+    ]
+  }
+]
 
 export function loadProductAcceptanceInput({ repoRoot, environment = process.env, required = false }) {
   const contractPath = path.join(repoRoot, CONTRACT_RELATIVE_PATH)
@@ -156,10 +249,49 @@ export function validateProductAcceptanceContract(contract) {
   return [
     ...validateContractIdentity(contract),
     ...validateAdditionalReleaseBlockingScope(contract),
+    ...validateHumanExperienceAcceptance(contract),
     ...validateContractTables(contract),
     ...validateClosurePolicy(contract),
     ...validatePrivateInputContract(contract)
   ]
+}
+
+function validateHumanExperienceAcceptance(contract) {
+  const failures = []
+  const scope = contract?.humanExperienceAcceptance
+  if (scope?.schemaVersion !== 1 || scope?.required !== true) {
+    failures.push('human experience acceptance must be schemaVersion 1 and required')
+    return failures
+  }
+  if (scope.source !== 'user-feedback-2026-08-24') failures.push('human experience acceptance source is invalid')
+  if (scope.participantCount !== 5) failures.push('human experience acceptance must require five participants')
+  if (scope.runPolicy !== 'each_participant_runs_all_tasks_without_product_instruction') {
+    failures.push('human experience acceptance run policy is invalid')
+  }
+  if (scope.comparisonRule !== 'same_goal_same_dataset_same_machine_and_fixed_comparator_version; CaoGen_required_steps_must_not_exceed_the_best_comparator') {
+    failures.push('human experience acceptance comparison rule is invalid')
+  }
+  if (!sameStrings(scope.measurementFields, HUMAN_EXPERIENCE_MEASUREMENT_FIELDS)) {
+    failures.push('human experience acceptance measurement fields are invalid')
+  }
+  if (!Array.isArray(scope.tasks) || scope.tasks.length !== HUMAN_EXPERIENCE_TASKS.length) {
+    failures.push('human experience acceptance must contain five golden tasks')
+    return failures
+  }
+  for (const [index, expected] of HUMAN_EXPERIENCE_TASKS.entries()) {
+    const actual = scope.tasks[index]
+    if (actual?.id !== expected.id || actual?.surface !== expected.surface || actual?.title !== expected.title) {
+      failures.push(`${expected.id} identity is invalid`)
+    }
+    if (!sameStrings(actual?.comparators, expected.comparators)) failures.push(`${expected.id} comparators are invalid`)
+    if (actual?.timeLimitMinutes !== expected.timeLimitMinutes) failures.push(`${expected.id} time limit is invalid`)
+    if (!sameStrings(actual?.requiredFlow, expected.requiredFlow)) failures.push(`${expected.id} required flow is invalid`)
+  }
+  const video = scope.tasks[2]
+  if (video?.qualityBoundary !== '1.0 verifies honest local usability and traceability; it does not claim remote generation quality parity') {
+    failures.push('UX-GOLDEN-003 quality boundary is invalid')
+  }
+  return failures
 }
 
 function validateAdditionalReleaseBlockingScope(contract) {

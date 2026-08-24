@@ -127,6 +127,117 @@
       }
     ]
   },
+  "humanExperienceAcceptance": {
+    "schemaVersion": 1,
+    "required": true,
+    "source": "user-feedback-2026-08-24",
+    "participantCount": 5,
+    "runPolicy": "each_participant_runs_all_tasks_without_product_instruction",
+    "comparisonRule": "same_goal_same_dataset_same_machine_and_fixed_comparator_version; CaoGen_required_steps_must_not_exceed_the_best_comparator",
+    "measurementFields": [
+      "elapsedMs",
+      "clicks",
+      "keyboardInputs",
+      "requiredFields",
+      "modeSwitches",
+      "confirmationDialogs",
+      "recoveryActions",
+      "helpRequests",
+      "errors",
+      "completion",
+      "blindScores"
+    ],
+    "tasks": [
+      {
+        "id": "UX-GOLDEN-001",
+        "surface": "assistant",
+        "title": "Assistant 首次有用任务",
+        "comparators": ["WorkBuddy"],
+        "timeLimitMinutes": 10,
+        "requiredFlow": [
+          "open_app",
+          "enter_goal_without_project_or_internal_entity",
+          "search_or_execute",
+          "receive_verifiable_result",
+          "make_one_revision_or_follow_up",
+          "copy_or_export_result"
+        ],
+        "forbiddenUserTerms": ["Goal", "WorkItem", "Run", "Provider", "Evidence", "Acceptance"],
+        "releaseClaim": "first_useful_task_only; no_model_or_agent_count_claim"
+      },
+      {
+        "id": "UX-GOLDEN-002",
+        "surface": "project",
+        "title": "Project 从目标到交付闭环",
+        "comparators": ["Multica", "Codex", "Claude Work"],
+        "timeLimitMinutes": 30,
+        "requiredFlow": [
+          "enter_one_sentence_goal",
+          "review_automatic_plan_and_route",
+          "approve_once",
+          "inspect_worktree_and_hunk_diff",
+          "run_test",
+          "undo_one_change",
+          "commit_and_deliver",
+          "restart_and_recover"
+        ],
+        "mustRetain": ["goal_identity", "work_item_identity", "artifact", "evidence", "acceptance", "recovery"],
+        "releaseClaim": "end_to_end_delivery_only; no_panel_presence_claim"
+      },
+      {
+        "id": "UX-GOLDEN-003",
+        "surface": "video",
+        "title": "视频基础 MVP 链",
+        "comparators": ["即梦", "有戏AI"],
+        "timeLimitMinutes": 30,
+        "requiredFlow": [
+          "enter_script_or_outline",
+          "edit_storyboard",
+          "import_or_bind_material_version",
+          "produce_decodable_non_empty_preview",
+          "revise_or_reorder",
+          "export_traceable_artifact"
+        ],
+        "qualityBoundary": "1.0 verifies honest local usability and traceability; it does not claim remote generation quality parity",
+        "releaseClaim": "basic_mvp_chain_only; remote_generation_and_professional_timeline_are_post_1_0"
+      },
+      {
+        "id": "UX-GOLDEN-004",
+        "surface": "provider_configuration",
+        "title": "Provider 配置、切换与故障恢复",
+        "comparators": ["CC Switch"],
+        "timeLimitMinutes": 15,
+        "requiredFlow": [
+          "import_or_add_profile",
+          "discover_models",
+          "run_health_check",
+          "switch_default",
+          "simulate_provider_failure_and_failover",
+          "export_or_rollback_profile",
+          "restart_and_verify_credential_reference_only"
+        ],
+        "mustNotExpose": ["credential_value", "secret_in_logs", "secret_in_screenshot"],
+        "releaseClaim": "configuration_recovery_and_secret_safety; no_provider_count_claim"
+      },
+      {
+        "id": "UX-GOLDEN-005",
+        "surface": "cross_entry",
+        "title": "跨入口状态连续与结果返回",
+        "comparators": ["Codex", "Claude Work", "WorkBuddy", "DeepSeek Harness"],
+        "timeLimitMinutes": 20,
+        "requiredFlow": [
+          "start_from_assistant",
+          "continue_in_project_or_video",
+          "observe_control_room_projection_without_new_workflow",
+          "return_to_source_entry",
+          "locate_current_result_and_audit_timeline",
+          "recover_after_restart"
+        ],
+        "mustRemainContinuous": ["session", "identity", "status", "artifact", "evidence", "acceptance", "source_entry"],
+        "releaseClaim": "one_consistent_workflow_model; no_fourth_business_entry_claim"
+      }
+    ]
+  },
   "requirementsTable": {
     "columns": ["id", "priority", "status", "requirement"],
     "idPattern": "^[A-Z][A-Z0-9-]+-\\d+$",

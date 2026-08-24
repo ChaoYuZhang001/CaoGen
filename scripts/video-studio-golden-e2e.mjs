@@ -84,7 +84,11 @@ const report = {
   explicitlyNotVerified: [
     'commercial Provider generation quality or parity with external products',
     'real remote Provider billing and latency'
-  ]
+  ],
+  lifecycle: {
+    rendererClosedAt: null,
+    electronExit: null
+  }
 }
 
 let stdout = ''
@@ -487,6 +491,13 @@ function startElectronProcess() {
     stderr += value
     activeStderr += value
   })
+  child.once('exit', (code, signal) => {
+    report.lifecycle.electronExit = {
+      at: new Date().toISOString(),
+      code,
+      signal
+    }
+  })
   return child
 }
 async function connectElectron() {
@@ -495,6 +506,9 @@ async function connectElectron() {
   page = await waitForElectronPage(browser, 20_000)
   page.on('console', (message) => {
     if (message.type() === 'error' || message.type() === 'warning') report.warnings.push(`console ${message.type()}: ${message.text()}`)
+  })
+  page.once('close', () => {
+    report.lifecycle.rendererClosedAt = new Date().toISOString()
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
