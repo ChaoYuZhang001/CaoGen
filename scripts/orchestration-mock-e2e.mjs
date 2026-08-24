@@ -18,6 +18,7 @@ import {
   waitForOfficeRenderLoop,
   waitForOfficeScenePixels
 } from './lib/office-render-ready.mjs'
+import { clickVisibleControl } from './lib/click-visible-control.mjs'
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
@@ -91,7 +92,6 @@ const app = spawn(electronBin, [`--remote-debugging-port=${remotePort}`, ...soft
   },
   stdio: ['ignore', 'pipe', 'pipe']
 })
-
 let stdout = ''
 let stderr = ''
 app.stdout.on('data', (chunk) => {
@@ -976,7 +976,7 @@ try {
       8_000,
       'waiting for light theme after reload'
     )
-    await page.click('[data-sidebar-action="control-room"]')
+    await clickVisibleControl(page, '[data-sidebar-action="control-room"]')
     await page.waitForSelector('.office canvas', { timeout: 20_000 })
     await page.click('[data-office-business-view-option="all"]')
     await waitForValue(
