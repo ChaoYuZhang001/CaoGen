@@ -93,8 +93,8 @@ const hasMediaExportAction = /rawAction\s*===\s*['"](?:job:)?export['"]/.test(so
 const hasMediaExportPreload = /exportMedia|exportVideo|exportMediaProduction/.test(readSource('src/preload/media.ts'))
 const hasVideoExportUi = /data-video-export|exportVideo|exportMedia/.test(source.panel)
 const hasGoldenExportCoverage = /data-video-export|exportMedia|exportVideo|download.*(?:mp4|video)/i.test(source.golden)
-const hasGoldenFailureCoverage = /mockScenario|unknown_result|waiting_reconciliation|job:cancel|job:reconcile/.test(source.golden)
-const hasGoldenRestartCoverage = /restart|fresh process|relaunch|SIGKILL/i.test(source.golden)
+const hasGoldenFailureCoverage = /mockScenario[\s\S]*unknown_result[\s\S]*terminalEvidence[\s\S]*queryWorkflowEvidence/.test(source.golden)
+const hasGoldenRestartCoverage = /restartElectron[\s\S]*terminalEvidenceIds/.test(source.golden)
 
 if (!hasMediaExportAction || !hasMediaExportPreload || !hasVideoExportUi || !hasGoldenExportCoverage) {
   openGap(
@@ -129,8 +129,8 @@ const report = {
   },
   sourceFiles: sourceFiles,
   explicitlyNotVerified: [
-    'export-to-file bytes and a user-readable export location',
-    'failure, cancellation, restart and unknown-result Video Golden task evidence',
+    'remote Media Provider failure, cancellation, restart and unknown-result evidence',
+    'full 11-item cross-domain recovery closure',
     'real remote Media Provider quality, billing and latency',
     'five-user timed acceptance and clean release SHA binding'
   ]

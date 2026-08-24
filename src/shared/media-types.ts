@@ -684,6 +684,26 @@ export interface MediaCompositionResult {
   cost: MediaCostRecord
 }
 
+export interface MediaExportInput {
+  projectId: string
+  productionId: string
+  assetId?: string
+  /** Main-process callers may omit this to open the native Save dialog. */
+  destinationPath?: string
+}
+
+export interface MediaExportResult {
+  canceled: boolean
+  filePath?: string
+  sourceArtifactId?: string
+  artifactId?: string
+  evidenceId?: string
+  acceptanceId?: string
+  digest?: string
+  sizeBytes?: number
+  mediaType?: string
+}
+
 export interface MediaFfmpegInfo {
   available: boolean
   version?: string
@@ -738,6 +758,7 @@ export interface MediaApi {
   bindMediaAsset(input: MediaAssetBindingInput): Promise<MediaAssetBinding>
   setMediaAdoption(input: MediaAdoptionInput): Promise<VideoProduction>
   composeMediaProduction(input: MediaCompositionInput): Promise<MediaCompositionResult>
+  exportMediaProduction(input: MediaExportInput): Promise<MediaExportResult>
   submitMediaJob(input: MediaJobInput): Promise<MediaJobRecord>
   advanceMediaJob(jobId: string): Promise<MediaJobRecord>
   reconcileMediaJob(jobId: string): Promise<MediaJobRecord>

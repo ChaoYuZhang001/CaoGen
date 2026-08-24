@@ -524,7 +524,7 @@ export type EffectTarget =
     }
   | {
       kind: 'media_job_operation'
-      operation: 'submit' | 'poll' | 'download' | 'cancel' | 'asset_import' | 'compose' | 'continuity_check'
+      operation: 'submit' | 'poll' | 'download' | 'cancel' | 'asset_import' | 'compose' | 'export' | 'continuity_check'
       mediaJobId: string
       externalJobId: string
       idempotencyKeyDigest: string

@@ -37,7 +37,7 @@ export function isEffectTargetCreatable(value: EffectTarget): boolean {
 }
 
 function isMediaJobOperationTarget(record: Record<string, unknown>): boolean {
-  const operations = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose']
+  const operations = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose', 'export']
   const statuses = ['submitting', 'running', 'downloading', 'succeeded', 'failed', 'cancelled', 'waiting_reconciliation']
   const identifiers = [
     'mediaJobId', 'externalJobId', 'projectId', 'goalId', 'workItemId', 'runId'
@@ -47,7 +47,7 @@ function isMediaJobOperationTarget(record: Record<string, unknown>): boolean {
   const noArtifactFields = artifactFields.every((key) => record[key] === undefined)
   return operations.includes(String(record.operation)) && statuses.includes(String(record.expectedStatus)) &&
     identifiers.every((key) => isString(record[key])) && isSha256(record.idempotencyKeyDigest) &&
-    (['download', 'asset_import', 'compose'].includes(String(record.operation)) ? hasArtifactFields : hasArtifactFields || noArtifactFields)
+    (['download', 'asset_import', 'compose', 'export'].includes(String(record.operation)) ? hasArtifactFields : hasArtifactFields || noArtifactFields)
 }
 
 function isProviderProfileOperationTarget(record: Record<string, unknown>): boolean {

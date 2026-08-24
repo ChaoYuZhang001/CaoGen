@@ -7,6 +7,7 @@ import {
   Check,
   Clock3,
   CircleMinus,
+  Download,
   Film,
   HardDrive,
   ImagePlus,
@@ -381,6 +382,10 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
     const result = await window.agentDesk.composeMediaProduction({ projectId, productionId: production.id, shotIds: shots.map((shot) => shot.id), subtitleMode: production.timeline.subtitleMode })
     setSelectedAssetId(result.asset.id)
   })
+  const exportVideo = (): void => void run(async () => {
+    if (!projectId || !production || !previewAsset) return
+    await window.agentDesk.exportMediaProduction({ projectId, productionId: production.id, assetId: previewAsset.id })
+  })
   const adoptPreview = (): void => void run(async () => {
     if (!production || !previewAsset) return
     await window.agentDesk.setMediaAdoption({ productionId: production.id, assetId: previewAsset.id, adopted: true })
@@ -416,6 +421,7 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
         busy={busy}
         onCompose={compose}
         onAdopt={adoptPreview}
+        onExport={exportVideo}
         previewAsset={previewAsset}
         shotCount={shots.length}
         ffmpegAvailable={Boolean(ffmpeg?.available)}
@@ -666,6 +672,7 @@ function VideoPreviewFlow({
   ffmpegAvailable,
   onAdopt,
   onCompose,
+  onExport,
   previewAsset,
   shotCount
 }: {
@@ -673,6 +680,7 @@ function VideoPreviewFlow({
   ffmpegAvailable: boolean
   onAdopt: () => void
   onCompose: () => void
+  onExport: () => void
   previewAsset?: MediaAsset
   shotCount: number
 }): React.JSX.Element {
@@ -689,6 +697,9 @@ function VideoPreviewFlow({
           </button>
           {previewAsset && <button type="button" className="btn btn-secondary btn-sm" disabled={busy || previewAsset.adopted} onClick={onAdopt} data-video-adopt-preview>
             <Check size={13} aria-hidden="true" />{previewAsset.adopted ? '已采用为成片' : '采用为成片'}
+          </button>}
+          {previewAsset?.contentStatus === 'available' && previewAsset.artifactId && <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onExport} data-video-export>
+            <Download size={13} aria-hidden="true" />导出文件
           </button>}
         </div>
       </div>

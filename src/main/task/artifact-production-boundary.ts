@@ -58,6 +58,9 @@ export interface CanonicalProducedArtifactExternalLocation {
   id: string
   kind?: Extract<WorkflowArtifactLocationKind, 'url' | 'git' | 'external' | 'preview'>
   uri: string
+  checksum?: string
+  sizeBytes?: number
+  mediaType?: string
   metadata?: Record<string, unknown>
 }
 
@@ -166,6 +169,9 @@ function projectProducedArtifactRecords(
       runId: lifecycle.runId,
       kind: input.externalLocation.kind ?? 'url',
       uri: input.externalLocation.uri,
+      checksum: input.externalLocation.checksum,
+      sizeBytes: input.externalLocation.sizeBytes,
+      mediaType: input.externalLocation.mediaType,
       availability: 'available',
       metadata: input.externalLocation.metadata,
       createdAt: observedAt,

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -27,6 +29,8 @@ const electronBin = process.platform === 'win32'
 const projectName = `Video Golden ${runId}`
 const initialScript = 'Scene one: a camera moves from the city morning into the workbench.\nScene two: the product completes a clear demonstration.'
 const revisedScript = `${initialScript}\nScene three: the ending shows a clear call to action.`
+const gitCommit = readGit(['rev-parse', 'HEAD'])
+const worktreeStatus = readGit(['status', '--porcelain=v1']).split('\n').filter(Boolean)
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
@@ -41,12 +45,39 @@ const report = {
   schemaVersion: 1,
   runId,
   runDir,
-  requirement: 'GT-04',
+  requirement: 'VID-MVP-001',
+  gate: 'test:video-studio-golden',
   packageVersion: packageJson.version,
+  gitCommit,
+  worktree: {
+    clean: worktreeStatus.length === 0,
+    changedPathCount: worktreeStatus.length
+  },
   platform: process.platform,
   arch: process.arch,
   nodeVersion: process.version,
   electronVersion: electronPackage.version,
+  environment: {
+    userData: 'isolated temporary directory',
+    provider: 'built-in local Mock Provider',
+    preview: 'local FFmpeg',
+    externalCredentials: 'disabled'
+  },
+  evidenceScope: {
+    classification: 'local_targeted_not_release',
+    requiredChecks: [
+      'script to storyboard structure',
+      'local decodable non-black preview',
+      'traceable export Artifact/Evidence/Acceptance',
+      'revision produces a new local preview',
+      'failure cancellation and unknown-result states',
+      'restart preserves states without duplicate Effect or Evidence'
+    ],
+    optionalChecks: [
+      'commercial Provider quality or parity',
+      'real remote Provider billing latency and reconciliation'
+    ]
+  },
   checks: [],
   screenshots: [],
   warnings: [],
@@ -56,40 +87,15 @@ const report = {
   ]
 }
 
-const electron = spawnElectronTestProcess(electronBin, [
-  ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
-  '--remote-debugging-port=0',
-  mainEntry
-], {
-  cwd: repoRoot,
-  env: {
-    ...process.env,
-    CAOGEN_USER_DATA_DIR: userDataDir,
-    CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
-    OPENAI_API_KEY: '',
-    ANTHROPIC_API_KEY: '',
-    ANTHROPIC_AUTH_TOKEN: '',
-  },
-  stdio: ['ignore', 'pipe', 'pipe']
-})
-
 let stdout = ''
 let stderr = ''
+let activeStderr = ''
+let electron = startElectronProcess()
 let browser
 let page
-electron.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-electron.stderr.on('data', (chunk) => { stderr += chunk.toString() })
 
 try {
-  const remotePort = await waitForDevToolsPort(electron, 20_000, () => stderr)
-  browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
-  page = await waitForElectronPage(browser, 20_000)
-  page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') report.warnings.push(`console ${message.type()}: ${message.text()}`)
-  })
-  page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
-  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
-  await waitForApp(page)
+  await connectElectron()
 
   await check('empty Video Studio starts with one title/script action', async () => {
     await page.click('[data-experience-mode-option="video"]')
@@ -138,6 +144,7 @@ try {
   await check('one primary action produces a playable local preview', async () => {
     report.ffmpeg = await page.evaluate(() => window.agentDesk.getMediaFfmpegInfo())
     assert.equal(report.ffmpeg?.available, true, `local FFmpeg is unavailable: ${JSON.stringify(report.ffmpeg)}`)
+    await page.waitForSelector('[data-video-compose-preview]', { visible: true, timeout: 15_000 })
     await page.click('[data-video-compose-preview]')
     const composed = await waitForValue(
       () => page.evaluate(async (projectId) => {
@@ -191,6 +198,64 @@ try {
       }
     }, report.projectId)
     assert.deepEqual(adopted, { finalAssetId: composed.assetId, adopted: true }, 'adopted video did not retain the canonical final asset identity')
+    const exportPath = path.join(tempRoot, 'exports', 'video-final.mp4')
+    const exported = await page.evaluate(async ({ projectId, productionId, assetId, destinationPath }) =>
+      window.agentDesk.exportMediaProduction({ projectId, productionId, assetId, destinationPath }), {
+      projectId: report.projectId,
+      productionId: report.productionId,
+      assetId: composed.assetId,
+      destinationPath: exportPath
+    })
+    assert.equal(exported.canceled, false, 'video export was unexpectedly canceled')
+    assert.equal(exported.filePath, exportPath, 'video export returned the wrong destination')
+    assert(exported.artifactId && exported.evidenceId && exported.acceptanceId, 'video export did not return canonical identities')
+    assert(existsSync(exportPath), 'video export file was not created')
+    const exportedBytes = readFileSync(exportPath)
+    assert.equal(exportedBytes.byteLength, Number(exported.sizeBytes), 'exported byte count differs from the canonical record')
+    const exportedDigest = `sha256:${createHash('sha256').update(exportedBytes).digest('hex')}`
+    assert.equal(exportedDigest, exported.digest, 'exported bytes do not match the returned digest')
+    const exportTrace = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId, sourceArtifactId }) => {
+      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+      const evidence = await window.agentDesk.queryWorkflowEvidence({ evidenceId, artifactId, limit: 100 })
+      const locations = await window.agentDesk.listWorkflowArtifactLocations({ artifactId, limit: 100 })
+      const graph = await window.agentDesk.queryWorkflowArtifactGraph(artifactId)
+      return {
+        artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
+        evidence: evidence.items.find((item) => item.evidenceId === evidenceId) ?? null,
+        acceptance: ledger.acceptances.items.find((item) => item.id === acceptanceId) ?? null,
+        location: locations.items.find((item) => item.artifactId === artifactId && item.uri?.startsWith('file:')) ?? null,
+        sourceEdge: graph.outbound.find((item) => item.relation === 'derived_from') ?? null
+      }
+    }, { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId, sourceArtifactId: exported.sourceArtifactId })
+    assert(exportTrace.artifact, 'export Artifact was not readable from the canonical ledger')
+    assert(exportTrace.evidence, 'export Evidence was not readable from the canonical ledger')
+    assert.equal(exportTrace.acceptance?.status, 'passed', 'export Acceptance was not passed')
+    assert(exportTrace.location?.uri?.startsWith('file:'), 'export location was not recorded as a file URI')
+    assert.equal(exportTrace.sourceEdge?.toArtifactId, exported.sourceArtifactId, 'export source-version lineage points to the wrong Artifact')
+    const repeatedExport = await page.evaluate(async ({ projectId, productionId, assetId, destinationPath }) =>
+      window.agentDesk.exportMediaProduction({ projectId, productionId, assetId, destinationPath }), {
+      projectId: report.projectId,
+      productionId: report.productionId,
+      assetId: composed.assetId,
+      destinationPath: exportPath
+    })
+    assert.deepEqual(
+      { artifactId: repeatedExport.artifactId, evidenceId: repeatedExport.evidenceId, acceptanceId: repeatedExport.acceptanceId, digest: repeatedExport.digest },
+      { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId, digest: exported.digest },
+      'repeated export did not reuse the canonical output identities'
+    )
+    const repeatedLedger = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId }) => {
+      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+      const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, evidenceId, limit: 100 })
+      return {
+        artifacts: ledger.artifacts.items.filter((item) => item.id === artifactId),
+        evidence: evidence.items.filter((item) => item.evidenceId === evidenceId),
+        acceptances: ledger.acceptances.items.filter((item) => item.id === acceptanceId)
+      }
+    }, { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId })
+    assert.equal(repeatedLedger.artifacts.length, 1, 'repeated export created a second Artifact')
+    assert.equal(repeatedLedger.evidence.length, 1, 'repeated export created duplicate Evidence')
+    assert.equal(repeatedLedger.acceptances.length, 1, 'repeated export created duplicate Acceptance')
     await page.waitForSelector('[data-video-preview]', { visible: true, timeout: 15_000 })
     await page.waitForFunction(() => {
       const node = document.querySelector('[data-video-preview]')
@@ -264,6 +329,121 @@ try {
     await screenshot(page, '03-revised-preview')
   })
 
+  await check('Video Mock jobs expose failure, cancellation and unknown-result states', async () => {
+    const recovery = await page.evaluate(async ({ projectId, productionId }) => {
+      const submit = (idempotencyKey, mockScenario) => window.agentDesk.submitMediaJob({
+        projectId,
+        productionId,
+        capability: 'video',
+        operation: 'video.text-to-video',
+        idempotencyKey,
+        prompt: `Recovery fixture ${mockScenario}`,
+        mockScenario
+      })
+      const failure = await submit('video-recovery-failure', 'failure')
+      const failureRunning = await window.agentDesk.advanceMediaJob(failure.id)
+      const failed = await window.agentDesk.advanceMediaJob(failureRunning.id)
+      const cancel = await submit('video-recovery-cancel', 'success')
+      const cancelled = await window.agentDesk.cancelMediaJob(cancel.id)
+      const unknown = await submit('video-recovery-unknown', 'unknown_result')
+      const unknownRunning = await window.agentDesk.advanceMediaJob(unknown.id)
+      const waiting = await window.agentDesk.advanceMediaJob(unknownRunning.id)
+      const studio = await window.agentDesk.getMediaStudio(projectId)
+      const persisted = studio.jobs
+        .filter((job) => ['video-recovery-failure', 'video-recovery-cancel', 'video-recovery-unknown'].includes(job.idempotencyKey))
+      const terminalEvidence = await Promise.all(persisted
+        .filter((job) => ['failed', 'cancelled'].includes(job.status))
+        .map(async (job) => ({
+          idempotencyKey: job.idempotencyKey,
+          status: job.status,
+          goalId: job.goalId,
+          workItemId: job.workItemId,
+          runId: job.runId,
+          evidence: (await window.agentDesk.queryWorkflowEvidence({ runId: job.runId, limit: 10 })).items
+            .filter((item) => item.kind === 'observation' && item.metadata?.mediaJobId === job.id)
+            .map((item) => ({
+              evidenceId: item.evidenceId,
+              status: item.metadata?.status,
+              projectId: item.projectId,
+              goalId: item.goalId,
+              workItemId: item.workItemId,
+              runId: item.runId,
+              source: item.source
+            }))
+        })))
+      return {
+        failure: { status: failed.status, history: failed.statusHistory.map((item) => item.status) },
+        cancel: { status: cancelled.status, history: cancelled.statusHistory.map((item) => item.status) },
+        unknown: { status: waiting.status, history: waiting.statusHistory.map((item) => item.status) },
+        persisted: persisted.map((job) => ({ idempotencyKey: job.idempotencyKey, status: job.status, history: job.statusHistory.map((item) => item.status) })),
+        terminalEvidence
+      }
+    }, { projectId: report.projectId, productionId: report.productionId })
+    assert.deepEqual(recovery.failure, {
+      status: 'failed',
+      history: ['requested', 'submitting', 'running', 'failed']
+    }, `failure state drifted: ${JSON.stringify(recovery.failure)}`)
+    assert.deepEqual(recovery.cancel, {
+      status: 'cancelled',
+      history: ['requested', 'submitting', 'cancelled']
+    }, `cancel state drifted: ${JSON.stringify(recovery.cancel)}`)
+    assert.deepEqual(recovery.unknown, {
+      status: 'waiting_reconciliation',
+      history: ['requested', 'submitting', 'running', 'waiting_reconciliation']
+    }, `unknown-result state drifted: ${JSON.stringify(recovery.unknown)}`)
+    assert.equal(recovery.persisted.length, 3, 'recovery fixtures were not readable from the canonical Media store')
+    assert.equal(recovery.terminalEvidence.length, 2, `terminal failure/cancel Evidence is incomplete: ${JSON.stringify(recovery.terminalEvidence)}`)
+    for (const item of recovery.terminalEvidence) {
+      assert.equal(item.evidence.length, 1, `terminal MediaJob Evidence is not unique: ${JSON.stringify(item)}`)
+      const [evidence] = item.evidence
+      assert.deepEqual({
+        status: evidence.status,
+        projectId: evidence.projectId,
+        goalId: evidence.goalId,
+        workItemId: evidence.workItemId,
+        runId: evidence.runId,
+        source: evidence.source
+      }, {
+        status: item.status,
+        projectId: report.projectId,
+        goalId: item.goalId,
+        workItemId: item.workItemId,
+        runId: item.runId,
+        source: 'runtime'
+      }, `terminal MediaJob Evidence differs from the canonical Job: ${JSON.stringify(item)}`)
+    }
+  })
+
+  await check('Video job states survive an Electron restart without replay', async () => {
+    await restartElectron()
+    const afterRestart = await page.evaluate(async (projectId) => {
+      const studio = await window.agentDesk.getMediaStudio(projectId)
+      const jobs = studio.jobs
+        .filter((job) => ['video-recovery-failure', 'video-recovery-cancel', 'video-recovery-unknown'].includes(job.idempotencyKey))
+      return Promise.all(jobs.map(async (job) => ({
+          idempotencyKey: job.idempotencyKey,
+          status: job.status,
+          operationRunIds: job.operationRunIds,
+          effectIds: job.effectIds,
+          history: job.statusHistory.map((item) => item.status),
+          terminalEvidenceIds: (await window.agentDesk.queryWorkflowEvidence({ runId: job.runId, limit: 10 })).items
+            .filter((item) => item.kind === 'observation' && item.metadata?.mediaJobId === job.id)
+            .map((item) => item.evidenceId)
+            .sort()
+        }))).then((items) => items.sort((left, right) => left.idempotencyKey.localeCompare(right.idempotencyKey)))
+    }, report.projectId)
+    assert.deepEqual(afterRestart.map((job) => ({ idempotencyKey: job.idempotencyKey, status: job.status, history: job.history })), [
+      { idempotencyKey: 'video-recovery-cancel', status: 'cancelled', history: ['requested', 'submitting', 'cancelled'] },
+      { idempotencyKey: 'video-recovery-failure', status: 'failed', history: ['requested', 'submitting', 'running', 'failed'] },
+      { idempotencyKey: 'video-recovery-unknown', status: 'waiting_reconciliation', history: ['requested', 'submitting', 'running', 'waiting_reconciliation'] }
+    ], `Video job states changed after restart: ${JSON.stringify(afterRestart)}`)
+    for (const job of afterRestart) {
+      assert(job.operationRunIds.length === job.history.length - 1, `restart duplicated operation runs for ${job.idempotencyKey}`)
+      assert(job.effectIds.length === job.history.length - 1, `restart duplicated Effects for ${job.idempotencyKey}`)
+      assert.equal(job.terminalEvidenceIds.length, job.status === 'waiting_reconciliation' ? 0 : 1, `restart changed terminal Evidence cardinality for ${job.idempotencyKey}`)
+    }
+  })
+
   report.status = 'passed'
   writeReport()
   console.log(`video studio golden E2E: passed (${report.checks.length}/${report.checks.length})`)
@@ -282,6 +462,53 @@ try {
 
 function reportPath() { return path.join(runDir, 'report.json') }
 function writeReport() { writeFileSync(reportPath(), `${JSON.stringify(report, null, 2)}\n`, 'utf8') }
+function readGit(args) { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() }
+function startElectronProcess() {
+  activeStderr = ''
+  const child = spawnElectronTestProcess(electronBin, [
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
+    '--remote-debugging-port=0',
+    mainEntry
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CAOGEN_USER_DATA_DIR: userDataDir,
+      CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
+      OPENAI_API_KEY: '',
+      ANTHROPIC_API_KEY: '',
+      ANTHROPIC_AUTH_TOKEN: ''
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
+  child.stderr.on('data', (chunk) => {
+    const value = chunk.toString()
+    stderr += value
+    activeStderr += value
+  })
+  return child
+}
+async function connectElectron() {
+  const remotePort = await waitForDevToolsPort(electron, 20_000, () => activeStderr)
+  browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${remotePort}`, defaultViewport: null })
+  page = await waitForElectronPage(browser, 20_000)
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') report.warnings.push(`console ${message.type()}: ${message.text()}`)
+  })
+  page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
+  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await waitForApp(page)
+}
+async function restartElectron() {
+  if (browser) {
+    await browser.disconnect().catch(() => undefined)
+    browser = undefined
+  }
+  await terminateElectronTestProcess(electron)
+  electron = startElectronProcess()
+  await connectElectron()
+}
 function copyBuiltApp() {
   rmSync(isolatedOutDir, { recursive: true, force: true })
   mkdirSync(isolatedOutDir, { recursive: true })

@@ -14,7 +14,7 @@ import { getMediaStore } from './media-store'
 
 export type MediaJobOperationTarget = Extract<EffectTarget, { kind: 'media_job_operation' }>
 
-const OPERATIONS: MediaJobOperationTarget['operation'][] = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose', 'continuity_check']
+const OPERATIONS: MediaJobOperationTarget['operation'][] = ['submit', 'poll', 'download', 'cancel', 'asset_import', 'compose', 'export', 'continuity_check']
 const STATUSES: MediaJobOperationTarget['expectedStatus'][] = [
   'submitting', 'running', 'downloading', 'succeeded', 'failed', 'cancelled', 'waiting_reconciliation'
 ]
@@ -38,7 +38,7 @@ export async function reconcileMediaJobOperationTarget(
   target: MediaJobOperationTarget
 ): Promise<EffectReconciliationResult> {
   const rootDir = app.getPath('userData')
-  if (target.operation === 'asset_import' || target.operation === 'compose' || target.operation === 'continuity_check') {
+  if (target.operation === 'asset_import' || target.operation === 'compose' || target.operation === 'export' || target.operation === 'continuity_check') {
     return reconcileLocalMediaArtifact(target, rootDir)
   }
   const job = await getMediaStore(rootDir).getMediaJob(target.mediaJobId)
@@ -165,5 +165,5 @@ function isSha256(value: unknown): value is string {
 }
 
 function operationCreatesArtifact(operation: MediaJobOperationTarget['operation']): boolean {
-  return operation === 'download' || operation === 'asset_import' || operation === 'compose' || operation === 'continuity_check'
+  return operation === 'download' || operation === 'asset_import' || operation === 'compose' || operation === 'export' || operation === 'continuity_check'
 }

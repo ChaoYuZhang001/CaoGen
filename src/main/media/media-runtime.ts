@@ -18,6 +18,8 @@ import type {
   MediaCharacterBibleInput,
   MediaCompositionInput,
   MediaCompositionResult,
+  MediaExportInput,
+  MediaExportResult,
   MediaContinuityCheckInput,
   MediaContinuityCheckResult,
   MediaContinuityFinding,
@@ -49,15 +51,22 @@ import { MEDIA_SCHEMA_VERSION } from '../../shared/media-types'
 import type { EffectRecord } from '../../shared/types'
 import { registerCanonicalProducedArtifact } from '../task/artifact-production-boundary'
 import {
+  getLatestPersistedArtifactLifecycleByLineage,
   getPersistedArtifactLifecycle,
   purgePersistedArtifactContent,
   revisePersistedArtifactRetention
 } from '../task/artifact-lifecycle-api'
 import { assertDataPurgeAllowed } from '../data-lifecycle/retention-authority'
-import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { artifactBlobPath, assertRegularContent } from '../task/artifact-lifecycle-content'
+import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { promisify } from 'node:util'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { createPersistedWorkflowArtifactEdge } from '../task/workflow-ledger-artifact-graph-api'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import {
+  createPersistedWorkflowArtifactEdge,
+  queryPersistedWorkflowArtifactGraph
+} from '../task/workflow-ledger-artifact-graph-api'
+import { createWorkflowEvidence } from '../task/workflow-ledger-api'
 import { executeInteractiveOperationEffect } from '../task/operation-effect-gateway'
 import {
   prepareCanonicalSystemOperation,
@@ -536,6 +545,220 @@ export class MediaRuntime implements MediaApi {
       status: 'passed', evidenceRefs: [ids.evidenceId!], verifiedBy: 'media-ffmpeg-composition'
     })
     return outcome.value
+  }
+
+  async exportMediaProduction(input: MediaExportInput): Promise<MediaExportResult> {
+    const store = getMediaStore(this.rootDir)
+    const production = (await store.getMediaStudio(input.projectId)).productions.find((item) => item.id === input.productionId)
+    if (!production) throw new Error('Media export Project/Production scope is invalid')
+    const asset = input.assetId
+      ? production.assets.find((item) => item.id === input.assetId)
+      : finalAssetForProduction(production)
+    if (!asset || asset.kind !== 'video' || asset.contentStatus !== 'available' || !asset.artifactId) {
+      throw new Error('Media export requires an available video Asset with a canonical Artifact')
+    }
+    const sourceArtifactId = asset.artifactId
+    const lifecycle = await getPersistedArtifactLifecycle(asset.artifactId, this.rootDir)
+    if (!lifecycle || lifecycle.projectId !== input.projectId) throw new Error('Media export source Artifact is unavailable')
+    const sourcePath = lifecycle.storageKind === 'source_ref'
+      ? lifecycle.sourceRef
+      : artifactBlobPath(this.rootDir, lifecycle.digest)
+    if (!sourcePath) throw new Error('Media export source content is unavailable')
+    await assertRegularContent(sourcePath, lifecycle.digest, lifecycle.sizeBytes)
+    const destinationPath = input.destinationPath ? resolve(input.destinationPath) : undefined
+    if (!destinationPath) throw new Error('Media export destination is required')
+    if (destinationPath === resolve(sourcePath)) throw new Error('Media export destination must differ from source content')
+
+    await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 })
+    const temporaryPath = `${destinationPath}.${process.pid}.${bindingDigest(`${asset.artifactId}\0${destinationPath}`)}.tmp`
+    await rm(temporaryPath, { force: true })
+    try {
+      await copyFile(sourcePath, temporaryPath)
+      await assertRegularContent(temporaryPath, lifecycle.digest, lifecycle.sizeBytes)
+      await rename(temporaryPath, destinationPath)
+      await assertRegularContent(destinationPath, lifecycle.digest, lifecycle.sizeBytes)
+    } catch (error) {
+      await rm(temporaryPath, { force: true })
+      throw new Error(`Media export failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const canonicalDestinationPath = await realpath(destinationPath)
+
+    const identity = bindingDigest(`${asset.artifactId}\0${destinationPath}`)
+    const exportArtifactId = `artifact:media-export:${identity}`
+    const exportEvidenceId = `evidence:media-export:${identity}`
+    const exportAcceptanceId = `acceptance:media-export:${identity}`
+    const lineageId = `lineage:media-export:${asset.artifactId}`
+    const existing = await getPersistedArtifactLifecycle(exportArtifactId, this.rootDir)
+    if (existing) {
+      if (existing.projectId !== production.projectId || existing.digest !== lifecycle.digest || existing.sizeBytes !== lifecycle.sizeBytes ||
+          existing.storageKind !== 'source_ref' || !existing.sourceRef || await realpath(existing.sourceRef) !== canonicalDestinationPath) {
+        throw new Error(`Media export existing Artifact does not match the requested source and destination:${JSON.stringify({
+          existingProjectId: existing.projectId,
+          requestedProjectId: production.projectId,
+          existingDigest: existing.digest,
+          requestedDigest: lifecycle.digest,
+          existingSizeBytes: existing.sizeBytes,
+          requestedSizeBytes: lifecycle.sizeBytes,
+          existingStorageKind: existing.storageKind,
+          existingSourceRef: existing.sourceRef,
+          requestedDestinationPath: destinationPath
+        })}`)
+      }
+      await ensureMediaExportLineage({
+        exportArtifactId,
+        sourceArtifactId,
+        identity,
+        projectId: production.projectId,
+        sourceArtifactVersion: lifecycle.version,
+        rootDir: this.rootDir
+      })
+      if (existing.goalId) {
+        await settleCanonicalSystemOperation({
+          rootDir: this.rootDir,
+          goalId: existing.goalId,
+          workItemId: existing.workItemId
+        }, { status: 'passed', evidenceRefs: [exportEvidenceId], verifiedBy: 'media-export' })
+      }
+      return {
+        canceled: false,
+        filePath: destinationPath,
+        sourceArtifactId,
+        artifactId: exportArtifactId,
+        evidenceId: exportEvidenceId,
+        acceptanceId: exportAcceptanceId,
+        digest: existing.digest,
+        sizeBytes: existing.sizeBytes,
+        mediaType: asset.mediaType ?? 'video/mp4'
+      }
+    }
+    const context = await this.prepareJobContext(`export:${asset.artifactId}:${destinationPath}`, production.title, production.projectId)
+    const previous = await getLatestPersistedArtifactLifecycleByLineage({
+      projectId: production.projectId,
+      workItemId: context.workItemId,
+      lineageId,
+      kind: 'custom'
+    }, this.rootDir)
+    const target = mediaTarget({
+      context,
+      operationId: `media-export-${identity}`,
+      operation: 'export',
+      mediaJobId: `media-export:${identity}`,
+      externalJobId: `local-export:${identity}`,
+      idempotencyKey: `media-export:${identity}`,
+      expectedStatus: 'succeeded',
+      artifactId: exportArtifactId,
+      evidenceId: exportEvidenceId,
+      acceptanceId: exportAcceptanceId
+    })
+    const persistExport = async (): Promise<Awaited<ReturnType<typeof registerCanonicalProducedArtifact>>> => {
+      const registered = await registerCanonicalProducedArtifact({
+        lifecycle: {
+          id: exportArtifactId,
+          projectId: production.projectId,
+          goalId: context.goalId,
+          workItemId: context.workItemId,
+          runId: target.runId,
+          lineageId,
+          kind: 'custom',
+          title: `${asset.title} export`,
+          version: (previous?.version ?? 0) + 1,
+          provenance: 'explicit',
+          supersedesId: previous?.artifactId,
+          mediaType: asset.mediaType ?? 'video/mp4',
+          retention: { mode: 'retain' },
+          content: { storageKind: 'source_ref', sourceRef: destinationPath, expectedDigest: lifecycle.digest },
+          metadata: {
+            producer: 'media-export',
+            sourceArtifactId: asset.artifactId,
+            sourceArtifactVersion: lifecycle.version,
+            destinationFileName: basename(destinationPath),
+            destinationDigest: lifecycle.digest,
+            destinationSizeBytes: lifecycle.sizeBytes
+          }
+        },
+        evidence: {
+          id: exportEvidenceId,
+          kind: 'delivery_check',
+          title: 'Video export integrity',
+          summary: 'The exported file was copied from the canonical video Artifact and matches its SHA-256 digest.',
+          verifier: 'media-export',
+          uri: pathToFileURL(destinationPath).href,
+          metadata: {
+            sourceArtifactId: asset.artifactId,
+            sourceArtifactVersion: lifecycle.version,
+            digest: lifecycle.digest,
+            sizeBytes: lifecycle.sizeBytes
+          }
+        },
+        acceptance: {
+          id: exportAcceptanceId,
+          criterionId: `${exportAcceptanceId}:criterion:integrity`,
+          criterion: 'The exported video file exists at the requested location and matches the canonical source Artifact digest.',
+          status: 'passed',
+          verifier: 'media-export',
+          authorizesWorkflowStage: true
+        },
+        externalLocation: {
+          id: `artifact-location:media-export:${identity}`,
+          kind: 'external',
+          uri: pathToFileURL(destinationPath).href,
+          checksum: lifecycle.digest,
+          sizeBytes: lifecycle.sizeBytes,
+          mediaType: asset.mediaType ?? 'video/mp4',
+          metadata: { sourceArtifactId: asset.artifactId, sourceArtifactVersion: lifecycle.version }
+        },
+        attachToStage: true
+      }, this.rootDir)
+      return registered
+    }
+    const outcome = await executeInteractiveOperationEffect({
+      rootDir: this.rootDir,
+      operationId: target.runId.slice('operation:'.length),
+      kind: 'media_generation',
+      title: 'Export video file',
+      sourceSessionId: `media:${target.mediaJobId}`,
+      projectId: context.projectId,
+      workspaceId: context.workspaceId,
+      goalId: context.goalId,
+      workItemId: context.workItemId,
+      cwd: context.cwd,
+      toolName: 'media_job_operation',
+      toolInput: target,
+      execute: async () => {
+        const registered = await persistExport()
+        await ensureMediaExportLineage({
+          exportArtifactId,
+          sourceArtifactId,
+          identity,
+          projectId: production.projectId,
+          sourceArtifactVersion: lifecycle.version,
+          rootDir: this.rootDir
+        })
+        return { artifactId: registered.artifact.id, digest: registered.lifecycle.digest }
+      },
+      isSuccess: Boolean
+    })
+    const persisted = await getPersistedArtifactLifecycle(exportArtifactId, this.rootDir)
+    if (outcome.status === 'waiting_reconciliation') {
+      throw new Error(`Media export is waiting for reconciliation:${outcome.snapshotId}:${outcome.error}`)
+    }
+    if (outcome.status !== 'completed' || !outcome.value || !persisted) {
+      throw new Error(outcome.status === 'failed' ? outcome.error : 'Media export did not produce a durable Artifact')
+    }
+    await settleCanonicalSystemOperation(context, {
+      status: 'passed', evidenceRefs: [exportEvidenceId], verifiedBy: 'media-export'
+    })
+    return {
+      canceled: false,
+      filePath: destinationPath,
+      sourceArtifactId,
+      artifactId: exportArtifactId,
+      evidenceId: exportEvidenceId,
+      acceptanceId: exportAcceptanceId,
+      digest: persisted.digest,
+      sizeBytes: persisted.sizeBytes,
+      mediaType: asset.mediaType ?? 'video/mp4'
+    }
   }
 
   async submitMediaJob(input: MediaJobInput): Promise<MediaJobRecord> {
@@ -1131,11 +1354,77 @@ async function persistCompositionGraph(input: {
 }
 
 async function settleTerminal(context: CanonicalSystemOperationContext, job: MediaJobRecord): Promise<void> {
+  const evidenceId = job.output?.evidenceId ?? await recordTerminalMediaJobEvidence(context, job)
   await settleCanonicalSystemOperation(context, {
     status: job.status === 'succeeded' ? 'passed' : 'failed',
-    evidenceRefs: job.output?.evidenceId ? [job.output.evidenceId] : [],
+    evidenceRefs: [evidenceId],
     verifiedBy: 'media-runtime'
   })
+}
+
+async function recordTerminalMediaJobEvidence(
+  context: CanonicalSystemOperationContext,
+  job: MediaJobRecord
+): Promise<string> {
+  const terminal = {
+    mediaJobId: job.id,
+    externalJobId: job.externalJobId,
+    providerMode: job.providerMode,
+    status: job.status,
+    reason: job.error ?? null,
+    statusHistory: job.statusHistory.map((event) => ({
+      status: event.status,
+      runId: event.runId ?? null,
+      effectId: event.effectId ?? null,
+      reason: event.reason ?? null
+    }))
+  }
+  const contentDigest = stableValueDigest(terminal)
+  const evidenceId = `evidence:media-job-terminal:${contentDigest}`
+  await createWorkflowEvidence({
+    evidenceId,
+    projectId: context.projectId,
+    goalId: context.goalId,
+    workItemId: context.workItemId,
+    runId: job.runId,
+    kind: 'observation',
+    title: `Media job ${job.status}`,
+    summary: job.error ?? `Media job reached terminal status: ${job.status}`,
+    contentDigest,
+    metadata: terminal
+  }, context.rootDir, {
+    source: 'runtime',
+    verifier: 'media-runtime',
+    observedAt: job.finishedAt ?? job.updatedAt
+  })
+  return evidenceId
+}
+
+async function ensureMediaExportLineage(input: {
+  exportArtifactId: string
+  sourceArtifactId: string
+  identity: string
+  projectId: string
+  sourceArtifactVersion: number
+  rootDir: string
+}): Promise<void> {
+  const edgeId = `artifact-edge:media-export-source:${input.identity}`
+  const graph = await queryPersistedWorkflowArtifactGraph(input.exportArtifactId, input.rootDir)
+  const existing = graph.outbound.find((edge) => edge.id === edgeId)
+  if (existing) {
+    if (existing.toArtifactId !== input.sourceArtifactId || existing.relation !== 'derived_from' || existing.projectId !== input.projectId) {
+      throw new Error(`Media export lineage edge conflicts with the requested source:${edgeId}`)
+    }
+    return
+  }
+  await createPersistedWorkflowArtifactEdge({
+    id: edgeId,
+    fromArtifactId: input.exportArtifactId,
+    toArtifactId: input.sourceArtifactId,
+    relation: 'derived_from',
+    projectId: input.projectId,
+    metadata: { producer: 'media-export', sourceArtifactVersion: input.sourceArtifactVersion }
+  }, input.rootDir)
 }
 
 function mediaTarget(input: {
@@ -1281,6 +1570,7 @@ function mediaOperationTitle(operation: MediaJobOperationTarget['operation']): s
     cancel: 'Cancel media generation',
     asset_import: 'Import media asset',
     compose: 'Compose local video draft',
+    export: 'Export video file',
     continuity_check: 'Check media continuity'
   })[operation]
 }
@@ -1315,6 +1605,15 @@ function evaluateContinuity(
 
 function nextAssetVersion(assets: readonly MediaAsset[], kind: MediaAsset['kind'], title: string): number {
   return assets.filter((asset) => asset.kind === kind && asset.title === title).reduce((max, asset) => Math.max(max, asset.version), 0) + 1
+}
+
+function finalAssetForProduction(production: VideoProduction): MediaAsset | undefined {
+  const adopted = production.finalAssetId
+    ? production.assets.find((asset) => asset.id === production.finalAssetId)
+    : undefined
+  return adopted ?? production.assets
+    .filter((asset) => asset.kind === 'video' && asset.authorization?.source === 'local_composition')
+    .sort((left, right) => right.version - left.version || right.createdAt - left.createdAt)[0]
 }
 
 function isTerminal(status: MediaJobRecord['status']): boolean {
