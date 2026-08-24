@@ -129,7 +129,7 @@ try {
   assert(storeSource.includes('providerId: ev.providerId'), 'renderer store must preserve routing provider id')
   assert(storeSource.includes('decision: ev.decision'), 'renderer store must preserve structured routing decision')
 
-  const officeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/office/OfficeView.tsx'), 'utf8')
+  const officeSource = readFileSync(path.join(repoRoot, 'src/renderer/src/components/office/OfficeRuntime.tsx'), 'utf8')
   assert(officeSource.includes('activeOfficeSignal.routing.providerName'), '3D office should show routed provider name')
   assert(officeSource.includes('activeOfficeSignal.routing.strategy'), '3D office should show the effective routing strategy')
   assert(officeSource.includes('activeOfficeSignal.routing.basis'), '3D office should show routing basis')
