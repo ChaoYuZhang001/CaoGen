@@ -52,6 +52,40 @@ try {
   assert(searchedWeb.output.includes('artifact-runtime'), 'web_search runtime path must preserve artifact binding')
   assertEqual(searchEvidence.length, 1)
   assertEqual(searchEvidence[0].artifactId, 'artifact-runtime')
+
+  const firstTaskSearch = await toolsModule.executeCodingTool(
+    'web_search',
+    { query: 'first task search', mode: 'model_native', operationId: 'first-task-search-1' },
+    projectRoot,
+    {
+      userDataRoot: path.join(tempRoot, 'user-data'),
+      toolUseId: 'first-task-search-tool',
+      searchBroker,
+      sessionMeta: {
+        id: 'first-task-session',
+        unassigned: true
+      }
+    }
+  )
+  assertEqual(firstTaskSearch.ok, true)
+  assert(firstTaskSearch.output.includes('caogen-managed-personal-workspace'), 'Assistant first-task search must bind the managed personal Workspace')
+  const firstTaskReplay = await toolsModule.executeCodingTool(
+    'web_search',
+    { query: 'first task search', mode: 'model_native', operationId: 'first-task-search-1' },
+    projectRoot,
+    {
+      userDataRoot: path.join(tempRoot, 'user-data'),
+      toolUseId: 'first-task-search-tool-replay',
+      searchBroker,
+      sessionMeta: {
+        id: 'first-task-session-restarted',
+        unassigned: true
+      }
+    }
+  )
+  assertEqual(firstTaskReplay.ok, true)
+  assert(firstTaskReplay.output.includes('"idempotentReplay": true'), 'Assistant first-task search replay must preserve the operation identity')
+  assertEqual(searchEvidence.length, 2)
   assert(toolsModule.READONLY_TOOLS.has('draft_skill'), 'draft_skill should be readonly')
   assert(toolsModule.READONLY_TOOLS.has('route_model'), 'route_model should be readonly')
   assert(toolsModule.READONLY_TOOLS.has('china_notify'), 'china_notify preview should be readonly')
