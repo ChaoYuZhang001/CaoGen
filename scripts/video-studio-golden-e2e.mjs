@@ -94,6 +94,7 @@ const report = {
 let stdout = ''
 let stderr = ''
 let activeStderr = ''
+let expectedElectronExit = null
 let electron = startElectronProcess()
 let browser
 let page
@@ -495,7 +496,8 @@ function startElectronProcess() {
     report.lifecycle.electronExit = {
       at: new Date().toISOString(),
       code,
-      signal
+      signal,
+      expected: expectedElectronExit
     }
   })
   return child
@@ -519,7 +521,9 @@ async function restartElectron() {
     await browser.disconnect().catch(() => undefined)
     browser = undefined
   }
+  expectedElectronExit = 'restart'
   await terminateElectronTestProcess(electron)
+  expectedElectronExit = null
   electron = startElectronProcess()
   await connectElectron()
 }
