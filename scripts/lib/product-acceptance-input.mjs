@@ -16,6 +16,74 @@ const REQUIRED_PACKAGE_SCRIPTS = [
 const PUBLIC_GATE_BINDINGS = [
   { requirementId: 'WORK-002', script: 'test:workitem-board:required' }
 ]
+const ADDITIONAL_RELEASE_SCOPE_IDS = ['SEARCH-001', 'VID-MVP-001', 'CRITICAL-RECOVERY-11']
+const SEARCH_SCOPE_MODES = ['model_native', 'byok_search_adapter']
+const SEARCH_SCOPE_GATES = [
+  'assistant_first_task_without_project',
+  'search_broker_success_citation',
+  'search_broker_explicit_failure_states',
+  'search_broker_restart_duplicate_recovery',
+  'search_broker_artifact_evidence_binding'
+]
+const SEARCH_SCOPE_FAILURE_STATES = [
+  'no_results',
+  'timeout',
+  'no_credentials',
+  'egress_denied',
+  'provider_failure',
+  'unknown_result'
+]
+const SEARCH_SCOPE_EVIDENCE_FIELDS = [
+  'url',
+  'fetchedAt',
+  'summary',
+  'contentSha256',
+  'citation',
+  'projectId',
+  'runId',
+  'evidenceId'
+]
+const VIDEO_SCOPE_PIPELINE = [
+  'script_or_outline',
+  'editable_storyboard',
+  'material_import_and_version',
+  'decodable_non_empty_preview',
+  'revision_and_reorder',
+  'traceable_export'
+]
+const VIDEO_SCOPE_GATES = [
+  'video_script_storyboard_edit',
+  'video_material_version_binding',
+  'video_preview_decode_non_empty',
+  'video_revision_restore',
+  'video_export_artifact_evidence_acceptance',
+  'video_failure_cancel_restart_unknown_result'
+]
+const VIDEO_SCOPE_EXCLUSIONS = [
+  'remote_video_generation',
+  'professional_timeline',
+  'media_provider_billing_reconciliation'
+]
+const RECOVERY_SCOPE_FAILURE_CLASSES = [
+  'strong_kill',
+  'network_unknown_result',
+  'duplicate_idempotency',
+  'out_of_order'
+]
+const RECOVERY_SCOPE_CONTINUITY_FIELDS = [
+  'identity',
+  'revision',
+  'ownership',
+  'effect',
+  'artifact_evidence_acceptance',
+  'replay_resend_count',
+  'final_digest'
+]
+const RECOVERY_SCOPE_GATES = [
+  'same_clean_candidate_sha',
+  'no_dirty_or_contract_only_evidence',
+  'per_requirement_fault_matrix'
+]
 
 export function loadProductAcceptanceInput({ repoRoot, environment = process.env, required = false }) {
   const contractPath = path.join(repoRoot, CONTRACT_RELATIVE_PATH)
@@ -69,10 +137,47 @@ export function loadProductAcceptanceInput({ repoRoot, environment = process.env
 export function validateProductAcceptanceContract(contract) {
   return [
     ...validateContractIdentity(contract),
+    ...validateAdditionalReleaseBlockingScope(contract),
     ...validateContractTables(contract),
     ...validateClosurePolicy(contract),
     ...validatePrivateInputContract(contract)
   ]
+}
+
+function validateAdditionalReleaseBlockingScope(contract) {
+  const failures = []
+  const scope = contract?.additionalReleaseBlockingScope
+  if (scope?.schemaVersion !== 1 || scope?.required !== true) {
+    failures.push('additional release blocking scope must be schemaVersion 1 and required')
+    return failures
+  }
+  if (!Array.isArray(scope.items) || scope.items.length !== ADDITIONAL_RELEASE_SCOPE_IDS.length) {
+    failures.push('additional release blocking scope must contain SEARCH-001, VID-MVP-001, and CRITICAL-RECOVERY-11')
+    return failures
+  }
+  if (!sameStrings(scope.items.map((item) => item?.id), ADDITIONAL_RELEASE_SCOPE_IDS)) {
+    failures.push('additional release blocking scope IDs are invalid')
+  }
+  const search = scope.items[0]
+  if (!sameStrings(search?.searchModes, SEARCH_SCOPE_MODES)) failures.push('SEARCH-001 search modes are invalid')
+  if (!sameStrings(search?.requiredGates, SEARCH_SCOPE_GATES)) failures.push('SEARCH-001 required gates are invalid')
+  if (!sameStrings(search?.failureStates, SEARCH_SCOPE_FAILURE_STATES)) failures.push('SEARCH-001 failure states are invalid')
+  if (!sameStrings(search?.evidenceFields, SEARCH_SCOPE_EVIDENCE_FIELDS)) failures.push('SEARCH-001 evidence fields are invalid')
+  const video = scope.items[1]
+  if (!sameStrings(video?.pipeline, VIDEO_SCOPE_PIPELINE)) failures.push('VID-MVP-001 pipeline is invalid')
+  if (!sameStrings(video?.requiredGates, VIDEO_SCOPE_GATES)) failures.push('VID-MVP-001 required gates are invalid')
+  if (!sameStrings(video?.excludedFrom1_0P0, VIDEO_SCOPE_EXCLUSIONS)) failures.push('VID-MVP-001 exclusions are invalid')
+  const recovery = scope.items[2]
+  if (recovery?.itemCount !== PRODUCT_1_0_CRITICAL_RECOVERY_REQUIREMENT_IDS.length) {
+    failures.push('CRITICAL-RECOVERY-11 itemCount must equal the fixed critical recovery list')
+  }
+  if (!sameStrings(recovery?.requirementIds, PRODUCT_1_0_CRITICAL_RECOVERY_REQUIREMENT_IDS)) {
+    failures.push('CRITICAL-RECOVERY-11 requirement IDs must equal the fixed critical recovery list')
+  }
+  if (!sameStrings(recovery?.failureClasses, RECOVERY_SCOPE_FAILURE_CLASSES)) failures.push('CRITICAL-RECOVERY-11 failure classes are invalid')
+  if (!sameStrings(recovery?.continuityFields, RECOVERY_SCOPE_CONTINUITY_FIELDS)) failures.push('CRITICAL-RECOVERY-11 continuity fields are invalid')
+  if (!sameStrings(recovery?.requiredGates, RECOVERY_SCOPE_GATES)) failures.push('CRITICAL-RECOVERY-11 required gates are invalid')
+  return failures
 }
 
 function validateContractIdentity(contract) {
