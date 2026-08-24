@@ -481,6 +481,24 @@
         }
       }
     },
+    "scripts/lib/product-acceptance-input.mjs": {
+      "profile": "automation",
+      "lines": 368,
+      "contentHash": "d8ec2f44339d48bc208597ae8e743f4f6b60035d86e05bf838ac2b01c30b2e4f",
+      "oversizedFunctionCount": 0,
+      "maxFunctionLines": 48,
+      "complexFunctionCount": 1,
+      "maxComplexity": 18,
+      "forbiddenSuppressionCount": 0,
+      "unreasonedSuppressionCount": 0,
+      "malformedDebtMarkerCount": 0,
+      "functionDebt": {
+        "validateAdditionalReleaseBlockingScope#1": {
+          "lines": 35,
+          "complexity": 18
+        }
+      }
+    },
     "scripts/n1-migration-audit.mjs": {
       "profile": "automation",
       "lines": 158,
@@ -887,6 +905,24 @@
         }
       }
     },
+    "scripts/video-studio-golden-e2e.mjs": {
+      "profile": "automation",
+      "lines": 588,
+      "contentHash": "120d3e0b9731886f5775a302ede8f59477075893c20b19fe2b62e14f7ea78ae0",
+      "oversizedFunctionCount": 1,
+      "maxFunctionLines": 149,
+      "complexFunctionCount": 0,
+      "maxComplexity": 6,
+      "forbiddenSuppressionCount": 0,
+      "unreasonedSuppressionCount": 0,
+      "malformedDebtMarkerCount": 0,
+      "functionDebt": {
+        "check callback#3": {
+          "lines": 149,
+          "complexity": 6
+        }
+      }
+    },
     "scripts/watercolor-runtime-asset-gate.mjs": {
       "profile": "automation",
       "lines": 270,
@@ -1004,6 +1040,24 @@
         "executeBrowserTool#1": {
           "lines": 61,
           "complexity": 17
+        }
+      }
+    },
+    "src/main/agent/tools/p2-tools.ts": {
+      "profile": "product",
+      "lines": 796,
+      "contentHash": "a561b47b2f9e3c3ed52d80be88689165c658f80cfbf9f2e3b8abdd40c4554e8f",
+      "oversizedFunctionCount": 0,
+      "maxFunctionLines": 72,
+      "complexFunctionCount": 1,
+      "maxComplexity": 16,
+      "forbiddenSuppressionCount": 0,
+      "unreasonedSuppressionCount": 0,
+      "malformedDebtMarkerCount": 0,
+      "functionDebt": {
+        "executeWebSearch#1": {
+          "lines": 42,
+          "complexity": 16
         }
       }
     },
@@ -1396,19 +1450,19 @@
     },
     "src/main/ipc/media-handlers.ts": {
       "profile": "product",
-      "lines": 130,
-      "contentHash": "21ea20c8f2bb069ed8c93aae1ef45f90fd7de6337929db1171f80a629fdd2d8b",
+      "lines": 147,
+      "contentHash": "d3d23d80edccf8e09e7d995caaaf662efc1a26942f349a36c4d3cec895c6e389",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 50,
+      "maxFunctionLines": 65,
       "complexFunctionCount": 3,
-      "maxComplexity": 36,
+      "maxComplexity": 41,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "handleMediaIpc#1": {
-          "lines": 50,
-          "complexity": 36
+          "lines": 65,
+          "complexity": 41
         },
         "normalizeJob#1": {
           "lines": 17,
@@ -1575,7 +1629,7 @@
     "src/main/media/media-job-effect-target.ts": {
       "profile": "product",
       "lines": 169,
-      "contentHash": "9aaec94ae02778ef14d6e1f3287f9cb934d44ce3b7bb8122ea45384c5a8e6aea",
+      "contentHash": "f24811eeb6b4a5c16c6e15990398171729cae7cbdf6801627d2bfae57eb24875",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 42,
       "complexFunctionCount": 2,
@@ -1630,12 +1684,12 @@
     },
     "src/main/media/media-runtime.ts": {
       "profile": "product",
-      "lines": 1345,
-      "contentHash": "6de64e21b14cbac0d3b466e3d89cf3a8347e1dc435588c5bf5d299b090c549cd",
-      "oversizedFunctionCount": 1,
-      "maxFunctionLines": 129,
-      "complexFunctionCount": 0,
-      "maxComplexity": 11,
+      "lines": 1644,
+      "contentHash": "141829ee922d34314398bb017721bd14889d9f2f4ca4fbbe7fddf41155f59700",
+      "oversizedFunctionCount": 2,
+      "maxFunctionLines": 213,
+      "complexFunctionCount": 1,
+      "maxComplexity": 31,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1643,6 +1697,10 @@
         "composeMediaProduction#1": {
           "lines": 129,
           "complexity": 5
+        },
+        "exportMediaProduction#1": {
+          "lines": 213,
+          "complexity": 31
         }
       }
     },
@@ -1794,8 +1852,8 @@
     },
     "src/main/openaiEngine.ts": {
       "profile": "product",
-      "lines": 1927,
-      "contentHash": "60c925d72db568f2baf606810c1b73b5ce4800d1302244e9bc19a67b5c851fa4",
+      "lines": 1928,
+      "contentHash": "1ebaa1e5e94df8c558389fb8f1e9cd531753cebb56180054d5b5afe4487c3ade",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 155,
       "complexFunctionCount": 4,
@@ -1824,10 +1882,10 @@
     },
     "src/main/openaiTools.ts": {
       "profile": "product",
-      "lines": 1468,
-      "contentHash": "53ce5e7e24d7ddc97db274a01998a8c199f4abc4fab3060c4decc5407515b164",
+      "lines": 1472,
+      "contentHash": "5dab496ba7098de22617d5e25a112bc4e146bc30e61d1d56bfa7a6ec78223db1",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 294,
+      "maxFunctionLines": 296,
       "complexFunctionCount": 1,
       "maxComplexity": 57,
       "forbiddenSuppressionCount": 0,
@@ -1835,7 +1893,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "executeCodingTool#1": {
-          "lines": 294,
+          "lines": 296,
           "complexity": 57
         }
       }
@@ -2447,6 +2505,28 @@
         }
       }
     },
+    "src/main/search/search-broker.ts": {
+      "profile": "product",
+      "lines": 637,
+      "contentHash": "b339c87388a33cde77f246ce7a7b3bfe1c36eb654d0363431e987df1a953e1b1",
+      "oversizedFunctionCount": 1,
+      "maxFunctionLines": 143,
+      "complexFunctionCount": 2,
+      "maxComplexity": 42,
+      "forbiddenSuppressionCount": 0,
+      "unreasonedSuppressionCount": 0,
+      "malformedDebtMarkerCount": 0,
+      "functionDebt": {
+        "executeSearch#1": {
+          "lines": 143,
+          "complexity": 42
+        },
+        "isPrivateAddress#1": {
+          "lines": 21,
+          "complexity": 38
+        }
+      }
+    },
     "src/main/security/secret-redaction.ts": {
       "profile": "product",
       "lines": 102,
@@ -2719,7 +2799,7 @@
     "src/main/task/effect-target-validation.ts": {
       "profile": "product",
       "lines": 522,
-      "contentHash": "a4b4fe2a549103c0000448130de84f560666172338d497b29f4913453bec6f68",
+      "contentHash": "1a06ea8ff9ddf5f1bca379e92941fcf723c6482736fadd228f34065b27ef4f52",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 39,
       "complexFunctionCount": 2,
@@ -4104,10 +4184,10 @@
     },
     "src/renderer/src/components/studio/VideoStudioPanel.tsx": {
       "profile": "product",
-      "lines": 781,
-      "contentHash": "473cdf012cc16cc40bdeffab4053cc9fb1e48e3b150d873c0eb048ab97e15b46",
+      "lines": 792,
+      "contentHash": "4cf39aa287832afabd352b485d3cf967d653462b684281d6ff30e58028900320",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 566,
+      "maxFunctionLines": 571,
       "complexFunctionCount": 2,
       "maxComplexity": 91,
       "forbiddenSuppressionCount": 0,
@@ -4115,7 +4195,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "VideoStudioPanel#1": {
-          "lines": 566,
+          "lines": 571,
           "complexity": 91
         },
         "submitShot#1": {
