@@ -121,9 +121,11 @@ function verifyContractDefinition(contract) {
   assert.equal(hasPublicAcceptanceGate(contract, 'WORK-002', 'test:workitem-board:required'), true)
   assert.deepEqual(
     contract.additionalReleaseBlockingScope.items.map((item) => item.id),
-    ['SEARCH-001', 'VID-MVP-001', 'CRITICAL-RECOVERY-11']
+    ['SEARCH-001', 'VID-MVP-001', 'CRITICAL-RECOVERY-11', 'CONTROL-ROOM-009']
   )
   assert.equal(contract.additionalReleaseBlockingScope.items[2].itemCount, 11)
+  assert.equal(contract.additionalReleaseBlockingScope.items[3].maxExpensiveWorkstations, 9)
+  assert.equal(contract.additionalReleaseBlockingScope.items[3].overflowStartsAt, 10)
   assert.deepEqual(checkAcceptanceContractScripts(contract, {
     ...Object.fromEntries(contract.closurePolicy.requiredPackageScripts.map((name) => [name, 'node gate.mjs'])),
     'test:workitem-board:required': 'node board.mjs'
@@ -138,6 +140,9 @@ function verifyContractDefinition(contract) {
   const changedReleaseScope = structuredClone(contract)
   changedReleaseScope.additionalReleaseBlockingScope.items[2].itemCount = 10
   assert.match(validateProductAcceptanceContract(changedReleaseScope).join('\n'), /CRITICAL-RECOVERY-11/)
+  const changedControlRoomScope = structuredClone(contract)
+  changedControlRoomScope.additionalReleaseBlockingScope.items[3].maxExpensiveWorkstations = 12
+  assert.match(validateProductAcceptanceContract(changedControlRoomScope).join('\n'), /CONTROL-ROOM-009/)
   const changedBinding = structuredClone(contract)
   changedBinding.closurePolicy.publicGateBindings = []
   assert.match(validateProductAcceptanceContract(changedBinding).join('\n'), /public gate bindings/)

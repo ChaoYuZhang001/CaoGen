@@ -483,8 +483,8 @@
     },
     "scripts/lib/product-acceptance-input.mjs": {
       "profile": "automation",
-      "lines": 368,
-      "contentHash": "d8ec2f44339d48bc208597ae8e743f4f6b60035d86e05bf838ac2b01c30b2e4f",
+      "lines": 403,
+      "contentHash": "46f4e5a1967c61b9dd3cdcfecafbf03e551e702d9626dfd221498beb85dfe090",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,
@@ -494,7 +494,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "validateAdditionalReleaseBlockingScope#1": {
-          "lines": 35,
+          "lines": 36,
           "complexity": 18
         }
       }
@@ -550,7 +550,7 @@
     "scripts/office-performance-smoke.mjs": {
       "profile": "automation",
       "lines": 1700,
-      "contentHash": "c411be8de87eb14d5841c1c6fd5081aa7d6c974d56f00f1a027d52f0eeba6e68",
+      "contentHash": "13be713684c52edb7d8a3db7670f035f674775932d4dc0b78fe6d2cf9dbf9d1c",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 176,
       "complexFunctionCount": 4,
@@ -583,12 +583,12 @@
     },
     "scripts/office-status-recheck.mjs": {
       "profile": "automation",
-      "lines": 1238,
-      "contentHash": "3200f7963fd7aa5a2d47370a9e6259b1c45ad6cd84a0b479f20f8818a95abb08",
+      "lines": 1236,
+      "contentHash": "9232acda6688b760af4c4a34b895970cc7c1ac1fe551b144384c555ac3c634ea",
       "oversizedFunctionCount": 2,
       "maxFunctionLines": 210,
       "complexFunctionCount": 4,
-      "maxComplexity": 63,
+      "maxComplexity": 62,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -603,10 +603,10 @@
         },
         "check callback#20": {
           "lines": 210,
-          "complexity": 63
+          "complexity": 62
         },
         "check callback#23": {
-          "lines": 92,
+          "lines": 91,
           "complexity": 27
         }
       }
@@ -3234,8 +3234,8 @@
     },
     "src/renderer/src/App.tsx": {
       "profile": "product",
-      "lines": 208,
-      "contentHash": "367d3202a932767036c50ae504bf01d9d5dfa26186aff7e8ac8696ffb88c7e93",
+      "lines": 226,
+      "contentHash": "faedd84c4c816a4d4dc1e66123cec2d57b050060b501c9a9afce5c40ba166b93",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 148,
       "complexFunctionCount": 0,
@@ -3588,10 +3588,10 @@
         }
       }
     },
-    "src/renderer/src/components/office/OfficeView.tsx": {
+    "src/renderer/src/components/office/OfficeRuntime.tsx": {
       "profile": "product",
-      "lines": 1271,
-      "contentHash": "f8151f920f361b48b3e31e0ffd0d46bcd7f9d9274e623fc4b9195be21500fd5e",
+      "lines": 1273,
+      "contentHash": "37a73b82cb2517858642ee63521cf2741adea5f9be21d13390f50278dcfa4f84",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 845,
       "complexFunctionCount": 1,

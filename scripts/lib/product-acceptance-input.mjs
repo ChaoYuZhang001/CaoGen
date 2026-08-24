@@ -17,7 +17,12 @@ const REQUIRED_PACKAGE_SCRIPTS = [
 const PUBLIC_GATE_BINDINGS = [
   { requirementId: 'WORK-002', script: 'test:workitem-board:required' }
 ]
-const ADDITIONAL_RELEASE_SCOPE_IDS = ['SEARCH-001', 'VID-MVP-001', 'CRITICAL-RECOVERY-11']
+const ADDITIONAL_RELEASE_SCOPE_IDS = [
+  'SEARCH-001',
+  'VID-MVP-001',
+  'CRITICAL-RECOVERY-11',
+  'CONTROL-ROOM-009'
+]
 const SEARCH_SCOPE_MODES = ['model_native', 'byok_search_adapter']
 const SEARCH_SCOPE_GATES = [
   'assistant_first_task_without_project',
@@ -85,6 +90,18 @@ const RECOVERY_SCOPE_GATES = [
   'no_dirty_or_contract_only_evidence',
   'per_requirement_fault_matrix'
 ]
+const CONTROL_ROOM_SCOPE_GATES = [
+  'office_nine_workstation_capacity',
+  'office_tenth_session_overflow_list',
+  'office_active_session_prioritized',
+  'office_source_entry_return',
+  'office_equivalent_list_view'
+]
+const CONTROL_ROOM_SCOPE_SEMANTICS = {
+  stationRepresents: 'digital_employee_or_active_work',
+  roleColorRepresents: 'job_role',
+  providerBadgeRepresents: 'current_compute_source'
+}
 
 export function loadProductAcceptanceInput({ repoRoot, environment = process.env, required = false }) {
   const contractPath = path.join(repoRoot, CONTRACT_RELATIVE_PATH)
@@ -153,7 +170,7 @@ function validateAdditionalReleaseBlockingScope(contract) {
     return failures
   }
   if (!Array.isArray(scope.items) || scope.items.length !== ADDITIONAL_RELEASE_SCOPE_IDS.length) {
-    failures.push('additional release blocking scope must contain SEARCH-001, VID-MVP-001, and CRITICAL-RECOVERY-11')
+    failures.push('additional release blocking scope must contain SEARCH-001, VID-MVP-001, CRITICAL-RECOVERY-11, and CONTROL-ROOM-009')
     return failures
   }
   if (!sameStrings(scope.items.map((item) => item?.id), ADDITIONAL_RELEASE_SCOPE_IDS)) {
@@ -178,6 +195,24 @@ function validateAdditionalReleaseBlockingScope(contract) {
   if (!sameStrings(recovery?.failureClasses, RECOVERY_SCOPE_FAILURE_CLASSES)) failures.push('CRITICAL-RECOVERY-11 failure classes are invalid')
   if (!sameStrings(recovery?.continuityFields, RECOVERY_SCOPE_CONTINUITY_FIELDS)) failures.push('CRITICAL-RECOVERY-11 continuity fields are invalid')
   if (!sameStrings(recovery?.requiredGates, RECOVERY_SCOPE_GATES)) failures.push('CRITICAL-RECOVERY-11 required gates are invalid')
+  failures.push(...validateControlRoomScope(scope.items[3]))
+  return failures
+}
+
+function validateControlRoomScope(controlRoom) {
+  const failures = []
+  if (controlRoom?.maxExpensiveWorkstations !== 9 || controlRoom?.overflowStartsAt !== 10) {
+    failures.push('CONTROL-ROOM-009 must cap expensive workstations at 9 and start overflow at 10')
+  }
+  if (controlRoom?.overflowProjection !== 'equivalent_list_view') {
+    failures.push('CONTROL-ROOM-009 overflow projection is invalid')
+  }
+  if (!sameStrings(controlRoom?.requiredGates, CONTROL_ROOM_SCOPE_GATES)) {
+    failures.push('CONTROL-ROOM-009 required gates are invalid')
+  }
+  for (const [key, expected] of Object.entries(CONTROL_ROOM_SCOPE_SEMANTICS)) {
+    if (controlRoom?.semantics?.[key] !== expected) failures.push(`CONTROL-ROOM-009 ${key} semantic is invalid`)
+  }
   return failures
 }
 

@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useStore } from './store'
 import { useThemeEffect } from './theme'
-import type { MenuCommand } from '../../shared/types'
+import type { AppSettings, MenuCommand } from '../../shared/types'
 import CommandPalette from './components/CommandPalette'
 import TaskRecoveryModal from './components/TaskRecoveryModal'
 import Quickbar from './components/Quickbar'
@@ -58,6 +58,24 @@ function sessionOrderForMode(
   })
 }
 
+function officeBootProps(
+  order: string[],
+  sessions: ReturnType<typeof useStore.getState>['sessions'],
+  activeId: string | null,
+  settings: AppSettings,
+  selectSession: ReturnType<typeof useStore.getState>['selectSession']
+): React.ComponentProps<typeof OfficeView>['boot'] {
+  const systemLight = settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches
+  return {
+    sessionIds: order.filter((id) => Boolean(sessions[id])),
+    activeId,
+    quality: settings.office?.qualityMode ?? 'auto',
+    lightMode: settings.theme === 'light' || systemLight,
+    language: settings.language,
+    selectSession
+  }
+}
+
 export default function App(): React.JSX.Element {
   const init = useStore((s) => s.init)
   const activeId = useStore((s) => s.activeId)
@@ -66,7 +84,7 @@ export default function App(): React.JSX.Element {
   const sessions = useStore((s) => s.sessions)
   const view = useStore((s) => s.view)
   const experienceMode = useStore((s) => s.experienceMode)
-  const language = useStore((s) => s.settings.language)
+  const settings = useStore((s) => s.settings)
   const showNewSession = useStore((s) => s.showNewSession)
   const showSettings = useStore((s) => s.showSettings)
   const showCommandPalette = useStore((s) => s.showCommandPalette)
@@ -186,14 +204,14 @@ export default function App(): React.JSX.Element {
         </Suspense>
       ) : view === 'office' ? (
         <Suspense fallback={<div className="office-loading">加载办公区…</div>}>
-          <OfficeView />
+          <OfficeView boot={officeBootProps(order, sessions, activeId, settings, selectSession)} />
         </Suspense>
       ) : (
         <AppListView
           activeId={activeId}
           experienceMode={experienceMode}
           hasActive={hasActive}
-          language={language}
+          language={settings.language}
           showNewSession={showNewSession}
           studioVisited={studioVisited}
           videoVisited={videoVisited}

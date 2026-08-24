@@ -104,6 +104,26 @@
           "no_dirty_or_contract_only_evidence",
           "per_requirement_fault_matrix"
         ]
+      },
+      {
+        "id": "CONTROL-ROOM-009",
+        "kind": "control-room-capacity",
+        "title": "控制室九工位上限",
+        "maxExpensiveWorkstations": 9,
+        "overflowStartsAt": 10,
+        "overflowProjection": "equivalent_list_view",
+        "semantics": {
+          "stationRepresents": "digital_employee_or_active_work",
+          "roleColorRepresents": "job_role",
+          "providerBadgeRepresents": "current_compute_source"
+        },
+        "requiredGates": [
+          "office_nine_workstation_capacity",
+          "office_tenth_session_overflow_list",
+          "office_active_session_prioritized",
+          "office_source_entry_return",
+          "office_equivalent_list_view"
+        ]
       }
     ]
   },

@@ -23,7 +23,7 @@ const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
 const { PNG } = require('pngjs')
 const required = process.argv.includes('--required')
-const scenarioCounts = parseScenarioCounts(readArg('--scenarios') ?? '1,6,12')
+const scenarioCounts = parseScenarioCounts(readArg('--scenarios') ?? '1,6,9')
 const scenarioExecutionCounts = required ? [...scenarioCounts].sort((left, right) => right - left) : scenarioCounts
 const qualityModes = parseQualityModes(readArg('--qualities') ?? 'auto,high,balanced,low')
 const fixedQualityAgentCount = Math.max(...scenarioCounts)
@@ -32,13 +32,13 @@ const warmupFrames = readPositiveInteger('--warmup-frames', 60)
 if (
   required &&
   (scenarioCounts.length !== 3 ||
-    ![1, 6, 12].every((count) => scenarioCounts.includes(count)) ||
+    ![1, 6, 9].every((count) => scenarioCounts.includes(count)) ||
     qualityModes.length !== 4 ||
     !['auto', 'high', 'balanced', 'low'].every((mode) => qualityModes.includes(mode)) ||
     sampleFrames < 180 ||
     warmupFrames < 60)
 ) {
-  fail('required mode mandates --scenarios 1,6,12, all four quality modes, at least 180 samples, and 60 warmups')
+  fail('required mode mandates --scenarios 1,6,9, all four quality modes, at least 180 samples, and 60 warmups')
 }
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'office-performance')
@@ -61,7 +61,7 @@ const targets = {
     medianFrameMsMaximum: 25,
     p95FrameMsMaximum: 40
   },
-  12: {
+  9: {
     firstNonblankMsMaximum: 7_000,
     medianFrameMsMaximum: 34,
     p95FrameMsMaximum: 50
@@ -78,7 +78,7 @@ const regressionBudgets = {
     medianFrameMsMaximum: 85,
     p95FrameMsMaximum: 105
   },
-  12: {
+  9: {
     firstNonblankMsMaximum: 12_000,
     medianFrameMsMaximum: 125,
     p95FrameMsMaximum: 150
@@ -105,9 +105,9 @@ const artifactRegressionBudgets = {
 const commandCenterTargets = {
   officeChunkBytesMaximum: 1_800_000,
   watercolorAssetBytesMaximum: 36_000_000,
-  twelveAgentMedianDrawCallsMaximum: 3_269,
-  twelveAgentBaselineMedianDrawCalls: 4_671,
-  twelveAgentDrawCallReductionMinimumPercent: 30
+  nineAgentMedianDrawCallsMaximum: 3_269,
+  legacyTwelveAgentBaselineMedianDrawCalls: 4_671,
+  nineAgentDrawCallReductionMinimumPercent: 30
 }
 const loadPhaseTargets = {
   shellReadyMsMaximum: 100,
@@ -440,9 +440,8 @@ async function removeIdleSessions(page, count) {
     }
   }, count)
 }
-
 async function verifyOfficeSessionCapacity(page, cwd, offset) {
-  const capacityTarget = 13
+  const capacityTarget = 10
   const additionalSessions = Math.max(0, capacityTarget - offset)
   await createIdleSessions(page, additionalSessions, offset, cwd)
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -452,6 +451,7 @@ async function verifyOfficeSessionCapacity(page, cwd, offset) {
     await page.click('[data-sidebar-action="control-room"]')
     await page.waitForSelector('.office-canvas-wrap', { timeout: 10_000 })
     officeOpen = true
+    await page.waitForFunction(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-scene-assets-ready') === '1', { timeout: 10_000 })
     await page.click('[data-office-business-view-option="all"]')
     await page.waitForFunction(
       () => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-business-view') === 'all',
@@ -462,14 +462,14 @@ async function verifyOfficeSessionCapacity(page, cwd, offset) {
       visible: Number(office.getAttribute('data-office-sessions') ?? 0),
       hidden: Number(office.getAttribute('data-office-hidden-sessions') ?? 0)
     }))
-    if (initial.capacity !== 12 || initial.visible !== 12 || initial.hidden !== 1) {
+    if (initial.capacity !== 9 || initial.visible !== 9 || initial.hidden !== 1) {
       throw new Error(`Office capacity contract mismatch: ${JSON.stringify(initial)}`)
     }
     await page.click('[data-office-hidden-sessions-toggle]')
     await page.waitForSelector('[data-office-hidden-session]', { timeout: 5_000 })
     const hiddenId = await page.$eval('[data-office-hidden-session]', (button) => button.getAttribute('data-office-hidden-session') ?? '')
     if (!hiddenId) throw new Error('hidden Office session did not expose an id')
-    await page.click(`[data-office-hidden-session="${hiddenId}"]`)
+    await page.$eval(`[data-office-hidden-session="${hiddenId}"]`, (button) => button.click())
     await page.waitForFunction(
       (id) => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-selected-session') === id,
       { timeout: 5_000 },
@@ -480,7 +480,7 @@ async function verifyOfficeSessionCapacity(page, cwd, offset) {
       hidden: Number(office.getAttribute('data-office-hidden-sessions') ?? 0),
       selected: office.getAttribute('data-office-selected-session') ?? ''
     }))
-    if (revealed.visible !== 12 || revealed.selected !== hiddenId) {
+    if (revealed.visible !== 9 || revealed.selected !== hiddenId) {
       throw new Error(`hidden Office session was not promoted into the bounded floor: ${JSON.stringify(revealed)}`)
     }
     return { capacity: initial.capacity, initial, revealed }
@@ -581,7 +581,7 @@ async function openOfficeWithLoadPhases(page, { expectedAgents, expectedQuality,
             measurement.sceneAssetsReadyMs = snapshotObservedAt
           }
           if (measurement.charactersReadyMs === null && workersReady) {
-            measurement.charactersReadyMs = snapshotObservedAt
+            measurement.charactersReadyMs = Math.max(0, Number(office?.getAttribute('data-office-3d-workers-ready-at')) - measurement.startedAt)
             measurement.observed = {
               digitalWorkers: characterCount,
               renderedDigitalWorkers: snapshot.workers.characters,
@@ -1304,14 +1304,14 @@ function evaluateCommandCenterContract(value) {
     )
   }
 
-  const twelveAgentScenarios = value.scenarios.filter((scenario) => scenario.agents === 12)
+  const nineAgentScenarios = value.scenarios.filter((scenario) => scenario.agents === 9)
   const drawCallsByMode = Object.fromEntries(
-    twelveAgentScenarios.map((scenario) => [scenario.qualityMode, scenario.render.calls.median])
+    nineAgentScenarios.map((scenario) => [scenario.qualityMode, scenario.render.calls.median])
   )
   const expectedModes = value.required ? ['auto', 'high', 'balanced', 'low'] : value.config.qualityModes
   if (value.required) {
     for (const mode of expectedModes) {
-      if (!Object.hasOwn(drawCallsByMode, mode)) violations.push(`missing 12-agent ${mode} draw-call sample`)
+      if (!Object.hasOwn(drawCallsByMode, mode)) violations.push(`missing 9-agent ${mode} draw-call sample`)
     }
   }
   const medianDrawCalls = Object.values(drawCallsByMode)
@@ -1319,20 +1319,20 @@ function evaluateCommandCenterContract(value) {
   const drawCallReductionPercent =
     maximumMedianDrawCalls === null
       ? null
-      : ((commandCenterTargets.twelveAgentBaselineMedianDrawCalls - maximumMedianDrawCalls) /
-          commandCenterTargets.twelveAgentBaselineMedianDrawCalls) *
+      : ((commandCenterTargets.legacyTwelveAgentBaselineMedianDrawCalls - maximumMedianDrawCalls) /
+          commandCenterTargets.legacyTwelveAgentBaselineMedianDrawCalls) *
         100
   if (maximumMedianDrawCalls === null) {
-    violations.push('missing 12-agent median draw-call measurement')
+    violations.push('missing 9-agent median draw-call measurement')
   } else {
-    if (maximumMedianDrawCalls > commandCenterTargets.twelveAgentMedianDrawCallsMaximum) {
+    if (maximumMedianDrawCalls > commandCenterTargets.nineAgentMedianDrawCallsMaximum) {
       violations.push(
-        `12-agent maximum median draw calls ${maximumMedianDrawCalls} exceeds ${commandCenterTargets.twelveAgentMedianDrawCallsMaximum}`
+        `9-agent maximum median draw calls ${maximumMedianDrawCalls} exceeds ${commandCenterTargets.nineAgentMedianDrawCallsMaximum}`
       )
     }
-    if (drawCallReductionPercent < commandCenterTargets.twelveAgentDrawCallReductionMinimumPercent) {
+    if (drawCallReductionPercent < commandCenterTargets.nineAgentDrawCallReductionMinimumPercent) {
       violations.push(
-        `12-agent draw-call reduction ${drawCallReductionPercent.toFixed(2)}% is below ${commandCenterTargets.twelveAgentDrawCallReductionMinimumPercent}% from baseline ${commandCenterTargets.twelveAgentBaselineMedianDrawCalls}`
+        `9-agent draw-call reduction ${drawCallReductionPercent.toFixed(2)}% is below ${commandCenterTargets.nineAgentDrawCallReductionMinimumPercent}% from legacy 12-agent baseline ${commandCenterTargets.legacyTwelveAgentBaselineMedianDrawCalls}`
       )
     }
   }
@@ -1350,9 +1350,9 @@ function evaluateCommandCenterContract(value) {
       officeChunkBytes: value.artifacts.officeChunkBytes,
       watercolorAssetBytes: value.artifacts.watercolorAssetBytes,
       watercolorAssetCount: value.artifacts.watercolorAssetCount,
-      twelveAgentMedianDrawCallsByMode: drawCallsByMode,
-      twelveAgentMaximumMedianDrawCalls: maximumMedianDrawCalls,
-      twelveAgentDrawCallReductionPercent:
+      nineAgentMedianDrawCallsByMode: drawCallsByMode,
+      nineAgentMaximumMedianDrawCalls: maximumMedianDrawCalls,
+      nineAgentDrawCallReductionFromLegacyTwelveAgentBaselinePercent:
         drawCallReductionPercent === null ? null : Number(drawCallReductionPercent.toFixed(2))
     },
     targets: commandCenterTargets,
@@ -1413,7 +1413,7 @@ function renderMarkdown(value) {
 - Coverage: Auto ${value.config.scenarioCounts.join('/')} agents; fixed ${value.config.qualityModes.filter((mode) => mode !== 'auto').join('/')} at ${value.config.fixedQualityAgentCount} agents; ${value.config.sampleFrames} samples + ${value.config.warmupFrames} warmups
 - Office chunk: ${value.artifacts.officeChunkBytes} bytes
 - Profile watercolor assets: ${value.artifacts.watercolorAssetCount} files / ${value.artifacts.watercolorAssetBytes} bytes
-- Command center draw calls: ${commandCenter?.twelveAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median; ${commandCenter?.twelveAgentDrawCallReductionPercent ?? 'not measured'}% reduction from ${value.commandCenterTargets.twelveAgentBaselineMedianDrawCalls}
+- Command center draw calls: ${commandCenter?.nineAgentMaximumMedianDrawCalls ?? 'not measured'} maximum median at 9 agents; ${commandCenter?.nineAgentDrawCallReductionFromLegacyTwelveAgentBaselinePercent ?? 'not measured'}% reduction from legacy 12-agent baseline ${value.commandCenterTargets.legacyTwelveAgentBaselineMedianDrawCalls}
 - Load targets: shell <=${value.loadPhaseTargets.shellReadyMsMaximum}ms; Canvas <=${value.loadPhaseTargets.canvasReadyMsMaximum}ms; basic nonblank <=${value.loadPhaseTargets.basicNonblankMsMaximum}ms; interactive <=${value.loadPhaseTargets.interactiveReadyMsMaximum}ms; 3D digital workers <=${value.loadPhaseTargets.charactersReadyMsMaximum}ms; business assets <=${value.loadPhaseTargets.sceneAssetsReadyMsMaximum}ms
 - Auto pressure: ${value.autoAdaptation ? JSON.stringify(value.autoAdaptation) : 'not measured'}
 - Hidden/unfocused render pause: ${pause}

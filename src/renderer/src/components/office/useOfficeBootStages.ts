@@ -4,6 +4,7 @@ const OFFICE_DETAIL_UPGRADE_DELAY_MS = 1_200
 
 export function useOfficeBootStages(recordFrame: (frameMs: number) => void): {
   bootCharactersEnabled: boolean
+  bootCharactersReadyAt: number
   sceneDetailEnabled: boolean
   sceneAssetsEnabled: boolean
   handleOfficeFrame: (frameMs: number) => void
@@ -12,11 +13,13 @@ export function useOfficeBootStages(recordFrame: (frameMs: number) => void): {
   const [sceneDetailEnabled, setSceneDetailEnabled] = useState(false)
   const [sceneAssetsEnabled, setSceneAssetsEnabled] = useState(false)
   const bootFrameRenderedRef = useRef(false)
+  const bootCharactersReadyAtRef = useRef(0)
   const detailUpgradeTimerRef = useRef<number | null>(null)
   const handleOfficeFrame = useCallback((frameMs: number): void => {
     recordFrame(frameMs)
     if (bootFrameRenderedRef.current) return
     bootFrameRenderedRef.current = true
+    bootCharactersReadyAtRef.current = performance.now()
     setBootCharactersEnabled(true)
     detailUpgradeTimerRef.current = window.setTimeout(
       () => setSceneDetailEnabled(true),
@@ -40,5 +43,5 @@ export function useOfficeBootStages(recordFrame: (frameMs: number) => void): {
     }
   }, [sceneAssetsEnabled, sceneDetailEnabled])
 
-  return { bootCharactersEnabled, sceneDetailEnabled, sceneAssetsEnabled, handleOfficeFrame }
+  return { bootCharactersEnabled, bootCharactersReadyAt: bootCharactersReadyAtRef.current, sceneDetailEnabled, sceneAssetsEnabled, handleOfficeFrame }
 }

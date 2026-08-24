@@ -5,7 +5,8 @@ import path from 'node:path'
 
 const read = (relativePath) => readFileSync(path.join(process.cwd(), relativePath), 'utf8')
 const roles = ['researcher', 'planner', 'writer', 'designer', 'developer', 'review-test', 'operations']
-const office = read('src/renderer/src/components/office/OfficeView.tsx')
+const officeBootView = read('src/renderer/src/components/office/OfficeView.tsx')
+const office = read('src/renderer/src/components/office/OfficeRuntime.tsx')
 const boot = read('src/renderer/src/components/office/kit/OfficeBootCharacter.tsx')
 const workstation = read('src/renderer/src/components/office/kit/WorkstationPro.tsx')
 const workstationOperator = read('src/renderer/src/components/office/kit/WorkstationOperatorRig.tsx')
@@ -15,6 +16,9 @@ const articulatedRig = read('src/renderer/src/components/office/kit/ArticulatedD
 const lowPolyRig = read('src/renderer/src/components/office/kit/LowPolyDigitalWorkerRig.tsx')
 
 assert(office.includes("import OfficeBootCharacter from './kit/OfficeBootCharacter'"), 'Office boot must use the 3D worker visual')
+assert(officeBootView.includes('const OFFICE_MAX_VISIBLE_SESSIONS = 9'), 'lightweight Office boot must cap the floor at 9')
+assert(office.includes('const OFFICE_MAX_VISIBLE_SESSIONS = 9'), 'Office runtime must cap the floor at 9')
+assert(officeBootView.includes('boot.selectSession(id)'), 'lightweight Office overflow must select the canonical session')
 assert(office.includes('data-office-articulated-characters={visibleIds.length}'), 'Office must expose the articulated character count')
 assert(office.includes('data-office-grounded-character-rigs={visibleIds.length}'), 'Office must expose the grounded character count')
 assert(office.includes('data-office-low-poly-digital-workers={visibleIds.length}'), 'Office must expose the low-poly worker count')

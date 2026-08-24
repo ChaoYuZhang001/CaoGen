@@ -13,15 +13,18 @@ export function loadOfficeView(): Promise<OfficeViewModule> {
 }
 
 export function preloadOfficeView(): Promise<boolean> {
-  return loadOfficeView()
-    .then((module) => new Promise<boolean>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        if (document.querySelector('.office, .office-loading')) {
-          resolve(true)
-          return
-        }
-        resolve(module.prewarmOfficeGraphics())
-      }))
-    }))
+  return Promise.all([loadOfficeView(), import('./graphicsPrewarm')])
+    .then(([module, graphics]) => Promise.all([
+      module.preloadOfficeRuntime(),
+      new Promise<boolean>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (document.querySelector('.office, .office-loading')) {
+            resolve(true)
+            return
+          }
+          resolve(graphics.prewarmOfficeGraphics())
+        }))
+      })
+    ]).then(([runtimeReady, graphicsReady]) => runtimeReady && graphicsReady))
     .catch(() => false)
 }
