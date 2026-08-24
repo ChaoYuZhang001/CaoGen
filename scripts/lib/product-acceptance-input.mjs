@@ -257,41 +257,53 @@ export function validateProductAcceptanceContract(contract) {
 }
 
 function validateHumanExperienceAcceptance(contract) {
-  const failures = []
   const scope = contract?.humanExperienceAcceptance
   if (scope?.schemaVersion !== 1 || scope?.required !== true) {
-    failures.push('human experience acceptance must be schemaVersion 1 and required')
-    return failures
+    return ['human experience acceptance must be schemaVersion 1 and required']
   }
-  if (scope.source !== 'user-feedback-2026-08-24') failures.push('human experience acceptance source is invalid')
-  if (scope.participantCount !== 5) failures.push('human experience acceptance must require five participants')
-  if (scope.runPolicy !== 'each_participant_runs_all_tasks_without_product_instruction') {
-    failures.push('human experience acceptance run policy is invalid')
-  }
-  if (scope.comparisonRule !== 'same_goal_same_dataset_same_machine_and_fixed_comparator_version; CaoGen_required_steps_must_not_exceed_the_best_comparator') {
-    failures.push('human experience acceptance comparison rule is invalid')
-  }
-  if (!sameStrings(scope.measurementFields, HUMAN_EXPERIENCE_MEASUREMENT_FIELDS)) {
-    failures.push('human experience acceptance measurement fields are invalid')
-  }
+  return [
+    ...validateHumanExperienceMetadata(scope),
+    ...validateHumanExperienceTasks(scope)
+  ]
+}
+
+function validateHumanExperienceMetadata(scope) {
+  return [
+    ...(scope.source === 'user-feedback-2026-08-24' ? [] : ['human experience acceptance source is invalid']),
+    ...(scope.participantCount === 5 ? [] : ['human experience acceptance must require five participants']),
+    ...(scope.runPolicy === 'each_participant_runs_all_tasks_without_product_instruction'
+      ? []
+      : ['human experience acceptance run policy is invalid']),
+    ...(scope.comparisonRule === 'same_goal_same_dataset_same_machine_and_fixed_comparator_version; CaoGen_required_steps_must_not_exceed_the_best_comparator'
+      ? []
+      : ['human experience acceptance comparison rule is invalid']),
+    ...(sameStrings(scope.measurementFields, HUMAN_EXPERIENCE_MEASUREMENT_FIELDS)
+      ? []
+      : ['human experience acceptance measurement fields are invalid'])
+  ]
+}
+
+function validateHumanExperienceTasks(scope) {
   if (!Array.isArray(scope.tasks) || scope.tasks.length !== HUMAN_EXPERIENCE_TASKS.length) {
-    failures.push('human experience acceptance must contain five golden tasks')
-    return failures
+    return ['human experience acceptance must contain five golden tasks']
   }
-  for (const [index, expected] of HUMAN_EXPERIENCE_TASKS.entries()) {
-    const actual = scope.tasks[index]
-    if (actual?.id !== expected.id || actual?.surface !== expected.surface || actual?.title !== expected.title) {
-      failures.push(`${expected.id} identity is invalid`)
-    }
-    if (!sameStrings(actual?.comparators, expected.comparators)) failures.push(`${expected.id} comparators are invalid`)
-    if (actual?.timeLimitMinutes !== expected.timeLimitMinutes) failures.push(`${expected.id} time limit is invalid`)
-    if (!sameStrings(actual?.requiredFlow, expected.requiredFlow)) failures.push(`${expected.id} required flow is invalid`)
-  }
+  const failures = scope.tasks.flatMap((actual, index) => validateHumanExperienceTask(actual, HUMAN_EXPERIENCE_TASKS[index]))
   const video = scope.tasks[2]
   if (video?.qualityBoundary !== '1.0 verifies honest local usability and traceability; it does not claim remote generation quality parity') {
     failures.push('UX-GOLDEN-003 quality boundary is invalid')
   }
   return failures
+}
+
+function validateHumanExperienceTask(actual, expected) {
+  return [
+    ...(actual?.id === expected.id && actual?.surface === expected.surface && actual?.title === expected.title
+      ? []
+      : [`${expected.id} identity is invalid`]),
+    ...(sameStrings(actual?.comparators, expected.comparators) ? [] : [`${expected.id} comparators are invalid`]),
+    ...(actual?.timeLimitMinutes === expected.timeLimitMinutes ? [] : [`${expected.id} time limit is invalid`]),
+    ...(sameStrings(actual?.requiredFlow, expected.requiredFlow) ? [] : [`${expected.id} required flow is invalid`])
+  ]
 }
 
 function validateAdditionalReleaseBlockingScope(contract) {

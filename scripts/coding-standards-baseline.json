@@ -483,8 +483,8 @@
     },
     "scripts/lib/product-acceptance-input.mjs": {
       "profile": "automation",
-      "lines": 403,
-      "contentHash": "46f4e5a1967c61b9dd3cdcfecafbf03e551e702d9626dfd221498beb85dfe090",
+      "lines": 547,
+      "contentHash": "3317e5521c43cc26913df3a6b0e221586c16caf446689796aa71d70eba6e4884",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,
@@ -907,8 +907,8 @@
     },
     "scripts/video-studio-golden-e2e.mjs": {
       "profile": "automation",
-      "lines": 588,
-      "contentHash": "120d3e0b9731886f5775a302ede8f59477075893c20b19fe2b62e14f7ea78ae0",
+      "lines": 606,
+      "contentHash": "df91661504dee181112b1f4fdcc0ce53619f6e0a5ce95243a867205bc57e2c73",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 0,
