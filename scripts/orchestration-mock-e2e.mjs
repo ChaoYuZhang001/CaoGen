@@ -977,15 +977,15 @@ try {
       'waiting for light theme after reload'
     )
     await clickVisibleControl(page, '[data-sidebar-action="control-room"]')
-    await page.waitForSelector('.office canvas', { timeout: 20_000 })
-    await page.click('[data-office-business-view-option="all"]')
+    await waitForOfficeRenderLoop(page, 15_000)
+    await clickVisibleControl(page, '[data-office-business-view-option="all"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-business-view') ?? ''),
       (value) => value === 'all',
       5_000,
       'waiting for all-business light office view'
     )
-    await page.click('[data-office-camera-preset="overview"]')
+    await clickVisibleControl(page, '[data-office-camera-preset="overview"]')
     await waitForValue(
       () => page.evaluate(() => document.querySelector('.office-canvas-wrap')?.getAttribute('data-office-active-camera-preset') ?? ''),
       (value) => value === 'overview',
