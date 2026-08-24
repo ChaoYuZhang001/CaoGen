@@ -68,6 +68,11 @@ export const DURABLE_WRITE_REGISTRY = [
     'Arbitrary workspace files are user-owned and cannot share one CaoGen schema version.'
   ),
   journal(
+    'src/main/agent/tools/p2-tools.ts',
+    'caogen.search-broker-operation-cache', '1', 'atomic_fsync_rename', 'implemented_unverified',
+    'Persists bounded Search Broker operation results for idempotent replay while canonical source Evidence remains in the Workflow Ledger.'
+  ),
+  journal(
     'src/main/assignment-owner-coordinator/journal.ts',
     'caogen.assignment-owner-coordinator.json', '1', 'atomic_fsync_rename', 'implemented_unverified',
     'Persists assignment ownership decisions and audit events with revision checks.'
