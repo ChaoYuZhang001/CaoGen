@@ -118,6 +118,8 @@ export interface ToolExecutionOptions {
   sessionMeta?: SessionMeta
   userDataRoot?: string
   toolUseId?: string
+  runId?: string
+  searchBroker?: import('./search/search-broker').SearchBroker
 }
 
 const READ_MAX_BYTES = 200 * 1024
@@ -998,7 +1000,9 @@ export async function executeCodingTool(
         effectTarget: options.effectTarget,
         sessionMeta: options.sessionMeta,
         userDataRoot: options.userDataRoot,
-        toolUseId: options.toolUseId
+        toolUseId: options.toolUseId,
+        runId: options.runId,
+        searchBroker: options.searchBroker
       }))
     }
     if (isOfficeArtifactTool(name)) {

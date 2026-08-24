@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { listProviders } from '../../providers'
 import { draftSkillFromSummary } from '../../skill/skill-learner'
 import { proposeSkillOptimization, type SkillFeedbackOutcome } from '../../skill/skill-optimizer'
@@ -21,6 +23,17 @@ import { openProjectWorkspaceStore } from '../../project-workspace/store'
 import { verifyProductionProjectMutation } from '../../project-aggregate/project-mutation-ingress'
 import { searchProjectKnowledge } from '../../project-workspace/project-knowledge-search'
 import { taskRuntimeRegistry } from '../../task/task-runtime-registry'
+import { writeDurableFile } from '../../durable-file'
+import { ensureManagedPersonalWorkspace } from '../../project-workspace/managed-personal-workspace'
+import { createWorkflowEvidence } from '../../task/workflow-ledger-api'
+import {
+  SearchBroker,
+  type SearchBrokerEvidenceRecord,
+  type SearchBrokerMode,
+  type SearchBrokerResult,
+  type SearchProviderAdapter,
+  type SearchProviderRequest
+} from '../../search/search-broker'
 
 export const P2_TOOL_NAMES = [
   'draft_skill',
@@ -28,6 +41,7 @@ export const P2_TOOL_NAMES = [
   'route_model',
   'china_notify',
   'send_notification',
+  'web_search',
   'project_knowledge_search',
   'work_item_comment',
   'gitee_prepare'
@@ -44,6 +58,9 @@ export interface P2ToolExecutionContext {
   sessionMeta?: SessionMeta
   userDataRoot?: string
   toolUseId?: string
+  runId?: string
+  /** Optional injected broker for deterministic Assistant/engine execution. */
+  searchBroker?: SearchBroker
 }
 
 export const P2_TOOLS: ToolDefinition[] = [
@@ -80,6 +97,25 @@ export const P2_TOOLS: ToolDefinition[] = [
           linkUrl: { type: 'string' }
         },
         required: ['title', 'text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: '通过 CaoGen 自有 Search Broker 执行通用联网搜索。每个成功结果都必须重新抓取并返回 URL、抓取时间、摘要、内容 SHA-256、引用和 Evidence；无结果、超时、无凭据、出口拒绝、Provider 失败或未知结果会明确返回失败状态。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: { type: 'string', description: '要搜索的问题或关键词' },
+          mode: { type: 'string', enum: ['model_native', 'byok_search_adapter'], description: '默认 model_native；需要独立 BYOK 时显式选择 byok_search_adapter。' },
+          operationId: { type: 'string', description: '可选稳定操作身份；用于重启后的幂等重放。' },
+          artifactId: { type: 'string', description: '可选；把来源 Evidence 绑定到已存在的 canonical Artifact。' },
+          limit: { type: 'number', description: '返回来源数量，默认 5，最多 20。' }
+        },
+        required: ['query']
       }
     }
   },
@@ -290,6 +326,7 @@ export async function executeP2Tool(
   }
 
   if (name === 'china_notify') return executeChinaNotifyPreview(args)
+  if (name === 'web_search') return executeWebSearch(args, context)
   if (name === 'project_knowledge_search') return executeProjectKnowledgeSearch(args, context)
   if (name === 'work_item_comment') return executeWorkItemComment(args, context)
   if (name === 'send_notification') {
@@ -300,6 +337,163 @@ export async function executeP2Tool(
     return { ok: result.ok, output: JSON.stringify(result, null, 2) }
   }
   return executeGiteePreview(args)
+}
+
+async function executeWebSearch(
+  args: Record<string, unknown>,
+  context: P2ToolExecutionContext
+): Promise<P2ToolResult> {
+  const root = context.userDataRoot
+  const meta = context.sessionMeta
+  if (!root || !meta || !context.toolUseId) {
+    return { ok: false, output: 'web_search 缺少稳定 Session、用户数据目录或工具调用身份' }
+  }
+  const mode = args.mode === undefined ? 'model_native' : args.mode
+  if (mode !== 'model_native' && mode !== 'byok_search_adapter') {
+    return { ok: false, output: 'web_search mode 必须是 model_native 或 byok_search_adapter' }
+  }
+  const projectId = meta.workspaceId ?? meta.personalWorkspaceId ?? (await ensureManagedPersonalWorkspace(root)).workspace.id
+  const run = taskRuntimeRegistry.get(meta.id)
+  const runId = context.runId ?? run?.id
+  const operationId = optionalString(args.operationId) ?? `search:${meta.id}:${context.toolUseId}`
+  const broker = context.searchBroker ?? new SearchBroker({
+    modelNative: configuredSearchAdapter('CAOGEN_SEARCH_MODEL_NATIVE_URL', 'CAOGEN_SEARCH_MODEL_NATIVE_API_KEY'),
+    byokSearchAdapter: configuredSearchAdapter('CAOGEN_SEARCH_BYOK_URL', 'CAOGEN_SEARCH_BYOK_API_KEY'),
+    idempotencyStore: durableSearchStore(root, projectId),
+    evidenceWriter: async (record) => recordSearchEvidence(record, root, {
+      projectId,
+      goalId: meta.goalId,
+      workItemId: meta.workItemId,
+      runId,
+      artifactId: optionalString(args.artifactId)
+    })
+  })
+  const result = await broker.search({
+    query: requiredString(args.query, 'query'),
+    mode: mode as SearchBrokerMode,
+    operationId,
+    projectId,
+    ...(meta.goalId ? { goalId: meta.goalId } : {}),
+    ...(meta.workItemId ? { workItemId: meta.workItemId } : {}),
+    ...(runId ? { runId } : {}),
+    ...(optionalString(args.artifactId) ? { artifactId: optionalString(args.artifactId) } : {}),
+    limit: optionalNumber(args.limit)
+  })
+  return { ok: result.ok, output: JSON.stringify(result, null, 2) }
+}
+
+function configuredSearchAdapter(urlEnv: string, keyEnv: string): SearchProviderAdapter | undefined {
+  const endpoint = process.env[urlEnv]?.trim()
+  if (!endpoint) return undefined
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    return { available: false, async search() { return { status: 'provider_failure', message: `Invalid search endpoint in ${urlEnv}.` } } }
+  }
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    return { available: false, async search() { return { status: 'egress_denied', message: `Search endpoint in ${urlEnv} must be a credential-free HTTP(S) URL.` } } }
+  }
+  return {
+    available: () => keyEnv === 'CAOGEN_SEARCH_MODEL_NATIVE_API_KEY' || Boolean(process.env[keyEnv]?.trim()),
+    async search(input: SearchProviderRequest) {
+      const key = process.env[keyEnv]?.trim()
+      if (!key && keyEnv !== 'CAOGEN_SEARCH_MODEL_NATIVE_API_KEY') return { status: 'no_credentials', message: 'No BYOK search credentials are configured.' }
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            ...(key ? { authorization: `Bearer ${key}` } : {})
+          },
+          body: JSON.stringify({ query: input.query, limit: input.limit, operationId: input.operationId, mode: input.mode }),
+          signal: input.signal
+        })
+        if (!response.ok) return { status: 'provider_failure', message: `Search adapter returned HTTP ${response.status}.` }
+        const body = await response.json() as Record<string, unknown>
+        return normalizeSearchAdapterResponse(body)
+      } catch (error) {
+        if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return { status: 'timeout', message: 'Search adapter timed out.' }
+        return { status: 'provider_failure', message: 'Search adapter failed before a verified result was produced.' }
+      }
+    }
+  }
+}
+
+function normalizeSearchAdapterResponse(body: Record<string, unknown>): {
+  status?: 'success' | 'no_results' | 'timeout' | 'no_credentials' | 'egress_denied' | 'provider_failure' | 'unknown_result'
+  results?: Array<{ url: string; title?: string; summary?: string }>
+  message?: string
+} {
+  const status = typeof body.status === 'string' ? body.status : undefined
+  const raw = Array.isArray(body.results) ? body.results : Array.isArray(body.items) ? body.items : []
+  const results = raw.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const value = item as Record<string, unknown>
+    const url = typeof value.url === 'string' ? value.url : typeof value.link === 'string' ? value.link : ''
+    if (!url.trim()) return []
+    return [{
+      url,
+      ...(typeof value.title === 'string' ? { title: value.title } : {}),
+      ...(typeof value.summary === 'string' ? { summary: value.summary } : typeof value.snippet === 'string' ? { summary: value.snippet } : {})
+    }]
+  })
+  return {
+    ...(status ? { status: status as ReturnType<typeof normalizeSearchAdapterResponse>['status'] } : {}),
+    results,
+    ...(typeof body.message === 'string' ? { message: body.message } : {})
+  }
+}
+
+function durableSearchStore(rootDir: string, projectId: string) {
+  const filePath = join(rootDir, 'search-broker', createHash('sha256').update(projectId).digest('hex'), 'operations.json')
+  let loaded = false
+  let entries: Record<string, SearchBrokerResult> = {}
+  const load = (): void => {
+    if (loaded) return
+    loaded = true
+    if (!existsSync(filePath)) return
+    try {
+      const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, SearchBrokerResult>
+    } catch {
+      entries = {}
+    }
+  }
+  return {
+    get(operationId: string): SearchBrokerResult | undefined {
+      load()
+      return entries[operationId]
+    },
+    async put(operationId: string, result: SearchBrokerResult): Promise<void> {
+      load()
+      entries[operationId] = result
+      await writeDurableFile(filePath, `${JSON.stringify(entries)}\n`, { mode: 0o600 })
+    }
+  }
+}
+
+async function recordSearchEvidence(
+  record: SearchBrokerEvidenceRecord,
+  rootDir: string,
+  binding: { projectId: string; goalId?: string; workItemId?: string; runId?: string; artifactId?: string }
+): Promise<void> {
+  await createWorkflowEvidence({
+    evidenceId: record.evidenceId,
+    projectId: binding.projectId,
+    ...(binding.goalId ? { goalId: binding.goalId } : {}),
+    ...(binding.workItemId ? { workItemId: binding.workItemId } : {}),
+    ...(binding.runId ? { runId: binding.runId } : {}),
+    ...(binding.artifactId ? { artifactId: binding.artifactId } : {}),
+    kind: 'research_source',
+    title: record.title,
+    summary: record.summary,
+    uri: record.uri,
+    mediaType: record.mediaType,
+    contentDigest: record.contentDigest,
+    metadata: record.metadata
+  }, rootDir, { source: 'runtime', verifier: record.verifier, observedAt: record.observedAt })
 }
 
 async function executeProjectKnowledgeSearch(

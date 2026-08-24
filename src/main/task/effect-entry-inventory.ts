@@ -185,7 +185,7 @@ export const AGENT_TOOL_EFFECT_ENTRY_POLICIES = mergePolicyGroups(
     'get_dependencies', 'git_diff', 'git_status', 'gitee_prepare',
     'gui_list_windows', 'gui_screenshot', 'list_dir', 'list_skills', 'load_skill',
     'memory_search', 'read_file', 'route_model', 'run_skill', 'search_code',
-    'search_symbol', 'task_decompose', 'view'
+    'search_symbol', 'task_decompose', 'view', 'web_search'
   ], READ_ONLY),
   policyGroup([
     'create_document', 'create_pdf', 'create_presentation', 'create_spreadsheet',

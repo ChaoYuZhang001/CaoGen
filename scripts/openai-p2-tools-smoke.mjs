@@ -14,11 +14,44 @@ try {
   mkdirSync(projectRoot, { recursive: true })
   compile(['src/main/openaiTools.ts'], outDir)
   const toolsModule = await import(pathToFileURL(findCompiled(outDir, 'openaiTools.js')).href)
+  const searchModule = await import(pathToFileURL(findCompiled(outDir, 'search-broker.js')).href)
   const pluginRuntime = await import(pathToFileURL(findCompiled(outDir, 'plugin-runtime-authorization.js')).href)
   const names = toolsModule.OPENAI_CODING_TOOLS.map((tool) => tool.function.name)
   for (const expected of ['draft_skill', 'optimize_skill', 'route_model', 'china_notify', 'gitee_prepare']) {
     assert(names.includes(expected), `${expected} should be registered`)
   }
+  assertEqual(names.filter((name) => name === 'web_search').length, 1)
+  const searchEvidence = []
+  const searchBroker = new searchModule.SearchBroker({
+    modelNative: { async search() { return { status: 'success', results: [{ url: 'https://example.com/source' }] } } },
+    fetchImpl: async () => new Response('<html><body>runtime source</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' }
+    }),
+    publicEndpointChecker: () => undefined,
+    evidenceWriter: (record) => { searchEvidence.push(record) }
+  })
+  const searchedWeb = await toolsModule.executeCodingTool(
+    'web_search',
+    { query: 'runtime search', mode: 'model_native', operationId: 'runtime-search-1', artifactId: 'artifact-runtime' },
+    projectRoot,
+    {
+      userDataRoot: path.join(tempRoot, 'user-data'),
+      toolUseId: 'runtime-search-tool',
+      searchBroker,
+      sessionMeta: {
+        id: 'runtime-search-session',
+        workspaceId: 'project-runtime-search',
+        goalId: 'goal-runtime-search',
+        workItemId: 'work-runtime-search',
+        unassigned: false
+      }
+    }
+  )
+  assertEqual(searchedWeb.ok, true)
+  assert(searchedWeb.output.includes('artifact-runtime'), 'web_search runtime path must preserve artifact binding')
+  assertEqual(searchEvidence.length, 1)
+  assertEqual(searchEvidence[0].artifactId, 'artifact-runtime')
   assert(toolsModule.READONLY_TOOLS.has('draft_skill'), 'draft_skill should be readonly')
   assert(toolsModule.READONLY_TOOLS.has('route_model'), 'route_model should be readonly')
   assert(toolsModule.READONLY_TOOLS.has('china_notify'), 'china_notify preview should be readonly')

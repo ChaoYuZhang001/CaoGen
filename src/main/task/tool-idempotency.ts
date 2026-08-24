@@ -20,6 +20,7 @@ export const OPENAI_PERMISSION_READ_ONLY_TOOLS = new Set([
   'china_notify',
   'gitee_prepare',
   'memory_search',
+  'web_search',
   'browser_automation_status',
   'git_status',
   'git_diff'

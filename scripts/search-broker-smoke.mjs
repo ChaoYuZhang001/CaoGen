@@ -1,0 +1,156 @@
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+const brokerSource = path.join(repoRoot, 'src/main/search/search-broker.ts')
+const openaiToolsSource = readFileSync(path.join(repoRoot, 'src/main/openaiTools.ts'), 'utf8')
+const p2ToolsSource = readFileSync(path.join(repoRoot, 'src/main/agent/tools/p2-tools.ts'), 'utf8')
+assert.match(p2ToolsSource, /name: 'web_search'/, 'canonical P2 tool schema must expose web_search')
+assert.match(openaiToolsSource, /\.\.\.P2_TOOLS/, 'OpenAI tool registry must derive web_search from P2_TOOLS')
+assert.doesNotMatch(openaiToolsSource, /name: ['"]web_search['"]/, 'web_search must not have a duplicate direct schema')
+assert.match(p2ToolsSource, /if \(name === 'web_search'\)/, 'canonical P2 dispatch must execute web_search')
+assert.match(p2ToolsSource, /searchBroker\?: SearchBroker/, 'P2 execution must expose the broker injection seam')
+const typescript = loadTypeScript(repoRoot)
+const compiledDir = mkdtempSync(path.join(os.tmpdir(), 'caogen-search-broker-'))
+const compiledPath = path.join(compiledDir, 'search-broker.cjs')
+const compiled = typescript.transpileModule(readFileSync(brokerSource, 'utf8'), {
+  compilerOptions: {
+    target: typescript.ScriptTarget.ES2022,
+    module: typescript.ModuleKind.CommonJS,
+    esModuleInterop: true,
+    isolatedModules: true
+  },
+  fileName: brokerSource
+})
+writeFileSync(compiledPath, compiled.outputText)
+const { SearchBroker } = createRequire(compiledPath)(compiledPath)
+
+const sourceBody = '<html><title>Verified source</title><body>Fetched material is the only citation source.</body></html>'
+const sourceSha = createHash('sha256').update(sourceBody).digest('hex')
+let fetchCalls = 0
+const fetchImpl = async (url) => {
+  fetchCalls += 1
+  assert.equal(url.toString(), 'https://example.com/source')
+  return new Response(sourceBody, { status: 200, headers: { 'content-type': 'text/html' } })
+}
+const endpointPolicy = () => undefined
+
+const evidence = []
+const native = new SearchBroker({
+  modelNative: {
+    async search(input) {
+      assert.equal(input.query, 'CaoGen search')
+      assert.equal(input.projectId, undefined)
+      return { status: 'success', results: [{ url: 'https://example.com/source', summary: 'UNTRUSTED MODEL SUMMARY' }] }
+    }
+  },
+  fetchImpl,
+  publicEndpointChecker: endpointPolicy,
+  now: () => 1_700_000_000_000,
+  evidenceWriter: (record) => { evidence.push(record) }
+})
+const nativeResult = await native.search({ mode: 'model_native', query: 'CaoGen search', operationId: 'native-success', runId: 'run-1', artifactId: 'artifact-1' })
+assert.equal(nativeResult.ok, true)
+assert.equal(nativeResult.status, 'success')
+assert.equal(nativeResult.projectId, null)
+assert.equal(nativeResult.runId, 'run-1')
+assert.equal(nativeResult.artifactId, 'artifact-1')
+assert.equal(nativeResult.url, 'https://example.com/source')
+assert.equal(nativeResult.fetchedAt, 1_700_000_000_000)
+assert.equal(nativeResult.contentSha256, sourceSha)
+assert.equal(nativeResult.summary, 'Verified source Fetched material is the only citation source.')
+assert.notEqual(nativeResult.summary, 'UNTRUSTED MODEL SUMMARY')
+assert.match(nativeResult.citation, new RegExp(sourceSha))
+assert.equal(nativeResult.evidenceId, nativeResult.results[0].evidenceId)
+assert.equal(evidence.length, 1)
+assert.equal(evidence[0].contentDigest, `sha256:${sourceSha}`)
+assert.equal(evidence[0].uri, nativeResult.url)
+assert.equal(evidence[0].artifactId, 'artifact-1')
+assert.equal(fetchCalls, 1)
+
+const evidenceFailure = new SearchBroker({
+  modelNative: { async search() { return { status: 'success', results: [{ url: 'https://example.com/source' }] } } },
+  fetchImpl,
+  publicEndpointChecker: endpointPolicy,
+  evidenceWriter: () => { throw new Error('ledger unavailable') }
+})
+const evidenceFailureResult = await evidenceFailure.search({
+  mode: 'model_native',
+  query: 'evidence fail-closed',
+  operationId: 'evidence-fail-closed'
+})
+assert.equal(evidenceFailureResult.ok, false)
+assert.equal(evidenceFailureResult.status, 'provider_failure')
+
+const byok = new SearchBroker({
+  byokSearchAdapter: {
+    available: true,
+    async search() { return { status: 'success', results: [{ url: 'https://example.com/source' }] } }
+  },
+  fetchImpl,
+  publicEndpointChecker: endpointPolicy
+})
+const byokResult = await byok.search({ mode: 'byok_search_adapter', query: 'BYOK', operationId: 'byok-success', projectId: 'project-1', runId: 'run-2' })
+assert.equal(byokResult.ok, true)
+assert.equal(byokResult.projectId, 'project-1')
+assert.equal(byokResult.runId, 'run-2')
+
+async function failureFor(mode, adapter, operationId, expected, options = {}) {
+  const broker = new SearchBroker({
+    ...(mode === 'model_native' ? { modelNative: adapter } : { byokSearchAdapter: adapter }),
+    fetchImpl: options.fetchImpl ?? fetchImpl,
+    publicEndpointChecker: endpointPolicy,
+    timeoutMs: options.timeoutMs ?? 20
+  })
+  const result = await broker.search({ mode, query: 'failure test', operationId })
+  assert.equal(result.ok, false)
+  assert.equal(result.status, expected)
+  assert.equal(result.results.length, 0)
+  return result
+}
+
+await failureFor('model_native', { async search() { return { status: 'success', results: [] } } }, 'no-results', 'no_results')
+await failureFor('byok_search_adapter', undefined, 'no-credentials', 'no_credentials')
+await failureFor('model_native', { async search() { return new Promise(() => {}) } }, 'provider-timeout', 'timeout', { timeoutMs: 5 })
+await failureFor('model_native', { async search() { return { status: 'success', results: [{ url: 'http://example.com/source' }] } } }, 'egress-denied', 'egress_denied')
+await failureFor('model_native', { async search() { throw new Error('upstream unavailable') } }, 'provider-failure', 'provider_failure')
+await failureFor('model_native', { async search() { return {} } }, 'unknown-result', 'unknown_result')
+await failureFor('byok_search_adapter', { available: false, async search() { throw new Error('must not run') } }, 'credentials-disabled', 'no_credentials')
+
+const restartStore = new Map()
+const idempotencyStore = {
+  async get(operationId) { return restartStore.get(operationId) },
+  async put(operationId, result) { restartStore.set(operationId, result) }
+}
+let restartFetchCalls = 0
+const restartBrokerOptions = {
+  modelNative: { async search() { return { status: 'success', results: [{ url: 'https://example.com/source' }] } } },
+  fetchImpl: async (...args) => { restartFetchCalls += 1; return fetchImpl(...args) },
+  publicEndpointChecker: endpointPolicy,
+  idempotencyStore
+}
+const firstRun = await new SearchBroker(restartBrokerOptions).search({ mode: 'model_native', query: 'restart', operationId: 'restart-duplicate' })
+const replay = await new SearchBroker(restartBrokerOptions).search({ mode: 'model_native', query: 'restart', operationId: 'restart-duplicate' })
+assert.equal(firstRun.ok, true)
+assert.equal(replay.ok, true)
+assert.equal(replay.idempotentReplay, true)
+assert.equal(replay.evidenceId, firstRun.evidenceId)
+assert.equal(restartFetchCalls, 1)
+
+console.log('search-broker smoke: PASS')
+
+function loadTypeScript(root) {
+  const candidateRoots = [
+    path.join(root, 'node_modules'),
+    path.join(path.dirname(root), 'agent-desk', 'node_modules')
+  ]
+  for (const modulesRoot of candidateRoots) {
+    if (!existsSync(path.join(modulesRoot, 'typescript'))) continue
+    return createRequire(path.join(modulesRoot, 'package.json'))('typescript')
+  }
+  throw new Error('TypeScript dependency is required for search-broker smoke')
+}

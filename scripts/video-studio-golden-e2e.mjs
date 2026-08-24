@@ -146,6 +146,8 @@ try {
         const asset = assets.filter((item) => item.kind === 'video' && item.authorization?.source === 'local_composition')
           .sort((left, right) => right.version - left.version)[0]
         return asset ? {
+          assetId: asset.id,
+          artifactId: asset.artifactId,
           status: asset.contentStatus,
           mediaType: asset.mediaType,
           sizeBytes: asset.sizeBytes,
@@ -157,6 +159,38 @@ try {
       'waiting for local playable composition'
     )
     assert.equal(composed.mediaType, 'video/mp4')
+    assert(composed.artifactId, 'composition did not expose a canonical Artifact identity')
+    const trace = await page.evaluate(async ({ projectId, artifactId }) => {
+      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+      const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, limit: 100 })
+      return {
+        artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
+        evidence: evidence.items.filter((item) => item.artifactId === artifactId),
+        acceptances: ledger.acceptances.items.filter((item) => item.evidenceRefs.some((evidenceId) =>
+          evidence.items.some((item) => item.evidenceId === evidenceId && item.artifactId === artifactId)
+        )),
+        projectId
+      }
+    }, { projectId: report.projectId, artifactId: composed.artifactId })
+    assert(trace.artifact, 'composition Artifact was not readable from the canonical ledger')
+    assert(trace.evidence.length > 0, 'composition Evidence was not readable from the canonical ledger')
+    assert(trace.acceptances.some((item) => item.status === 'passed'), 'composition Acceptance was not passed in the canonical ledger')
+    const adopted = await page.evaluate(async (projectId) => {
+      const studio = await window.agentDesk.getMediaStudio(projectId)
+      const production = studio.productions[0]
+      const asset = production?.assets
+        .filter((item) => item.authorization?.source === 'local_composition')
+        .sort((left, right) => right.version - left.version)[0]
+      if (!asset) return null
+      await window.agentDesk.setMediaAdoption({ productionId: production.id, assetId: asset.id, adopted: true })
+      const refreshed = await window.agentDesk.getMediaStudio(projectId)
+      const next = refreshed.productions.find((item) => item.id === production.id)
+      return {
+        finalAssetId: next?.finalAssetId,
+        adopted: next?.assets.find((item) => item.id === asset.id)?.adopted === true
+      }
+    }, report.projectId)
+    assert.deepEqual(adopted, { finalAssetId: composed.assetId, adopted: true }, 'adopted video did not retain the canonical final asset identity')
     await page.waitForSelector('[data-video-preview]', { visible: true, timeout: 15_000 })
     await page.waitForFunction(() => {
       const node = document.querySelector('[data-video-preview]')
