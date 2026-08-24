@@ -164,6 +164,8 @@
     "test:search-broker:smoke": "node scripts/search-broker-smoke.mjs",
     "test:search-broker:registration": "node scripts/search-broker-registration-smoke.mjs",
     "test:video-mvp-contract": "node scripts/video-mvp-contract-smoke.mjs",
+    "test:critical-recovery-matrix": "node scripts/critical-recovery-matrix-smoke.mjs",
+    "test:critical-recovery-matrix:required": "node scripts/critical-recovery-matrix-smoke.mjs --required",
     "test:search-replace": "node scripts/search-replace-smoke.mjs",
     "test:chat-virtual-list": "node scripts/chat-virtual-list-smoke.mjs",
     "test:file-editor-tabs": "node scripts/file-editor-tabs-smoke.mjs",

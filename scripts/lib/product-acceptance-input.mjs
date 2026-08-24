@@ -11,7 +11,8 @@ const REQUIRED_PACKAGE_SCRIPTS = [
   'test:1.0-acceptance-map:smoke',
   'test:1.0-acceptance-map:required',
   'test:product-1.0-acceptance',
-  'test:product-1.0-acceptance:required'
+  'test:product-1.0-acceptance:required',
+  'test:critical-recovery-matrix:required'
 ]
 const PUBLIC_GATE_BINDINGS = [
   { requirementId: 'WORK-002', script: 'test:workitem-board:required' }
@@ -238,6 +239,14 @@ function validateClosurePolicy(contract) {
   const recoveryIds = contract?.closurePolicy?.criticalRecoveryRequirementIds
   if (!sameStrings(recoveryIds, PRODUCT_1_0_CRITICAL_RECOVERY_REQUIREMENT_IDS)) {
     failures.push('closure policy critical recovery requirement IDs are invalid')
+  }
+  const faultMatrix = contract?.closurePolicy?.criticalRecoveryFaultMatrix
+  if (
+    faultMatrix?.path !== 'scripts/contracts/critical-recovery-fault-matrix.json' ||
+    faultMatrix?.gate !== 'test:critical-recovery-matrix:required' ||
+    faultMatrix?.faultCellCount !== 44
+  ) {
+    failures.push('closure policy critical recovery fault matrix binding is invalid')
   }
   return failures
 }

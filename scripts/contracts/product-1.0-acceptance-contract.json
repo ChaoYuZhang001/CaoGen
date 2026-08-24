@@ -134,12 +134,18 @@
       "NFR-REC-004",
       "NFR-REC-005"
     ],
+    "criticalRecoveryFaultMatrix": {
+      "path": "scripts/contracts/critical-recovery-fault-matrix.json",
+      "gate": "test:critical-recovery-matrix:required",
+      "faultCellCount": 44
+    },
     "requiredPackageScripts": [
       "test:1.0-acceptance-map",
       "test:1.0-acceptance-map:smoke",
       "test:1.0-acceptance-map:required",
       "test:product-1.0-acceptance",
-      "test:product-1.0-acceptance:required"
+      "test:product-1.0-acceptance:required",
+      "test:critical-recovery-matrix:required"
     ],
     "publicGateBindings": [
       {
