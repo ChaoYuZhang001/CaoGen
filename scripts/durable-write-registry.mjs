@@ -467,8 +467,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/routineStore.ts',
-    'RoutineFile', '1', 'atomic_rename', 'implemented_unverified',
-    'Persists versioned Routine definitions through same-directory rename publication.'
+    'RoutineFile', '2', 'atomic_fsync_rename', 'verified',
+    'Persists versioned Routine definitions with entity revisions and durable same-directory publication.',
+    { evidence: ['test-results/routine-store-recovery/latest.json'] }
   ),
   exempt(
     'src/main/sandbox/local-execution.ts', 'workspace_effect', 'effect_guarded_workspace',

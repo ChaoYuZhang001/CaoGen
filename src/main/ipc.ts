@@ -815,9 +815,9 @@ export function registerIpc(): void {
     createRoutine(routineStoreRoot(), input)
   )
 
-  ipcMain.handle('routines:delete', (_e, id: string) => {
+  ipcMain.handle('routines:delete', (_e, id: string, expectedRevision?: number) => {
     if (typeof id !== 'string' || id.trim().length === 0) return false
-    return deleteRoutine(routineStoreRoot(), id)
+    return deleteRoutine(routineStoreRoot(), id, expectedRevision)
   })
 
   ipcMain.handle('routines:update', (_e, id: string, patch: UpdateRoutineInput) => {

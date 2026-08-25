@@ -2068,7 +2068,7 @@ export interface RoutineNotificationOptions {
 }
 
 export interface Routine extends Record<string, unknown> {
-  id: string
+  id: string; revision: number
   name: string
   prompt: string
   content?: string
@@ -2116,7 +2116,7 @@ export type CreateRoutineInput = {
 } & Record<string, unknown>
 
 export type UpdateRoutineInput = {
-  name?: string
+  expectedRevision?: number; name?: string
   prompt?: string
   content?: string
   projectId?: string | null
@@ -2719,7 +2719,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Pr
   uninstallPlugin(targetPath: string): Promise<PluginUninstallResult>
   listRoutines(): Promise<Routine[]>
   createRoutine(input: CreateRoutineInput): Promise<Routine>
-  deleteRoutine(id: string): Promise<boolean>
+  deleteRoutine(id: string, expectedRevision?: number): Promise<boolean>
   updateRoutine(id: string, patch: UpdateRoutineInput): Promise<Routine | null>
   markRoutineRun(id: string, options?: MarkRunOptions): Promise<Routine | null>
   runRoutineNow(id: string): Promise<RoutineRunRecord | null>

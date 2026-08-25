@@ -3204,7 +3204,7 @@ export const useStore = create<AppStore>((set, get) => {
   async toggleRoutine(id, enabled) {
     set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
     try {
-      const routine = await window.agentDesk.updateRoutine(id, { enabled })
+      const routine = await window.agentDesk.updateRoutine(id, { enabled, expectedRevision: get().workbench.routines.find((item) => item.id === id)?.revision })
       set((s) => ({
         workbench: {
           ...s.workbench,
@@ -3279,8 +3279,8 @@ export const useStore = create<AppStore>((set, get) => {
   async deleteRoutine(id) {
     set((s) => ({ workbench: { ...s.workbench, routineError: undefined, routineMessage: undefined } }))
     try {
-      const routineName = get().workbench.routines.find((routine) => routine.id === id)?.name ?? 'Routine'
-      const ok = await window.agentDesk.deleteRoutine(id)
+      const current = get().workbench.routines.find((routine) => routine.id === id)
+      const ok = await window.agentDesk.deleteRoutine(id, current?.revision)
       set((s) => ({
         workbench: ok
           ? {
@@ -3290,7 +3290,7 @@ export const useStore = create<AppStore>((set, get) => {
                 s.workbench.selectedRoutineId === id
                   ? (s.workbench.routines.find((routine) => routine.id !== id)?.id ?? null)
                   : s.workbench.selectedRoutineId,
-              routineMessage: `${routineName} 已删除`,
+              routineMessage: `${current?.name ?? 'Routine'} 已删除`,
               routineError: undefined
             }
           : {

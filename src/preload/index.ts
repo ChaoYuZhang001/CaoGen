@@ -304,7 +304,7 @@ const api: AgentDeskApi = {
   uninstallPlugin: (targetPath: string) => ipcRenderer.invoke('plugins:uninstall', targetPath),
   listRoutines: () => ipcRenderer.invoke('routines:list'),
   createRoutine: (input: CreateRoutineInput) => ipcRenderer.invoke('routines:create', input),
-  deleteRoutine: (id: string) => ipcRenderer.invoke('routines:delete', id),
+  deleteRoutine: (id: string, expectedRevision?: number) => ipcRenderer.invoke('routines:delete', id, expectedRevision),
   updateRoutine: (id: string, patch: UpdateRoutineInput) =>
     ipcRenderer.invoke('routines:update', id, patch),
   markRoutineRun: (id: string, options?: MarkRunOptions) =>

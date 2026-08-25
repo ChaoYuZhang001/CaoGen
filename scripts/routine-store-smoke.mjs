@@ -65,6 +65,7 @@ try {
   })
 
   assertEqual(created.id, 'routine-smoke-1')
+  assertEqual(created.revision, 1)
   assertEqual(created.enabled, true)
   assertEqual(created.createdAt, 1000)
   assertEqual(created.updatedAt, 1000)
@@ -109,6 +110,7 @@ try {
   })
   assert(updated, 'updateRoutine should find created routine')
   assertEqual(updated.name, 'Morning review updated')
+  assertEqual(updated.revision, 2)
   assertEqual(updated.prompt, 'Summarize open work.')
   assertEqual(updated.projectCwd, projectRoot)
   assertEqual(updated.schedule, '@hourly')
@@ -328,6 +330,7 @@ try {
   const legacyList = await routineStore.listRoutines(legacyRoot)
   assertEqual(legacyList.length, 1)
   assertEqual(legacyList[0].id, 'legacy-ok')
+  assertEqual(legacyList[0].revision, 1)
   assertEqual(legacyList[0].providerId, '')
   assertEqual(legacyList[0].model, '')
   assertEqual(legacyList[0].permissionMode, 'default')
@@ -351,7 +354,7 @@ function assertDeepEqual(actual, expected, message = 'values should be deeply eq
 function assertStoreFile(root, { count }) {
   const raw = readFileSync(path.join(root, 'routines.json'), 'utf8')
   const payload = JSON.parse(raw)
-  assertEqual(payload.version, 1)
+  assertEqual(payload.version, 2)
   assert(Array.isArray(payload.routines), 'routines.json should contain a routines array')
   assertEqual(payload.routines.length, count)
   assert(raw.endsWith('\n'), 'routines.json should end with a newline')
