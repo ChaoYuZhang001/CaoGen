@@ -116,7 +116,7 @@ try {
     reconciliation.id,
     token(reconciliationLease, 'worker-r')
   )
-  await store.markWaitingReconciliation(
+  const reconciliationWaiting = await store.markWaitingReconciliation(
     reconciliation.id,
     token(reconciliationRunning, 'worker-r')
   )
@@ -323,8 +323,8 @@ try {
       usdAggregate: 1.05
     },
     reconciliation: {
-      status: reconciliation.status,
-      waitingReconciliationBlocksResume: reconciliation.status === 'waiting_reconciliation'
+      status: reconciliationWaiting.status,
+      waitingReconciliationBlocksResume: reconciliationWaiting.status === 'waiting_reconciliation'
     },
     fencingTokens: persisted.events.filter((event) => event.kind.startsWith('lease.')).map((event) => event.fencingToken).filter(Boolean)
   }
