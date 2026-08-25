@@ -272,8 +272,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/memory/memory-manager.ts',
-    'LayeredMemoryStore', '1', 'atomic_rename', 'implemented_unverified',
-    'Persists the canonical layered Memory index with an explicit store version.'
+    'LayeredMemoryStore', '2', 'atomic_fsync_rename', 'verified',
+    'Persists the canonical layered Memory index with Store and entry revisions behind a serialized mutation queue.',
+    { evidence: ['test-results/layered-memory-store-recovery/latest.json'] }
   ),
   domain(
     'src/main/memoryStore.ts', 'caogen.project-memory-entry', '1', 'atomic_fsync_rename', 'implemented_unverified',

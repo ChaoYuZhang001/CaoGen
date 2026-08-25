@@ -1021,7 +1021,7 @@ export function registerIpc(): void {
   ipcMain.handle('memory:layeredUpdate', (_e, entryId: string, input: MemoryUpdateInput) =>
     updateLayeredMemoryEntry(memoryRoot(), entryId, input ?? {})
   )
-  ipcMain.handle('memory:layeredDelete', (_e, entryId: string) => deleteLayeredMemoryEntry(memoryRoot(), entryId))
+  ipcMain.handle('memory:layeredDelete', (_e, entryId: string, revision?: number) => deleteLayeredMemoryEntry(memoryRoot(), entryId, revision))
 
   ipcMain.handle(
     'providers:fetchModels',

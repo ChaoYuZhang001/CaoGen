@@ -1216,7 +1216,7 @@ export interface ReadProjectMemoryResult {
 export type MemoryLayer = 'working' | 'project' | 'user'
 
 export interface LayeredMemoryEntry {
-  id: string
+  id: string; revision: number
   layer: MemoryLayer
   projectHash?: string
   title: string
@@ -1231,7 +1231,7 @@ export interface LayeredMemoryEntry {
 }
 
 export interface LayeredMemoryWriteInput {
-  layer: MemoryLayer
+  id?: string; layer: MemoryLayer
   projectRoot?: string
   title: string
   body: string
@@ -1240,7 +1240,7 @@ export interface LayeredMemoryWriteInput {
 }
 
 export interface LayeredMemoryUpdateInput {
-  title?: string
+  expectedRevision?: number; title?: string
   body?: string
   tags?: string[]
   archivedAt?: string | null
@@ -2796,7 +2796,7 @@ export interface AgentDeskApi extends WorkflowLedgerApi, ProjectWorkspaceApi, Pr
   archiveLayeredMemories(olderThanDays?: number): Promise<number>
   exportLayeredMemories(): Promise<string>
   updateLayeredMemory(entryId: string, input: LayeredMemoryUpdateInput): Promise<LayeredMemoryEntry | null>
-  deleteLayeredMemory(entryId: string): Promise<boolean>
+  deleteLayeredMemory(entryId: string, expectedRevision?: number): Promise<boolean>
   pickDirectory(): Promise<string | null>
   pathForFile(file: File): string
   quickbarGetState(): Promise<QuickbarState>

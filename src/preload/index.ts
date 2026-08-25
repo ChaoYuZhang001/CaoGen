@@ -451,7 +451,7 @@ const api: AgentDeskApi = {
   exportLayeredMemories: () => ipcRenderer.invoke('memory:layeredExport'),
   updateLayeredMemory: (entryId: string, input: LayeredMemoryUpdateInput) =>
     ipcRenderer.invoke('memory:layeredUpdate', entryId, input),
-  deleteLayeredMemory: (entryId: string) => ipcRenderer.invoke('memory:layeredDelete', entryId),
+  deleteLayeredMemory: (entryId: string, revision?: number) => ipcRenderer.invoke('memory:layeredDelete', entryId, revision),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   quickbarGetState: () => ipcRenderer.invoke('quickbar:getState'),

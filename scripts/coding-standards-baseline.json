@@ -1424,7 +1424,7 @@
     "src/main/ipc.ts": {
       "profile": "product",
       "lines": 1096,
-      "contentHash": "87a189764b10991da20e975fc45ba3cec6becd7397a4bd6964c78de82741a19c",
+      "contentHash": "0dd453bc9651182829aafe35b88e639b23db68fc03ce66ae384f36bd97c7a0c4",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 670,
       "complexFunctionCount": 1,
@@ -3328,7 +3328,7 @@
     "src/renderer/src/components/MemoryPanel.tsx": {
       "profile": "product",
       "lines": 596,
-      "contentHash": "274247c37457f1b6ff47f46077ea285c329324442cab1075a134b99036b9f3c1",
+      "contentHash": "985f1bdd84647b819cb6a197c8d363f146693afb72d295f7e5cc79fbcda3e2dd",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 506,
       "complexFunctionCount": 0,
@@ -4588,7 +4588,7 @@
     "src/shared/types.ts": {
       "profile": "product",
       "lines": 2815,
-      "contentHash": "864d436417bc1f97bc37d9cc80ac02e59ffb44df0bb1a5c06c3116f96b166d09",
+      "contentHash": "faba1e9561c1a2b3dc8aa3ed2115c12f6ac8b98557d21138b3d2115c2623acd0",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 5,
       "complexFunctionCount": 0,

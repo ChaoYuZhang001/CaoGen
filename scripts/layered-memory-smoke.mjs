@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -28,6 +28,7 @@ try {
     source: 'smoke',
     tags: ['pricing', 'quota']
   })
+  assert(projectMemory.revision === 1, 'new layered Memory entries must start at revision 1')
   await manager.addMemory(storeRoot, {
     layer: 'project',
     projectRoot: projectB,
@@ -65,6 +66,7 @@ try {
     body: 'Pricing requests must verify quota and account limits before writing billing records.'
   })
   assert(updated?.title.includes('quota'), 'updateMemory should edit layered entries')
+  assert(updated?.revision === 3, 'search touch and user edit must advance the entry revision')
 
   const extracted = await writer.writeExtractedMemory({
     rootDir: storeRoot,
@@ -93,6 +95,18 @@ try {
   const exported = await manager.exportMemories(storeRoot)
   assert(JSON.parse(exported).entries.length >= 4, 'exportMemories should include entries')
   assert(await manager.deleteMemory(storeRoot, projectMemory.id), 'deleteMemory should remove entry')
+
+  const corruptRoot = path.join(tempRoot, 'corrupt-memory')
+  mkdirSync(corruptRoot, { recursive: true })
+  const corruptPath = path.join(corruptRoot, 'memory-index.json')
+  const corruptBytes = '{"version":2,"revision":0,"entries":[{"id":"incomplete"}]}\n'
+  writeFileSync(corruptPath, corruptBytes, 'utf8')
+  await assertRejects(() => manager.listMemories(corruptRoot), 'invalid v2 Store must fail closed')
+  await assertRejects(
+    () => manager.addMemory(corruptRoot, { id: 'must-not-overwrite', layer: 'user', title: 'No', body: 'No', source: 'smoke' }),
+    'mutation must not overwrite an invalid Store'
+  )
+  assert(readFileSync(corruptPath, 'utf8') === corruptBytes, 'failed mutation must preserve corrupt Store bytes')
 
   console.log('layeredMemory smoke ok')
 } finally {
@@ -143,4 +157,9 @@ function findCompiledOptional(root, fileName) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
+}
+
+async function assertRejects(operation, message) {
+  try { await operation() } catch { return }
+  throw new Error(message)
 }

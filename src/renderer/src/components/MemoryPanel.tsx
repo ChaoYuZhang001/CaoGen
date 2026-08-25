@@ -139,7 +139,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     setError('')
     try {
       await window.agentDesk.updateLayeredMemory(entry.id, {
-        title: layeredDraft.title.trim(),
+        expectedRevision: entry.revision, title: layeredDraft.title.trim(),
         body: layeredDraft.body.trim()
       })
       setEditingLayeredId(null)
@@ -151,11 +151,11 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
     }
   }
 
-  const removeLayered = async (entryId: string): Promise<void> => {
+  const removeLayered = async (entry: LayeredMemoryEntry): Promise<void> => {
     setActing(true)
     setError('')
     try {
-      await window.agentDesk.deleteLayeredMemory(entryId)
+      await window.agentDesk.deleteLayeredMemory(entry.id, entry.revision)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -524,7 +524,7 @@ export default function MemoryPanel({ sessionId, onClose, initialForm }: Props):
                             <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => startLayeredEdit(entry)}>
                               编辑
                             </button>
-                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => void removeLayered(entry.id)}>
+                            <button className="btn btn-ghost btn-sm" disabled={acting} onClick={() => void removeLayered(entry)}>
                               删除
                             </button>
                           </>
