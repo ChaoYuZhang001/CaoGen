@@ -296,6 +296,7 @@
     "test:effect-entry-inventory:required": "node scripts/effect-entry-inventory-smoke.mjs --required && node scripts/effect-entry-inventory-required.mjs",
     "test:durable-write-inventory": "node scripts/durable-write-inventory-required.mjs",
     "test:durable-write-inventory:required": "npm run test:durable-write-inventory",
+    "test:durable-file-recovery:required": "node scripts/durable-file-recovery-e2e.mjs",
     "test:external-effect-recovery": "node scripts/external-effect-recovery-e2e.mjs",
     "test:external-effect-recovery:required": "npm run test:external-effect-recovery",
     "test:effect-crash-recovery": "node scripts/effect-crash-recovery-e2e.mjs && node scripts/effect-close-race-smoke.mjs",
