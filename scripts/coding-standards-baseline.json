@@ -1182,10 +1182,10 @@
     },
     "src/main/data-lifecycle/session-deletion-journal.ts": {
       "profile": "product",
-      "lines": 391,
-      "contentHash": "c3f070186d5fe24c4eb9fc2888896f13751c8985a5638953594fa0b5a44a8fdb",
+      "lines": 485,
+      "contentHash": "41f9214732709d24f9b9dd9d8613b658c85c9ceb0e7de796ca18440e381417f3",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 45,
+      "maxFunctionLines": 44,
       "complexFunctionCount": 1,
       "maxComplexity": 22,
       "forbiddenSuppressionCount": 0,

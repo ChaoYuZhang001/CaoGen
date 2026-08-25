@@ -170,8 +170,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/data-lifecycle/session-deletion-journal.ts',
-    'caogen.session-deletion-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Records the frozen Session identity and resumable deletion phases before destructive boundaries.'
+    'caogen.session-deletion-journal', '1', 'atomic_fsync_rename', 'verified',
+    'Records the frozen Session identity and resumable deletion phases with durable publication, stale temporary cleanup, and byte-stable replay.',
+    { evidence: ['test-results/session-deletion-journal-recovery/latest.json'] }
   ),
   journal(
     'src/main/projectRefactorJournal.ts',
