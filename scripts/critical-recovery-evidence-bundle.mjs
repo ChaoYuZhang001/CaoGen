@@ -88,6 +88,8 @@ addCommandCell('TRUST-004', 'network_unknown_result', 'test:operation-effect',
 
 addCommandCell('ART-002', 'duplicate_idempotency', 'test:acceptance-failure-ingress',
   'replayed Acceptance failure events do not create a second Evidence or repair')
+addCommandCell('ART-002', 'network_unknown_result', 'test:acceptance-artifact-unknown-result:required',
+  'unknown external Artifact result remains waiting_reconciliation without Artifact, Evidence, or false Acceptance pass')
 addCommandCell('ART-002', 'strong_kill', 'test:verified-delivery-flow:required',
   'Artifact, Evidence, Acceptance, Link and staged delivery checkpoints recover after SIGKILL')
 addCommandCell('ART-002', 'out_of_order', 'test:acceptance-failure-ingress',

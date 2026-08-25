@@ -133,6 +133,8 @@
     "test:acceptance-gate:required": "node scripts/acceptance-gate-smoke.mjs",
     "test:acceptance-artifact-integrity": "node scripts/acceptance-artifact-integrity-smoke.mjs",
     "test:acceptance-artifact-integrity:required": "npm run test:acceptance-artifact-integrity",
+    "test:acceptance-artifact-unknown-result": "node scripts/acceptance-artifact-unknown-result-e2e.mjs",
+    "test:acceptance-artifact-unknown-result:required": "npm run test:acceptance-artifact-unknown-result",
     "test:acceptance-repair-retest": "node scripts/acceptance-repair-retest-smoke.mjs",
     "test:acceptance-repair-retest:required": "npm run test:acceptance-repair-retest",
     "test:acceptance-policy-ui": "node scripts/workflow-acceptance-policy-ui-e2e.mjs",

@@ -85,7 +85,7 @@
       "owner": "L6",
       "faults": {
         "strong_kill": { "status": "open", "gate": "test:acceptance-artifact-integrity:required", "evidence": [] },
-        "network_unknown_result": { "status": "open", "gate": "test:acceptance-failure-ingress:required", "evidence": [] },
+        "network_unknown_result": { "status": "partial", "gate": "test:acceptance-artifact-unknown-result:required", "evidence": ["test-results/acceptance-artifact-unknown-result"] },
         "duplicate_idempotency": { "status": "partial", "gate": "test:acceptance-artifact-integrity:required", "evidence": ["test-results/acceptance-artifact-integrity"] },
         "out_of_order": { "status": "open", "gate": "test:acceptance-repair-retest:required", "evidence": [] }
       },
