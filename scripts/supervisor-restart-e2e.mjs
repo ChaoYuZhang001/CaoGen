@@ -88,11 +88,22 @@ try {
     startedAt,
     finishedAt: new Date().toISOString(),
     gate: 'test:supervisor-restart',
+    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+    worktreeStatusCount: gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+      .split('\n').filter(Boolean).length,
     result: result ?? null,
     error: failure,
     environment: { platform: process.platform, arch: process.arch, node: process.version }
   })
 }
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
 }
 
 async function crashWorker(modulePath) {

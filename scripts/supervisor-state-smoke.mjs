@@ -211,6 +211,20 @@ try {
     usage: usage(20, 10, 2, 1), costUsd: 0.75, turnCompleted: true
   })
   assert.deepEqual(budgetTurnA2.usage, { ...usage(30, 15, 3, 1), costUsd: 0.75, turns: 2 })
+  const outOfOrderBefore = await budgetStore.read()
+  const outOfOrder = await budgetStore.observeRun(budgetRunA.id, {
+    taskRunStatus: 'failed', sourceEventId: 'budget-a-delayed-failure',
+    observedAt: 1, usage: usage(999, 999, 999, 999), costUsd: 99, turnCompleted: true
+  })
+  assert.equal(outOfOrder.revision, budgetTurnA2.revision)
+  assert.deepEqual(outOfOrder.usage, budgetTurnA2.usage)
+  assert.equal(outOfOrder.status, budgetTurnA2.status)
+  const outOfOrderAfter = await budgetStore.read()
+  assert.equal(outOfOrderAfter.revision, outOfOrderBefore.revision + 1)
+  const delayedEvent = outOfOrderAfter.events.at(-1)
+  assert.equal(delayedEvent?.payload?.sourceEventId, 'budget-a-delayed-failure')
+  assert.equal(delayedEvent?.payload?.outOfOrder, true)
+  assert.equal(delayedEvent?.payload?.ignored, true)
   const budgetReopened = new SupervisorStateStore(path.join(tempRoot, 'budget-data'), { now: () => now })
   assert.deepEqual((await budgetReopened.getRun(budgetRunA.id)).usage, budgetTurnA2.usage)
   await budgetStore.completeRun(budgetRunA.id, token(budgetTurnA2, 'budget-worker'))
@@ -303,6 +317,8 @@ try {
       runATokens: totalTokens(budgetTurnA2.usage),
       aggregateTokens: totalTokens(budgetTurnA2.usage) + totalTokens(budgetTurnB1.usage),
       duplicateEventIdempotent: duplicateBudgetTurn.revision === budgetTurnA1.revision,
+      outOfOrderObservationIgnored: outOfOrder.revision === budgetTurnA2.revision &&
+        delayedEvent?.payload?.ignored === true,
       restartUsagePreserved: true,
       usdAggregate: 1.05
     },
@@ -321,6 +337,9 @@ try {
     startedAt,
     finishedAt: new Date().toISOString(),
     gate: 'test:supervisor-state',
+    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+    worktreeStatusCount: gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+      .split('\n').filter(Boolean).length,
     result: result ?? null,
     error: failure,
     environment: {
@@ -329,6 +348,14 @@ try {
       node: process.version
     }
   })
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
 }
 
 function writeReport(report) {

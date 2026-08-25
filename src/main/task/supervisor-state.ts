@@ -218,6 +218,19 @@ export class SupervisorStateStore {
       if (document.events.some((event) => event.runId === id &&
           event.payload.sourceEventId === sourceEventId)) return unchangedMutation(clone(run))
 
+      // Preserve auditability for delayed observations without allowing an old
+      // provider event to regress the canonical run status, usage, or timestamp.
+      if (observedAt < run.updatedAt) {
+        appendEvent(document, run, 'run.observed', options.actorId ?? 'session-runtime', observedAt, {
+          sourceEventId,
+          taskRunStatus: input.taskRunStatus,
+          observationOnly: true,
+          outOfOrder: true,
+          ignored: true
+        })
+        return clone(run)
+      }
+
       const nextUsage = usageFromObservation(run, observedUsage, observedCostUsd, input.turnCompleted === true)
       const nextStatus = observedSupervisorStatus(run, input.taskRunStatus)
       const usageChanged = !sameRunUsage(run.usage, nextUsage)
