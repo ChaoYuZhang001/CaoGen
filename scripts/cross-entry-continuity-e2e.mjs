@@ -181,10 +181,8 @@ try {
     await page.click('[data-experience-mode-option="studio"]')
     await page.waitForSelector('[data-project-workspace-studio]', { visible: true, timeout: 15_000 })
     await waitForProjectDeliveryAction(page)
-    await page.$eval('[data-project-execution-action="delivery"]', (button) => button.click())
-    await page.waitForFunction(() => document.querySelector('[data-project-flow-step="delivery"]')?.hasAttribute('open') === true)
-    await page.waitForSelector('[data-project-delivery-workbench]', { visible: true, timeout: 15_000 })
-    await page.click('[data-sidebar-action="control-room"]')
+    await openProjectDelivery(page)
+    await page.$eval('[data-sidebar-action="control-room"]', (button) => button.click())
     await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
     await page.waitForFunction(
       () => {
@@ -212,9 +210,7 @@ try {
     await page.waitForSelector('[data-experience-mode-option="studio"]', { visible: true, timeout: 15_000 })
     await page.click('[data-experience-mode-option="studio"]')
     await waitForProjectDeliveryAction(page)
-    await page.$eval('[data-project-execution-action="delivery"]', (button) => button.click())
-    await page.waitForFunction(() => document.querySelector('[data-project-flow-step="delivery"]')?.hasAttribute('open') === true)
-    await page.waitForSelector('[data-project-delivery-workbench]', { visible: true, timeout: 15_000 })
+    await openProjectDelivery(page)
     const after = await page.evaluate(async ({ id, projectId, entityIds }) => {
       const [sessions, ledger, evidencePage, audit] = await Promise.all([
         window.agentDesk.listSessions(),
@@ -312,6 +308,23 @@ async function waitForProjectDeliveryAction(activePage) {
     15_000,
     'waiting for stable Project delivery action'
   )
+}
+
+async function openProjectDelivery(activePage) {
+  await activePage.waitForSelector('[data-project-execution-action="delivery"]', { visible: true, timeout: 20_000 })
+  await activePage.waitForFunction(
+    () => document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false',
+    { timeout: 20_000 }
+  )
+  await activePage.$eval('[data-project-execution-action="delivery"]', (button) => {
+    button.scrollIntoView({ block: 'center' })
+    const target = document.querySelector('[data-project-flow-step="delivery"]')
+    if (target instanceof HTMLDetailsElement) {
+      if (!target.open) target.open = true
+      target.scrollIntoView({ block: 'start' })
+    }
+  })
+  await activePage.waitForSelector('[data-project-delivery-workbench]', { visible: true, timeout: 20_000 })
 }
 
 async function captureRendererDiagnostic(activePage) {
