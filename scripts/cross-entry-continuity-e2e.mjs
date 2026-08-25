@@ -184,8 +184,20 @@ try {
     await page.$eval('[data-project-execution-action="delivery"]', (button) => button.click())
     await page.waitForFunction(() => document.querySelector('[data-project-flow-step="delivery"]')?.hasAttribute('open') === true)
     await page.waitForSelector('[data-project-delivery-workbench]', { visible: true, timeout: 15_000 })
+    await page.hover('[data-sidebar-action="control-room"]')
+    await page.waitForFunction(
+      () => document.querySelector('[data-sidebar-action="control-room"]')?.getAttribute('data-office-preload-state') === 'ready',
+      { timeout: 20_000 }
+    )
     await page.click('[data-sidebar-action="control-room"]')
     await page.waitForSelector('.office', { visible: true, timeout: 20_000 })
+    await page.waitForFunction(
+      () => {
+        const wrap = document.querySelector('.office-canvas-wrap')
+        return wrap?.hasAttribute('data-office-return-mode') && wrap.hasAttribute('data-office-projects')
+      },
+      { timeout: 20_000 }
+    )
     const office = await waitForValue(
       () => page.$eval('.office-canvas-wrap', (node) => ({
         capacity: node.getAttribute('data-office-session-capacity'),

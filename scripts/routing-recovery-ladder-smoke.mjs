@@ -75,6 +75,7 @@ try {
   const message = source('src/renderer/src/components/experience/RoutingMessage.tsx')
   const settingsNavigation = source('src/renderer/src/store/settings-navigation.ts')
   const anthropic = source('src/main/anthropicEngine.ts')
+  const anthropicDependencies = source('src/main/anthropic-engine-dependencies.ts')
 
   check('OpenAI recovery order is credential, model, same-protocol Provider, protocol, manual takeover', () => {
     const key = engine.indexOf('tryProviderKeyFailover(text')
@@ -102,7 +103,8 @@ try {
 
   check('both native engines expose recovery exhaustion without secret-bearing fields', () => {
     assert.match(engine, /kind:\s*'provider-recovery-exhausted'[\s\S]*engine:\s*'openai'/)
-    assert.match(anthropic, /kind:\s*'provider-recovery-exhausted'[\s\S]*engine:\s*'anthropic'/)
+    assert.match(anthropic, /kind:\s*'provider-recovery-exhausted'[\s\S]*engine:\s*this\.dependencies\.recoveryEngineKind/)
+    assert.match(anthropicDependencies, /recoveryEngineKind:\s*'anthropic'/)
     const eventContract = between(shared, "kind: 'provider-recovery-exhausted'", "| { kind: 'text-delta'")
     assert.doesNotMatch(eventContract, /baseUrl|apiKey|token|credential|endpoint/i)
   })
