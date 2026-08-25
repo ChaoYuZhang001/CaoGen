@@ -75,8 +75,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/assignment-owner-coordinator/journal.ts',
-    'caogen.assignment-owner-coordinator.json', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists assignment ownership decisions and audit events with revision checks.'
+    'caogen.assignment-owner-coordinator.json', '1', 'atomic_fsync_rename', 'verified',
+    'Persists assignment ownership decisions and audit events with durable publication, stale temporary cleanup, and recovery-visible directory failures.',
+    { evidence: ['test-results/assignment-owner-journal-recovery/latest.json'] }
   ),
   implemented(
     'src/main/attachmentOps.ts', 'user_artifact', 'atomic_rename',
