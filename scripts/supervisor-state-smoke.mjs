@@ -322,6 +322,10 @@ try {
       restartUsagePreserved: true,
       usdAggregate: 1.05
     },
+    reconciliation: {
+      status: reconciliation.status,
+      waitingReconciliationBlocksResume: reconciliation.status === 'waiting_reconciliation'
+    },
     fencingTokens: persisted.events.filter((event) => event.kind.startsWith('lease.')).map((event) => event.fencingToken).filter(Boolean)
   }
   console.log(JSON.stringify(result, null, 2))
