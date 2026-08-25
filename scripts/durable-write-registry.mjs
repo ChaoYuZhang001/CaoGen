@@ -506,9 +506,13 @@ export const DURABLE_WRITE_REGISTRY = [
     'Coordinates artifact content quarantine with canonical workflow metadata mutation.',
     { delegate: 'src/main/task/task-snapshot.ts' }
   ),
-  implemented(
-    'src/main/task/artifact-lifecycle-content.ts', 'user_artifact', 'atomic_fsync_rename',
-    'Publishes immutable digest-addressed Artifact blobs after file fsync and digest verification.'
+  nonDomain(
+    'src/main/task/artifact-lifecycle-content.ts', 'user_artifact', 'delegated_atomic', 'verified',
+    'Publishes immutable digest-addressed Artifact bytes with no-replace commit, digest readback, stale temporary cleanup, and directory durability.',
+    {
+      delegate: 'src/main/durable-file.ts',
+      evidence: ['test-results/artifact-lifecycle-content-recovery/latest.json']
+    }
   ),
   implemented(
     'src/main/task/workflow-artifact-delivery.ts', 'user_artifact', 'atomic_fsync_rename',

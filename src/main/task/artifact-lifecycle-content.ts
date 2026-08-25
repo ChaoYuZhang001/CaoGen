@@ -1,14 +1,12 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
   access,
-  chmod,
   lstat,
   mkdir,
   open,
   readdir,
   realpath,
-  rename,
   rm,
   stat
 } from 'node:fs/promises'
@@ -21,6 +19,7 @@ import type {
 } from './artifact-lifecycle-types'
 import { WorkflowLedgerCorruptionError } from './workflow-ledger-errors'
 import { containsSensitiveText } from '../security/secret-redaction'
+import { cleanupDurableFileOrphans, writeDurableFile } from '../durable-file'
 
 const SHA256_PATTERN = /^sha256:([a-f0-9]{64})$/
 
@@ -133,24 +132,21 @@ async function materializeVerifiedBytes(
     throw new WorkflowLedgerCorruptionError('artifact materialized bytes do not match their declared digest')
   }
   await mkdir(dirname(locationPath), { recursive: true, mode: 0o700 })
+  await cleanupDurableFileOrphans(locationPath)
   if (await pathExists(locationPath)) {
     await assertRegularContent(locationPath, digest, sizeBytes)
     return false
   }
-  const temporaryPath = `${locationPath}.${process.pid}.${randomUUID()}.tmp`
-  const handle = await open(temporaryPath, 'wx', 0o600)
   try {
-    await handle.writeFile(bytes)
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  try {
-    await rename(temporaryPath, locationPath)
-    await chmod(locationPath, 0o600)
+    await writeDurableFile(locationPath, bytes, { mode: 0o600, replace: false })
   } catch (error) {
-    await rm(temporaryPath, { force: true })
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      await assertRegularContent(locationPath, digest, sizeBytes)
+      return false
+    }
     if (!(await pathExists(locationPath))) throw error
+    await assertRegularContent(locationPath, digest, sizeBytes)
+    return true
   }
   await assertRegularContent(locationPath, digest, sizeBytes)
   return true
