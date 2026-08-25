@@ -372,8 +372,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/project-workspace/persistence.ts',
-    'caogen.project-workspace', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists Project, Goal, WorkItem, Squad, and Comment state under a file lock.'
+    'caogen.project-workspace', '1', 'atomic_fsync_rename', 'verified',
+    'Persists Project, Goal, WorkItem, Squad, and Comment state under a file lock with durable publication and stale-writer rejection.',
+    { evidence: ['test-results/project-workspace-store-recovery/latest.json'] }
   ),
   derived(
     'src/main/project-workspace/project-connector-cache.ts',

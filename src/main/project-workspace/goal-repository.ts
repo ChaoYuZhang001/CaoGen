@@ -17,6 +17,7 @@ import {
 } from '../../shared/project-workspace-types'
 import {
   clone,
+  digest,
   flattenContract,
   normalizeAcceptanceResult,
   normalizeContract,
@@ -49,14 +50,16 @@ export class GoalRepository {
 
   async create(input: GoalInput, options?: MutationOptions | number): Promise<Goal> {
     return this.persistence.mutate(options, ({ state, now }) => {
-      this.persistence.assertCreateRevision(state, options)
       const projectId = requiredId(input.projectId, 'goal projectId')
       const project = activeWorkspaceFrom(state, projectId)
       assertProjectAuthorized(state, project, projectMutationActor(options), 'edit')
       const id = optionalId(input.id, 'goal id') ?? randomUUID()
-      if (state.goals.some((goal) => goal.id === id)) {
-        throw new ProjectWorkspaceError('already_exists', `goal ${id} already exists`)
+      const existing = state.goals.find((goal) => goal.id === id)
+      if (existing) {
+        if (input.id !== undefined && isIdempotentGoalCreate(existing, input, projectId)) return existing
+        throw new ProjectWorkspaceError('already_exists', `goal ${id} already exists with different content`)
       }
+      this.persistence.assertCreateRevision(state, options)
       const goal = buildGoal(input, id, projectId, now)
       state.goals.push(goal)
       appendEvent(state, projectId, 'goal', id, 'goal.created', 1, goal as unknown as Record<string, unknown>, now)
@@ -188,6 +191,11 @@ function buildGoal(input: GoalInput, id: string, projectId: string, now: number)
     updatedAt: timestamp(input.updatedAt, 'goal updatedAt', createdAt),
     revision: 1
   }
+}
+
+function isIdempotentGoalCreate(existing: Goal, input: GoalInput, projectId: string): boolean {
+  return existing.revision === 1 &&
+    digest(existing) === digest(buildGoal(input, existing.id, projectId, existing.createdAt))
 }
 
 function goalContractInput(input: GoalInput): GoalContractInput {

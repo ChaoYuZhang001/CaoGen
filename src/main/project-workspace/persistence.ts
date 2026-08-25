@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import type {
   MutationOptions,
@@ -101,16 +101,20 @@ export function parseProjectWorkspaceState(raw: string): ProjectWorkspaceState {
 }
 
 async function fsyncDirectory(directory: string): Promise<void> {
+  let handle: FileHandle | undefined
   try {
-    const handle = await open(directory, 'r')
-    try { await handle.sync() } finally { await handle.close() }
-  } catch {
-    // Directory fsync is not available on every filesystem.
+    handle = await open(directory, 'r')
+    await handle.sync()
+  } catch (error) {
+    if (process.platform !== 'win32' || !isWindowsDirectoryFsyncUnsupported(error)) throw error
+  } finally {
+    if (handle) await handle.close().catch(() => undefined)
   }
 }
 
 export async function atomicWrite(filePath: string, value: unknown): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
+  await cleanupAtomicTemps(filePath)
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   let handle: FileHandle | undefined
   try {
@@ -126,6 +130,25 @@ export async function atomicWrite(filePath: string, value: unknown): Promise<voi
     await unlink(temporaryPath).catch(() => undefined)
     throw error
   }
+}
+
+async function cleanupAtomicTemps(filePath: string): Promise<void> {
+  const directory = dirname(filePath)
+  const prefix = `${basename(filePath)}.`
+  const entries = await readdir(directory, { withFileTypes: true })
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith('.tmp')) return
+    const owner = /^(.+)\.(\d+)\.[0-9a-f-]+\.tmp$/.exec(entry.name)
+    if (!owner || processIsAlive(Number.parseInt(owner[2], 10))) return
+    await unlink(join(directory, entry.name)).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    })
+  }))
+}
+
+function isWindowsDirectoryFsyncUnsupported(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code
+  return code === 'EPERM' || code === 'EACCES' || code === 'EINVAL' || code === 'ENOTSUP'
 }
 
 function sleep(ms: number): Promise<void> {
@@ -199,6 +222,7 @@ async function withFileLock<T>(filePath: string, callback: () => Promise<T>): Pr
 }
 
 function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
   try {
     process.kill(pid, 0)
     return true
@@ -289,10 +313,11 @@ export class ProjectWorkspacePersistence {
     const expectedRevision = typeof options === 'number' ? undefined : options?.expectedStoreRevision
     return withFileLock(this.filePath, async () => {
       const state = await readProjectWorkspaceState(this.filePath)
-      this.assertGlobalRevision(state, expectedRevision)
       const before = clone(state)
       const context = { state, commitRevision: state.revision + 1, now: Date.now() }
       const result = callback(context)
+      if (digest(state) === digest(before)) return clone(result)
+      this.assertGlobalRevision(before, expectedRevision)
       state.revision = context.commitRevision
       const hook = this.beforeCommit.getStore()
       if (hook) {
