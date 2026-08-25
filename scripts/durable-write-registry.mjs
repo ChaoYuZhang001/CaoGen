@@ -197,8 +197,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/git/git-index-artifact.ts',
-    'caogen.git-index-artifact', '1', 'atomic_link', 'implemented_unverified',
-    'Publishes immutable Git index artifacts and validates their frozen identity and digest.'
+    'caogen.git-index-artifact', '1', 'atomic_link', 'verified',
+    'Publishes immutable Git index artifacts and loose objects with durable directory synchronization and no-replace identity checks.',
+    { evidence: ['test-results/git-index-artifact-store-recovery/latest.json'] }
   ),
   exempt(
     'src/main/git/git-index-state.ts', 'workspace_effect', 'effect_guarded_workspace',
