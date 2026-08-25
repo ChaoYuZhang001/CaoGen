@@ -67,6 +67,15 @@ try {
   assertDeepEqual(read, saved, 'readAnnotation should return the saved annotation')
   assertEqual(await browserAnnotations.readAnnotation(annotationsRoot, sessionId, 'missing_id'), null)
 
+  const duplicate = await browserAnnotations.saveAnnotation(annotationsRoot, saved)
+  assertDeepEqual(duplicate, saved, 'identical duplicate annotation should be idempotent')
+  const beforeConflict = readFileSync(expectedFile, 'utf8')
+  await assertRejects(
+    () => browserAnnotations.saveAnnotation(annotationsRoot, { ...saved, note: 'stale replacement' }),
+    'same annotation id with different content should fail closed'
+  )
+  assertEqual(readFileSync(expectedFile, 'utf8'), beforeConflict)
+
   const listed = await browserAnnotations.listAnnotations(annotationsRoot, sessionId)
   assertEqual(listed.length, 1)
   assertDeepEqual(listed[0], saved, 'listAnnotations should include saved annotations')

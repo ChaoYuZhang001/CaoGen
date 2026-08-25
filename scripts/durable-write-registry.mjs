@@ -87,8 +87,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'Provides the shared fsync, atomic publication, private-mode, and directory durability primitive.'
   ),
   domain(
-    'src/main/browserAnnotations.ts', 'caogen.browser-annotation', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists versioned browser annotation documents durably and upgrades validated legacy records on read.'
+    'src/main/browserAnnotations.ts', 'caogen.browser-annotation', '1', 'atomic_fsync_rename', 'verified',
+    'Persists versioned browser annotation documents durably and upgrades validated legacy records on read.',
+    { evidence: ['test-results/browser-annotation-store-recovery/latest.json'] }
   ),
   exempt(
     'src/main/browserView.ts', 'user_artifact', 'direct_write',
@@ -313,8 +314,9 @@ export const DURABLE_WRITE_REGISTRY = [
     'Persists plugin enablement state independently from scanned plugin content.'
   ),
   domain(
-    'src/main/previewAnnotations.ts', 'caogen.preview-annotation', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists versioned preview review annotations durably and upgrades validated legacy records on read.'
+    'src/main/previewAnnotations.ts', 'caogen.preview-annotation', '1', 'atomic_fsync_rename', 'verified',
+    'Persists versioned preview review annotations durably and upgrades validated legacy records on read.',
+    { evidence: ['test-results/preview-annotation-store-recovery/latest.json'] }
   ),
   exempt(
     'src/main/previewVisual.ts', 'ephemeral_runtime', 'ephemeral',

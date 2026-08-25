@@ -77,6 +77,16 @@ try {
   assertEqual(filtered.length, 1)
   assertEqual(filtered[0].id, 'ann-1')
 
+  const duplicate = await annotations.savePreviewAnnotation(storeRoot, 'sess-1', first)
+  assertEqual(duplicate.note, first.note)
+  const firstPath = path.join(storeRoot, 'sess-1', 'ann-1.json')
+  const beforeConflict = readFileSync(firstPath, 'utf8')
+  await assertRejects(
+    () => annotations.savePreviewAnnotation(storeRoot, 'sess-1', { ...first, note: 'stale replacement' }),
+    'same annotation id with different content should fail closed'
+  )
+  assertEqual(readFileSync(firstPath, 'utf8'), beforeConflict)
+
   await assertRejects(
     () =>
       annotations.savePreviewAnnotation(storeRoot, 'sess-1', {
