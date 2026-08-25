@@ -107,8 +107,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/data-lifecycle/project-deletion-backup-store.ts',
-    'caogen.project-deletion-backup', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists the digest-bound Project deletion rollback aggregate before destructive phases.'
+    'caogen.project-deletion-backup', '1', 'atomic_fsync_rename', 'verified',
+    'Persists the digest-bound Project deletion rollback aggregate before destructive phases and recovers idempotently after publication faults.',
+    { evidence: ['test-results/project-deletion-backup-store-recovery/latest.json'] }
   ),
   implemented(
     'src/main/data-lifecycle/project-deletion-coordinator.ts', 'workspace_effect', 'delegated_atomic',
