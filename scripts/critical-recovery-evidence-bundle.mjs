@@ -112,6 +112,22 @@ addCommandCell('NFR-REC-005', 'strong_kill', 'test:migration-effect',
 addCommandCell('NFR-REC-005', 'duplicate_idempotency', 'test:migration-effect',
   'migration import callback executes once across recovery')
 
+const expectedRequirements = [
+  'RUN-004', 'RUN-005',
+  'TRUST-002', 'TRUST-003', 'TRUST-004',
+  'ART-002',
+  'NFR-REC-001', 'NFR-REC-002', 'NFR-REC-003', 'NFR-REC-004', 'NFR-REC-005'
+]
+const expectedFaults = ['strong_kill', 'network_unknown_result', 'duplicate_idempotency', 'out_of_order']
+for (const requirementId of expectedRequirements) {
+  for (const faultClass of expectedFaults) {
+    if (cells.some((cell) => cell.requirementId === requirementId && cell.faultClass === faultClass)) continue
+    const reason = 'no explicit runtime evidence mapping exists yet'
+    cells.push({ requirementId, faultClass, status: 'open', reason, evidence: [] })
+    gaps.push({ requirementId, faultClass, reason })
+  }
+}
+
 const endState = gitState()
 const verifiedCells = cells.filter((cell) => cell.status === 'verified')
 const complete = startState.clean && endState.clean && startState.commit === expectedCommit &&
