@@ -330,8 +330,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/project-portfolio/store.ts',
-    'caogen.project-portfolio', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists cross-Project dependencies and Project-owned milestones with revision checks and cycle validation.'
+    'caogen.project-portfolio', '1', 'atomic_fsync_rename', 'verified',
+    'Persists cross-Project dependencies and Project-owned milestones with revision checks and cycle validation.',
+    { evidence: ['test-results/project-portfolio-store-recovery/latest.json'] }
   ),
   domain(
     'src/main/media/media-store.ts',

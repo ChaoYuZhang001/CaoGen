@@ -2019,8 +2019,8 @@
     },
     "src/main/project-portfolio/store.ts": {
       "profile": "product",
-      "lines": 458,
-      "contentHash": "2ff1888b628f99936e7dda3a8b355931365a54e9fea1f1f5ec995e7f6b263e86",
+      "lines": 478,
+      "contentHash": "fb153f5c0db49bc344048c9884859dfe6645d1e6ee2bb5e33734347a2adf381f",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 61,
       "complexFunctionCount": 2,
