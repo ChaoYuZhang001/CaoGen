@@ -59,6 +59,10 @@ addCommandCell('TRUST-002', 'duplicate_idempotency', 'test:effect-reconciliation
   'Effect reconciliation rejects duplicate side effects and reuses existing receipts')
 addCommandCell('TRUST-002', 'out_of_order', 'test:effect-reconciliation',
   'delayed Effect reconciliation is audited without regressing status or updatedAt')
+addCommandCell('TRUST-002', 'strong_kill', 'test:operation-effect',
+  'selected local, external and connector mutation entrances recover after crash without false completion')
+addCommandCell('TRUST-002', 'network_unknown_result', 'test:operation-effect',
+  'selected opaque mutation entrances preserve waiting_reconciliation after unknown outcomes')
 addReportCell('TRUST-003', 'strong_kill', 'externalEffect',
   'external Issue and MCP effects are reconciled after SIGKILL',
   (report) => report.summary?.hardKill === true)
@@ -79,6 +83,8 @@ addCommandCell('TRUST-004', 'duplicate_idempotency', 'test:effect-reconciliation
   'Effect reconciliation preserves generation and idempotency fences')
 addCommandCell('TRUST-004', 'out_of_order', 'test:effect-reconciliation',
   'registered Effect reconciliation ignores delayed observations after a newer ledger revision')
+addCommandCell('TRUST-004', 'network_unknown_result', 'test:operation-effect',
+  'opaque external and connector effects remain blocked when the provider result is unknown')
 
 addCommandCell('ART-002', 'duplicate_idempotency', 'test:acceptance-failure-ingress',
   'replayed Acceptance failure events do not create a second Evidence or repair')
