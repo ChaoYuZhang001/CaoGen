@@ -39,6 +39,8 @@ const compiledRoot = path.join(tempRoot, 'compiled')
 const report = {
   schemaVersion: 1,
   gate: 'test:provider-profile:restart',
+  writer: 'src/main/provider/providerStoreRepository.ts',
+  faultClasses: ['strong_kill', 'network_unknown_result', 'duplicate_idempotency', 'out_of_order'],
   status: 'failed',
   generatedAt: new Date().toISOString(),
   sourceRevision: gitOutput(['rev-parse', 'HEAD']),
@@ -68,6 +70,12 @@ try {
   report.scenarios.push(runInflightBackupBindingScenario('after_store_commit'))
   report.scenarios.push(runBackupBindingConflictScenario())
   report.scenarios.push(runRollbackSourceBindingConflictScenario())
+  report.faults = {
+    strong_kill: { status: report.scenarios.some((item) => item.name.endsWith('after_prepare') || item.name.endsWith('after_store_commit')) ? 'verified' : 'open' },
+    network_unknown_result: { status: report.scenarios.some((item) => item.name === 'import-unknown-store-digest' && item.phase === 'reconciled') ? 'verified' : 'open' },
+    duplicate_idempotency: { status: report.scenarios.some((item) => item.name === 'import-after_prepare' && item.automaticReplayCount === 0 && item.repeatedRecoveryByteStable) ? 'verified' : 'open' },
+    out_of_order: { status: report.scenarios.some((item) => item.name === 'prepared-pending-writer-matrix' && item.delayedTerminalWriteBlocked && item.storeByteStable) ? 'verified' : 'open' }
+  }
 
   report.status = 'passed'
 } catch (error) {
@@ -76,7 +84,9 @@ try {
 } finally {
   report.finishedAt = new Date().toISOString()
   mkdirSync(reportDir, { recursive: true })
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  const serialized = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(reportPath, serialized, 'utf8')
+  writeFileSync(path.join(repoRoot, 'test-results', 'provider-profile-restart', 'latest.json'), serialized, 'utf8')
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
