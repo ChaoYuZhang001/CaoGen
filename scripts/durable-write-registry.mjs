@@ -124,8 +124,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/data-lifecycle/project-deletion-proof-store.ts',
-    'caogen.project-deletion-proof', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists a digest-bound terminal proof for completed permanent Project deletion.'
+    'caogen.project-deletion-proof', '1', 'atomic_fsync_rename', 'verified',
+    'Persists a digest-bound terminal proof for completed permanent Project deletion and rejects replays with changed deletion facts.',
+    { evidence: ['test-results/project-deletion-proof-store-recovery/latest.json'] }
   ),
   exempt(
     'src/main/data-lifecycle/data-lifecycle-mutation-lock.ts', 'ephemeral_runtime', 'ephemeral',
