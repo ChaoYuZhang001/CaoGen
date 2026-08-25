@@ -96,9 +96,12 @@ export const DURABLE_WRITE_REGISTRY = [
     'Screenshot bytes are opaque artifacts; metadata is covered by the annotation writer.'
   ),
   nonDomain(
-    'src/main/code-forge/patch-artifact.ts', 'user_artifact', 'atomic_link', 'verified',
+    'src/main/code-forge/patch-artifact.ts', 'user_artifact', 'delegated_atomic', 'verified',
     'Publishes content-addressed patch artifacts with fsync and no-replace hard-link commit.',
-    { evidence: ['test-results/code-forge-patch-store-recovery/latest.json'] }
+    {
+      delegate: 'src/main/durable-file.ts',
+      evidence: ['test-results/code-forge-patch-store-recovery/latest.json']
+    }
   ),
   journal(
     'src/main/data-lifecycle/project-deletion-backup-store.ts',
