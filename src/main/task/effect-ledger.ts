@@ -495,29 +495,7 @@ function buildResourceKey(
       markerToken: target.markerToken
     })}`
   }
-  if (target.kind === 'mcp_tool_call') {
-    if (
-      !target.pluginRegistryItemKey || !target.pluginContentDigest ||
-      !target.pluginCapabilityDigest || !target.pluginServerId
-    ) {
-      return `resource-v1:${stableValueDigest({
-        scope: 'mcp-tool-call',
-        serverIdentityDigest: target.serverIdentityDigest,
-        toolName: target.toolName,
-        toolArgumentsDigest: target.toolArgumentsDigest
-      })}`
-    }
-    return `resource-v1:${stableValueDigest({
-      scope: 'mcp-tool-call-plugin-bound-v2',
-      serverIdentityDigest: target.serverIdentityDigest,
-      pluginRegistryItemKey: target.pluginRegistryItemKey,
-      pluginContentDigest: target.pluginContentDigest,
-      pluginCapabilityDigest: target.pluginCapabilityDigest,
-      pluginServerId: target.pluginServerId,
-      toolName: target.toolName,
-      toolArgumentsDigest: target.toolArgumentsDigest
-    })}`
-  }
+  if (target.kind === 'mcp_tool_call') return mcpResourceKey(target)
   if (target.kind === 'webhook_message_send') {
     return `resource-v1:${stableValueDigest({
       scope: 'webhook-message',
@@ -536,6 +514,26 @@ function buildResourceKey(
     cwd: realpathSync(resolve(cwd)),
     toolName,
     effectKey
+  })}`
+}
+
+function mcpResourceKey(target: Extract<EffectTarget, { kind: 'mcp_tool_call' }>): string {
+  const pluginBound = target.pluginRegistryItemKey && target.pluginContentDigest &&
+    target.pluginCapabilityDigest && target.pluginServerId
+  return `resource-v1:${stableValueDigest(pluginBound ? {
+    scope: 'mcp-tool-call-plugin-bound-v2',
+    serverIdentityDigest: target.serverIdentityDigest,
+    pluginRegistryItemKey: target.pluginRegistryItemKey,
+    pluginContentDigest: target.pluginContentDigest,
+    pluginCapabilityDigest: target.pluginCapabilityDigest,
+    pluginServerId: target.pluginServerId,
+    toolName: target.toolName,
+    toolArgumentsDigest: target.toolArgumentsDigest
+  } : {
+    scope: 'mcp-tool-call',
+    serverIdentityDigest: target.serverIdentityDigest,
+    toolName: target.toolName,
+    toolArgumentsDigest: target.toolArgumentsDigest
   })}`
 }
 

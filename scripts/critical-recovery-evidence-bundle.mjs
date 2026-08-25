@@ -101,6 +101,10 @@ addReportCell('NFR-REC-001', 'strong_kill', 'sessionDeletion',
 addReportCell('NFR-REC-001', 'duplicate_idempotency', 'sessionDeletion',
   'duplicate pending deletion journals fail closed without a second mutation',
   (report) => report.checks?.some((check) => check.id === 'duplicate_pending_journal_fails_closed'))
+addCommandCell('NFR-REC-001', 'network_unknown_result', 'test:conversation-ledger',
+  'post-rename directory fsync uncertainty leaves one complete digest-valid ledger and resumes without a false receipt')
+addCommandCell('NFR-REC-001', 'out_of_order', 'test:project-workspace:required',
+  'concurrent durable Project writers reject the delayed stale revision without regressing the Store')
 
 addReportCell('NFR-REC-003', 'strong_kill', 'providerProfileRestart',
   'Provider profile import and rollback survive process interruption',
@@ -110,6 +114,13 @@ addCommandCell('NFR-REC-003', 'network_unknown_result', 'test:provider-request-t
 addReportCell('NFR-REC-003', 'duplicate_idempotency', 'providerProfileRestart',
   'Provider profile restart scenarios preserve one operation identity',
   (report) => report.status === 'passed' && report.scenarios?.length >= 1)
+addReportCell('NFR-REC-003', 'out_of_order', 'providerProfileRestart',
+  'a delayed Provider Profile writer from a terminal operation is rejected without changing Store bytes',
+  (report) => report.scenarios?.some((scenario) =>
+    scenario.name === 'prepared-pending-writer-matrix' &&
+    scenario.delayedTerminalWriteBlocked === true &&
+    scenario.delayedTerminalWriteCode === 'OPERATION_NOT_FOUND' &&
+    scenario.storeByteStable === true))
 
 addReportCell('NFR-REC-004', 'strong_kill', 'supervisorRestart',
   'Supervisor lease and fencing recover after process kill',
@@ -128,6 +139,10 @@ addCommandCell('NFR-REC-005', 'strong_kill', 'test:migration-effect',
   'migration import Effect survives SIGKILL without replaying the callback')
 addCommandCell('NFR-REC-005', 'duplicate_idempotency', 'test:migration-effect',
   'migration import callback executes once across recovery')
+addCommandCell('NFR-REC-005', 'network_unknown_result', 'test:migration-effect',
+  'opaque migration callback failure remains waiting_reconciliation until explicit resolution')
+addCommandCell('NFR-REC-005', 'out_of_order', 'test:migration-effect',
+  'stale migration Effect resolution is rejected without changing the recovery snapshot')
 
 const expectedRequirements = [
   'RUN-004', 'RUN-005',

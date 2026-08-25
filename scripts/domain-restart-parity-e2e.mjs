@@ -244,18 +244,25 @@ async function runParent() {
     report.failures.push(serializeError(error))
     process.exitCode = 1
   } finally {
-    report.finishedAt = new Date().toISOString()
-    mkdirSync(reportDir, { recursive: true })
-    const body = `${JSON.stringify({
-      ...report,
-      reportDir: path.relative(repoRoot, reportDir),
-      reportPath: path.relative(repoRoot, reportPath)
-    }, null, 2)}\n`
-    writeFileSync(reportPath, body, 'utf8')
-    writeFileSync(latestPath, body, 'utf8')
-    rmSync(tempRoot, { recursive: true, force: true })
+    finalizeReport(report, { reportDir, reportPath, latestPath, tempRoot })
   }
+  printReportSummary(report, runId, reportPath)
+}
 
+function finalizeReport(report, { reportDir, reportPath, latestPath, tempRoot }) {
+  report.finishedAt = new Date().toISOString()
+  mkdirSync(reportDir, { recursive: true })
+  const body = `${JSON.stringify({
+    ...report,
+    reportDir: path.relative(repoRoot, reportDir),
+    reportPath: path.relative(repoRoot, reportPath)
+  }, null, 2)}\n`
+  writeFileSync(reportPath, body, 'utf8')
+  writeFileSync(latestPath, body, 'utf8')
+  rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function printReportSummary(report, runId, reportPath) {
   console.log(JSON.stringify({
     status: report.status,
     runId,

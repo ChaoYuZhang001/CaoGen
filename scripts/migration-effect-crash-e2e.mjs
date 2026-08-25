@@ -109,6 +109,24 @@ async function failurePrivacyCase(modules) {
 
   const effect = snapshot?.run?.effects?.[0]
   assert(effect, 'failed migration recovery Effect is missing')
+  const beforeStaleResolution = JSON.stringify(snapshot)
+  let staleResolutionRejected = false
+  try {
+    await modules.effectRuntime.resolvePersistedTaskEffect(
+      snapshot.id,
+      effect.id,
+      effect.revision - 1,
+      'confirmed_not_applied'
+    )
+  } catch (error) {
+    staleResolutionRejected = /revision/i.test(error instanceof Error ? error.message : String(error))
+  }
+  assert(staleResolutionRejected, 'out-of-order migration Effect resolution must reject a stale revision')
+  assertEqual(
+    JSON.stringify(await modules.snapshotStore.getTaskSnapshot(snapshot.id)),
+    beforeStaleResolution,
+    'stale migration Effect resolution must not mutate the recovery snapshot'
+  )
   const resolved = await modules.effectRuntime.resolvePersistedTaskEffect(
     snapshot.id,
     effect.id,

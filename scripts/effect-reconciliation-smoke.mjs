@@ -22,14 +22,13 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-
+import { verifyOutOfOrderReconciliation } from './lib/effect-reconciliation-out-of-order.mjs'
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
 process.env.NODE_PATH = path.join(repoRoot, 'node_modules')
 require('node:module').Module._initPaths()
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-effect-reconcile-'))
 const outDir = path.join(tempRoot, 'compiled')
-
 try {
   execFileSync(
     process.execPath,
@@ -1789,32 +1788,7 @@ try {
   assertEqual(opaqueProbe.kind, 'unresolved')
   opaqueRun = ledger.applyEffectReconciliation(opaqueRun, opaqueRun.effects[0].id, opaqueProbe, 5030)
   assertEqual(opaqueRun.effects[0].status, 'waiting_reconciliation')
-  const beforeOutOfOrder = opaqueRun.effects[0]
-  const delayedObservation = {
-    kind: 'confirmed',
-    evidenceDigest: 'delayed-confirmation-digest',
-    verifier: 'effect-reconciliation-fixture',
-    reason: 'delayed adapter response',
-    observedAt: beforeOutOfOrder.updatedAt - 1
-  }
-  const afterOutOfOrder = ledger.applyEffectReconciliation(
-    opaqueRun,
-    beforeOutOfOrder.id,
-    delayedObservation,
-    beforeOutOfOrder.updatedAt + 10
-  )
-  assertEqual(afterOutOfOrder.effects[0].status, beforeOutOfOrder.status, 'out-of-order reconciliation must preserve Effect status')
-  assertEqual(afterOutOfOrder.effects[0].updatedAt, beforeOutOfOrder.updatedAt, 'out-of-order reconciliation must preserve Effect timestamp')
-  assert(afterOutOfOrder.effects[0].revision > beforeOutOfOrder.revision, 'out-of-order reconciliation must append an audit revision')
-  const outOfOrderEvidence = afterOutOfOrder.effects[0].evidence.at(-1)
-  assertEqual(outOfOrderEvidence?.kind, 'reconciliation')
-  const replayedOutOfOrder = ledger.applyEffectReconciliation(
-    afterOutOfOrder,
-    beforeOutOfOrder.id,
-    delayedObservation,
-    beforeOutOfOrder.updatedAt + 20
-  )
-  assertEqual(replayedOutOfOrder.effects[0].revision, afterOutOfOrder.effects[0].revision, 'replayed out-of-order observation must be idempotent')
+  verifyOutOfOrderReconciliation({ ledger, run: opaqueRun, assert, assertEqual })
   registryModule.taskRuntimeRegistry.clear()
   registryModule.taskRuntimeRegistry.set(opaqueRun.sessionId, opaqueRun)
   const opaqueDecision = registryModule.taskRuntimeRegistry.evaluateTool({

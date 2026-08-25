@@ -410,6 +410,12 @@ function runPendingWriterMatrixScenario() {
     `${scenarioName} forged result blocked`)
   assert.equal(result.writerResults.forgedOperationWrongResult?.name, 'ProviderStoreMutationBlockedError',
     `${scenarioName} forged result error type`)
+  assert.equal(result.delayedTerminalWrite?.blocked, true,
+    `${scenarioName} delayed terminal write blocked`)
+  assert.equal(result.delayedTerminalWrite?.name, 'ProviderProfileOperationJournalError',
+    `${scenarioName} delayed terminal write error type`)
+  assert.equal(result.delayedTerminalWrite?.code, 'OPERATION_NOT_FOUND',
+    `${scenarioName} delayed terminal write error code`)
   assert.equal(result.storeByteStable, true, `${scenarioName} Store bytes`)
   assert.equal(result.finalPhase, 'aborted', `${scenarioName} cleanup phase`)
 
@@ -419,6 +425,8 @@ function runPendingWriterMatrixScenario() {
     blockedWriterCount: Object.keys(result.writerResults).length,
     exactJournalConflictCodes: true,
     forgedOperationIdCannotWriteThirdDigest: true,
+    delayedTerminalWriteBlocked: true,
+    delayedTerminalWriteCode: result.delayedTerminalWrite.code,
     storeByteStable: true,
     finalPhase: 'aborted'
   }

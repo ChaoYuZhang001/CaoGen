@@ -171,11 +171,12 @@ async function runPendingWriterMatrixAction(context) {
   const storePath = path.join(userDataDir, 'providers.json')
   const storeBefore = readFileSync(storePath, 'utf8')
   const writerResults = {}
+  let preparedOperation
   try {
     service.applyProviderProfilePreview(preview.previewId, [], {
       onCheckpoint: (checkpoint, operationId) => {
         if (checkpoint !== 'after_prepare') return
-        capturePendingWriterMatrix({
+        preparedOperation = capturePendingWriterMatrix({
           operationId,
           providers,
           seedProvider,
@@ -188,10 +189,19 @@ async function runPendingWriterMatrixAction(context) {
   } catch {
     // The injected stop reconciles the untouched before snapshot to aborted.
   }
+  if (!preparedOperation) throw new Error('prepared Provider Profile operation evidence is missing')
+  const delayedTerminalWrite = captureWorkerMutation(() => providers.commitProviderProfileStore(
+    [{ ...seedProvider(), models: ['delayed-terminal-write'] }],
+    {
+      operationId: preparedOperation.operationId,
+      expectedWriteDigest: preparedOperation.desiredSnapshotDigest
+    }
+  ))
   const journalPath = path.join(userDataDir, 'provider-profile-operations', 'journal.json')
   const finalPhase = JSON.parse(readFileSync(journalPath, 'utf8')).entries.at(-1)?.phase
   writeResult({
     writerResults,
+    delayedTerminalWrite,
     storeByteStable: readFileSync(storePath, 'utf8') === storeBefore,
     finalPhase
   })
@@ -224,6 +234,10 @@ function capturePendingWriterMatrix(context) {
       operationId,
       expectedWriteDigest: entry.desiredSnapshotDigest
     }))
+  return {
+    operationId,
+    desiredSnapshotDigest: entry.desiredSnapshotDigest
+  }
 }
 
 function runTamperDuringOperationAction(context) {

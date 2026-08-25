@@ -217,20 +217,11 @@ export class SupervisorStateStore {
       const run = findRun(document, id)
       if (document.events.some((event) => event.runId === id &&
           event.payload.sourceEventId === sourceEventId)) return unchangedMutation(clone(run))
-
-      // Preserve auditability for delayed observations without allowing an old
-      // provider event to regress the canonical run status, usage, or timestamp.
       if (observedAt < run.updatedAt) {
-        appendEvent(document, run, 'run.observed', options.actorId ?? 'session-runtime', observedAt, {
-          sourceEventId,
-          taskRunStatus: input.taskRunStatus,
-          observationOnly: true,
-          outOfOrder: true,
-          ignored: true
-        })
-        return clone(run)
+        appendEvent(document, run, 'run.observed', options.actorId ?? 'session-runtime', observedAt,
+          { sourceEventId, taskRunStatus: input.taskRunStatus, observationOnly: true, outOfOrder: true, ignored: true })
+        return clone(run) // Audit the delayed observation without regressing canonical state.
       }
-
       const nextUsage = usageFromObservation(run, observedUsage, observedCostUsd, input.turnCompleted === true)
       const nextStatus = observedSupervisorStatus(run, input.taskRunStatus)
       const usageChanged = !sameRunUsage(run.usage, nextUsage)
@@ -1197,7 +1188,6 @@ function processIsAlive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
-
 async function writeDocument(filePath: string, document: SupervisorStateDocument): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
   const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`
@@ -1215,7 +1205,4 @@ async function writeDocument(filePath: string, document: SupervisorStateDocument
     throw error
   }
 }
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))

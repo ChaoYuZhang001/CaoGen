@@ -74,36 +74,10 @@ async function runUnknownArtifactResultCase({ gateway, snapshot, registry, effec
   const sourceSessionId = 'unknown-result-source'
   const operationId = 'acceptance-artifact-unknown-result'
 
-  const store = await storeApi.openProjectWorkspaceStore(rootDir)
-  await store.createWorkspace({ id: projectId, name: 'Unknown result project', kind: 'software' })
-  const commands = commandApi.createProjectWorkspaceCommandService(store, { rootDir })
-  await commands.reconcileShadowProjection()
-  await commands.createGoal({
-    id: goalId,
-    projectId,
-    title: 'Verify an external artifact before delivery',
-    objective: 'An unknown provider result must never become a completed delivery',
-    status: 'running'
-  })
-  const createdWorkItem = await commands.createWorkItem({
-    id: workItemId,
-    projectId,
-    goalId,
-    type: 'coding',
-    title: 'External artifact verification',
-    status: 'verifying',
-    acceptanceSpec: [{ id: 'artifact-criterion', criterion: 'external artifact is verified', required: true }]
-  })
-  assert.equal((await store.getWorkItem(workItemId))?.id, createdWorkItem.id)
-  const acceptance = await workflow.saveWorkflowAcceptance({
-    id: acceptanceId,
-    projectId,
-    goalId,
-    workItemId,
-    criteria: ['external artifact is verified']
-  }, rootDir)
-  assert.equal((await store.getWorkItem(workItemId))?.id, workItemId)
-  assert.equal(acceptance.status, 'pending')
+  const store = await seedUnknownArtifactWorkflow(
+    { workflow, storeApi, commandApi },
+    { projectId, goalId, workItemId, acceptanceId }
+  )
 
   let callbackCount = 0
   const outcome = await gateway.executeInteractiveOperationEffect({
@@ -196,6 +170,41 @@ async function runUnknownArtifactResultCase({ gateway, snapshot, registry, effec
     artifactCountCreated: 0,
     callbackCount
   }
+}
+
+async function seedUnknownArtifactWorkflow({ workflow, storeApi, commandApi }, ids) {
+  const { projectId, goalId, workItemId, acceptanceId } = ids
+  const store = await storeApi.openProjectWorkspaceStore(rootDir)
+  await store.createWorkspace({ id: projectId, name: 'Unknown result project', kind: 'software' })
+  const commands = commandApi.createProjectWorkspaceCommandService(store, { rootDir })
+  await commands.reconcileShadowProjection()
+  await commands.createGoal({
+    id: goalId,
+    projectId,
+    title: 'Verify an external artifact before delivery',
+    objective: 'An unknown provider result must never become a completed delivery',
+    status: 'running'
+  })
+  const createdWorkItem = await commands.createWorkItem({
+    id: workItemId,
+    projectId,
+    goalId,
+    type: 'coding',
+    title: 'External artifact verification',
+    status: 'verifying',
+    acceptanceSpec: [{ id: 'artifact-criterion', criterion: 'external artifact is verified', required: true }]
+  })
+  assert.equal((await store.getWorkItem(workItemId))?.id, createdWorkItem.id)
+  const acceptance = await workflow.saveWorkflowAcceptance({
+    id: acceptanceId,
+    projectId,
+    goalId,
+    workItemId,
+    criteria: ['external artifact is verified']
+  }, rootDir)
+  assert.equal((await store.getWorkItem(workItemId))?.id, workItemId)
+  assert.equal(acceptance.status, 'pending')
+  return store
 }
 
 function compileSources() {

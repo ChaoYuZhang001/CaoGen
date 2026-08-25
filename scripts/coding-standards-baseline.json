@@ -167,10 +167,10 @@
     },
     "scripts/domain-restart-parity-e2e.mjs": {
       "profile": "automation",
-      "lines": 943,
-      "contentHash": "a4a7ae8e15d3e07063373a2985658e784f12040119e7d72c6f4e358ef4c7e7ab",
+      "lines": 979,
+      "contentHash": "d543910eac8c0280188eac3d0c46ffa724f0fa2e2edc1fa18832fb60edba4915",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 212,
+      "maxFunctionLines": 204,
       "complexFunctionCount": 1,
       "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
@@ -178,7 +178,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "runParent#1": {
-          "lines": 212,
+          "lines": 204,
           "complexity": 3
         },
         "runCrashWorker#1": {
@@ -216,7 +216,7 @@
     "scripts/effect-reconciliation-smoke.mjs": {
       "profile": "automation",
       "lines": 2106,
-      "contentHash": "8a139d075d3e1e094f7eaefb9379e9d94b778309ba885de011bdbb8ceee2f8fc",
+      "contentHash": "c17ca3c408cab6f96619267136fef388a3c51860046161c070490ce89cebda9e",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 34,
       "complexFunctionCount": 0,
@@ -2713,19 +2713,19 @@
     },
     "src/main/task/effect-ledger.ts": {
       "profile": "product",
-      "lines": 664,
-      "contentHash": "c5f0e52d5312b9321bc3c96500e279c9e9719205bf16951ec5a1edf1fe09e581",
-      "oversizedFunctionCount": 1,
-      "maxFunctionLines": 124,
+      "lines": 674,
+      "contentHash": "192a410b6f4f04b7e6dba913b7a0d44d9836a42843f5fc9f4cb115923cc70493",
+      "oversizedFunctionCount": 0,
+      "maxFunctionLines": 102,
       "complexFunctionCount": 1,
-      "maxComplexity": 21,
+      "maxComplexity": 17,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "buildResourceKey#1": {
-          "lines": 124,
-          "complexity": 21
+          "lines": 102,
+          "complexity": 17
         }
       }
     },
@@ -2852,9 +2852,9 @@
     "src/main/task/supervisor-state.ts": {
       "profile": "product",
       "lines": 1208,
-      "contentHash": "6ee27553569eaad91b1fb75eddc7de7e33e0d46a0a970fe61f215711f7269c1d",
+      "contentHash": "4af0722b20ab0697e7519b19a78a4175333177b9ca5eecb7d72896a6a20c0a4f",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 49,
+      "maxFunctionLines": 53,
       "complexFunctionCount": 1,
       "maxComplexity": 19,
       "forbiddenSuppressionCount": 0,
