@@ -117,8 +117,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   journal(
     'src/main/data-lifecycle/project-deletion-journal.ts',
-    'caogen.project-deletion-journal', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Records resumable deletion phases before and after each destructive boundary.'
+    'caogen.project-deletion-journal', '1', 'atomic_fsync_rename', 'verified',
+    'Records resumable deletion phases before and after each destructive boundary.',
+    { evidence: ['test-results/project-deletion-journal-recovery/latest.json'] }
   ),
   journal(
     'src/main/data-lifecycle/project-deletion-proof-store.ts',
