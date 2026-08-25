@@ -41,7 +41,9 @@ async function runSuite() {
   const outDir = path.join(tempRoot, 'compiled')
   const checks = []
   const runId = new Date().toISOString().replace(/[:.]/g, '-')
-  const reportDir = path.join(repoRoot, 'test-results', 'session-deletion-recovery', runId)
+  const reportRoot = path.join(repoRoot, 'test-results', 'session-deletion-recovery')
+  const reportDir = path.join(reportRoot, runId)
+  const latestPath = path.join(reportRoot, 'latest.json')
   let failure
   try {
     compileSources(outDir)
@@ -59,6 +61,9 @@ async function runSuite() {
       schemaVersion: 1,
       status: failure ? 'failed' : 'passed',
       runId,
+      sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+      worktreeStatusCount: gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+        .split('\n').filter(Boolean).length,
       checks,
       failure: failure ? String(failure.stack ?? failure) : undefined,
       guarantees: [
@@ -69,11 +74,21 @@ async function runSuite() {
         'identity conflicts, unresolved recovery state, active worktrees, and corrupt journals fail closed'
       ]
     }
-    writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+    const serialized = `${JSON.stringify(report, null, 2)}\n`
+    writeFileSync(path.join(reportDir, 'report.json'), serialized, 'utf8')
+    writeFileSync(latestPath, serialized, 'utf8')
     rmSync(tempRoot, { recursive: true, force: true })
   }
   if (failure) throw failure
   process.stdout.write(`session deletion recovery E2E: PASS (${checks.length} checks)\n`)
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
 }
 
 async function runStrongKillCases(api, outDir, tempRoot, checks) {

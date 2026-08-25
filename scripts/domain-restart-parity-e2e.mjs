@@ -178,6 +178,15 @@ async function runParent() {
       fencingToken: restart.first.supervisor.fencingToken,
       oldLeaseError: restart.oldLeaseRejection.code
     })
+    assert.equal(restart.delayedObservation.status, restart.first.supervisor.status)
+    assert.equal(restart.delayedObservation.revision, restart.first.supervisor.revision)
+    assert.equal(restart.delayedObservation.ignored, true)
+    check(report, 'out_of_order_observation_is_audited_without_state_regression', {
+      status: restart.delayedObservation.status,
+      revision: restart.delayedObservation.revision,
+      observedAt: restart.delayedObservation.observedAt,
+      ignored: restart.delayedObservation.ignored
+    })
 
     assert.equal(restart.firstBindingRecovery.failures.length, 0)
     assert.deepEqual(restart.firstBindingRecovery.existing, [RUN_ID])
@@ -456,6 +465,20 @@ async function runRestartProbe(payload) {
   assert.equal(firstBindingRecovery.failures.length, 0)
   const firstSupervisor = await supervisor.getRun(RUN_ID)
   assert(firstSupervisor)
+  const delayedObservation = await supervisor.observeRun(RUN_ID, {
+    taskRunStatus: 'failed',
+    sourceEventId: 'domain-restart-delayed-observation',
+    observedAt: 1,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    costUsd: 0
+  })
+  const delayedEvents = await supervisor.listEvents(RUN_ID)
+  const delayedEvent = delayedEvents.at(-1)
+  assert.equal(delayedObservation.revision, firstSupervisor.revision)
+  assert.equal(delayedObservation.status, firstSupervisor.status)
+  assert.equal(delayedEvent?.payload?.sourceEventId, 'domain-restart-delayed-observation')
+  assert.equal(delayedEvent?.payload?.outOfOrder, true)
+  assert.equal(delayedEvent?.payload?.ignored, true)
   const afterClassification = api.bridge.classifySupervisorRestart({
     supervisor: firstSupervisor,
     taskRun: firstReconciled.run
@@ -513,6 +536,12 @@ async function runRestartProbe(payload) {
     firstBindingRecovery,
     secondBindingRecovery,
     oldLeaseRejection,
+    delayedObservation: {
+      status: delayedObservation.status,
+      revision: delayedObservation.revision,
+      observedAt: delayedEvent?.occurredAt,
+      ignored: delayedEvent?.payload?.ignored
+    },
     duplicateDecision,
     secondDuplicateDecision,
     fullPersistedStateIdempotent: true

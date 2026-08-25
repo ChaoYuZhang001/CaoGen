@@ -24,7 +24,9 @@ const historyBuildDir = path.join(tempRoot, 'compiled-history')
 const backupBuildDir = path.join(tempRoot, 'compiled-backup')
 const activeSessionBuildDir = path.join(tempRoot, 'compiled-active-session')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
-const reportDir = path.join(repoRoot, 'test-results', 'durable-direct-write-recovery', runId)
+const reportRoot = path.join(repoRoot, 'test-results', 'durable-direct-write-recovery')
+const reportDir = path.join(reportRoot, runId)
+const latestPath = path.join(reportRoot, 'latest.json')
 const checks = []
 let fault = null
 let userDataRoot = tempRoot
@@ -83,6 +85,9 @@ try {
     schemaVersion: 1,
     status: 'passed',
     runId,
+    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+    worktreeStatusCount: gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+      .split('\n').filter(Boolean).length,
     checks,
     guarantees: [
       'candidate bytes are written and fsynced before canonical rename',
@@ -94,12 +99,22 @@ try {
       'the active-session restart registry migrates legacy arrays and blocks artifact pruning for future, versionless, or malformed documents'
     ]
   }
-  writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  const serialized = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), serialized, 'utf8')
+  writeFileSync(latestPath, serialized, 'utf8')
   process.stdout.write(`durable direct-write recovery smoke: PASS (${checks.length} checks)\n`)
 } finally {
   fault = null
   Module._load = originalLoad
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function gitOutput(args) {
+  try {
+    return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+  } catch {
+    return ''
+  }
 }
 
 function compileFixtures() {
