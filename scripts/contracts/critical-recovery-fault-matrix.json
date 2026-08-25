@@ -108,12 +108,12 @@
       "status": "partial",
       "owner": "L5",
       "faults": {
-        "strong_kill": { "status": "open", "gate": "test:durable-write-inventory:required", "evidence": [] },
-        "network_unknown_result": { "status": "open", "gate": "test:durable-write-inventory:required", "evidence": [] },
-        "duplicate_idempotency": { "status": "open", "gate": "test:durable-write-inventory:required", "evidence": [] },
-        "out_of_order": { "status": "open", "gate": "test:durable-write-inventory:required", "evidence": [] }
+        "strong_kill": { "status": "partial", "gate": "test:durable-file-recovery:required", "evidence": ["test-results/durable-file-recovery"] },
+        "network_unknown_result": { "status": "partial", "gate": "test:durable-file-recovery:required", "evidence": ["test-results/durable-file-recovery"] },
+        "duplicate_idempotency": { "status": "partial", "gate": "test:durable-file-recovery:required", "evidence": ["test-results/durable-file-recovery"] },
+        "out_of_order": { "status": "open", "gate": "test:project-workspace:required", "evidence": [] }
       },
-      "openGaps": ["83 writers lack runtime recovery evidence", "ENOSPC/short-write/fsync/rename injection", "Windows ACL/directory durability"]
+      "openGaps": ["85 writers lack per-Store runtime recovery evidence", "ENOSPC/short-write/fsync/rename injection across every Store", "Windows ACL/directory durability", "mutable Store out-of-order/CAS coverage"]
     },
     {
       "id": "NFR-REC-003",
