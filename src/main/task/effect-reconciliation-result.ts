@@ -8,10 +8,12 @@ export interface EffectReconciliationResult {
   evidenceDigest: string
   verifier: string
   reason: string
+  /** Source observation time, when the adapter can provide one. */
+  observedAt?: number
 }
 
-export function confirmed(payload: unknown, reason: string): EffectReconciliationResult {
-  const confirmedResult = result('confirmed', payload, reason)
+export function confirmed(payload: unknown, reason: string, observedAt?: number): EffectReconciliationResult {
+  const confirmedResult = result('confirmed', payload, reason, observedAt)
   confirmedObservations.set(confirmedResult, payload)
   return confirmedResult
 }
@@ -23,26 +25,28 @@ export function confirmedReconciliationObservation<T>(
   return confirmedObservations.get(value) as T | undefined
 }
 
-export function notApplied(payload: unknown, reason: string): EffectReconciliationResult {
-  return result('not_applied', payload, reason)
+export function notApplied(payload: unknown, reason: string, observedAt?: number): EffectReconciliationResult {
+  return result('not_applied', payload, reason, observedAt)
 }
 
-export function unresolved(payload: unknown): EffectReconciliationResult {
+export function unresolved(payload: unknown, observedAt?: number): EffectReconciliationResult {
   const reason = typeof payload === 'object' && payload && 'reason' in payload
     ? String((payload as { reason: unknown }).reason)
     : '外部状态无法确认'
-  return result('unresolved', payload, reason)
+  return result('unresolved', payload, reason, observedAt)
 }
 
 function result(
   kind: EffectReconciliationResult['kind'],
   payload: unknown,
-  reason: string
+  reason: string,
+  observedAt?: number
 ): EffectReconciliationResult {
   return {
     kind,
     evidenceDigest: stableValueDigest(payload),
     verifier: EFFECT_RECONCILER_VERSION,
-    reason
+    reason,
+    ...(observedAt === undefined ? {} : { observedAt })
   }
 }

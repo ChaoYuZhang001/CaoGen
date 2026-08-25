@@ -255,22 +255,34 @@ export function applyEffectReconciliation(
   const effect = (run.effects ?? []).find((item) => item.id === effectId)
   if (!effect) throw new Error(`未找到 EffectRecord:${effectId}`)
   if (effect.status === 'confirmed' || effect.status === 'failed' || effect.status === 'compensated') return run
+  const sourceObservedAt = result.observedAt
+  const observedAt = sourceObservedAt ?? now
+  const outOfOrder = sourceObservedAt !== undefined && observedAt < effect.updatedAt
   const reconciliationEvidence = evidence(
     'reconciliation',
-    now,
+    observedAt,
     effect.generation,
     result.verifier,
-    { result: result.kind, evidenceDigest: result.evidenceDigest, reason: result.reason }
+    {
+      result: result.kind,
+      evidenceDigest: result.evidenceDigest,
+      reason: result.reason,
+      ...(sourceObservedAt === undefined ? {} : { observedAt, outOfOrder })
+    }
   )
   const previousReconciliation = [...effect.evidence]
     .reverse()
     .find((item) => item.kind === 'reconciliation')
-  if (
-    effect.status === 'waiting_reconciliation' &&
-    result.kind === 'unresolved' &&
-    previousReconciliation?.digest === reconciliationEvidence.digest
-  ) {
-    return run
+  if (previousReconciliation?.digest === reconciliationEvidence.digest) return run
+  if (outOfOrder) {
+    // A delayed adapter response is useful audit evidence, but it must not
+    // regress a newer status or timestamp already committed to the ledger.
+    const next: EffectRecord = {
+      ...effect,
+      revision: effect.revision + 1,
+      evidence: [...effect.evidence, reconciliationEvidence]
+    }
+    return projectEffectToToolExecution(replaceEffect(run, next, now), next)
   }
   let next: EffectRecord
   if (result.kind === 'confirmed') {

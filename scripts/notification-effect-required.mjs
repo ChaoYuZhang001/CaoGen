@@ -83,7 +83,7 @@ console.log(output)
 async function runNotificationEffectGate() {
   const apis = await loadNotificationGateApis()
   const {
-    connectorApi, effectRuntime, idempotencyApi, notificationApi,
+    connectorApi, effectLedger, effectRuntime, idempotencyApi, notificationApi,
     runtimeRegistry, snapshotApi, workspaceApi, workspaceCommands
   } = apis
 
@@ -137,6 +137,12 @@ async function runNotificationEffectGate() {
       testCase
     }))
   }
+  const outOfOrder = await verifyOutOfOrderNotification({
+    effectLedger,
+    snapshotApi,
+    run,
+    effectId: waiting[0]?.effectId
+  })
 
   const crash = await runCrashAfterSend({
     effectRuntime,
@@ -188,10 +194,39 @@ async function runNotificationEffectGate() {
     restartFetchCalls: restart.fetchCalls,
     restartReconciliation: 'idempotent',
     automaticResends: 0,
+    outOfOrderReconciliation: outOfOrder.ignored,
     readableLegacyWeComEffects: 1,
     rawCredentialLeaks: 0,
     negativePaths: report.checks.filter((item) => item.kind === 'negative').length
   }
+}
+
+async function verifyOutOfOrderNotification({ effectLedger, snapshotApi, run, effectId }) {
+  assert(effectId, 'notification out-of-order fixture requires a waiting Effect')
+  const snapshot = await snapshotApi.getTaskSnapshot(run.sessionId, userData)
+  assert(snapshot?.run, 'notification out-of-order fixture requires a persisted Run')
+  const before = snapshot.run.effects?.find((effect) => effect.id === effectId)
+  assert(before, 'notification out-of-order fixture Effect must be persisted')
+  const delayed = {
+    kind: 'confirmed',
+    evidenceDigest: 'notification-delayed-receipt',
+    verifier: 'notification-effect-fixture',
+    reason: 'delayed notification receipt',
+    observedAt: before.updatedAt - 1
+  }
+  const next = effectLedger.applyEffectReconciliation(
+    structuredClone(snapshot.run),
+    effectId,
+    delayed,
+    before.updatedAt + 10
+  )
+  const after = next.effects?.find((effect) => effect.id === effectId)
+  assert(after, 'notification out-of-order result must retain the Effect')
+  assertEqual(after.status, before.status, 'notification out-of-order result must preserve status')
+  assertEqual(after.updatedAt, before.updatedAt, 'notification out-of-order result must preserve updatedAt')
+  assert(after.revision > before.revision, 'notification out-of-order result must append an audit revision')
+  check('delayed notification receipt is audited without resend or status regression', 'negative')
+  return { ignored: true }
 }
 
 async function loadNotificationGateApis() {
