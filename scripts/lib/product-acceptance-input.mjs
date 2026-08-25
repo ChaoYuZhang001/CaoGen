@@ -12,7 +12,9 @@ const REQUIRED_PACKAGE_SCRIPTS = [
   'test:1.0-acceptance-map:required',
   'test:product-1.0-acceptance',
   'test:product-1.0-acceptance:required',
-  'test:critical-recovery-matrix:required'
+  'test:critical-recovery-matrix:required',
+  'test:project-golden-delivery:required',
+  'test:cross-entry-continuity:required'
 ]
 const PUBLIC_GATE_BINDINGS = [
   { requirementId: 'WORK-002', script: 'test:workitem-board:required' }

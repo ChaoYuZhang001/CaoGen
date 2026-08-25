@@ -158,6 +158,8 @@ const DICT: Dict = {
   welcomeAsk: { zh: '今天想完成什么？', en: 'What do you want to get done today?' },
   welcomeInputPlaceholder: { zh: '描述你希望 CaoGen 完成的工作', en: 'Describe what you want CaoGen to do' },
   welcomePresetStartsNow: { zh: '点击即开始', en: 'Click to start' },
+  welcomeResearchWeb: { zh: '联网查资料', en: 'Research the web' },
+  welcomeResearchWebPrompt: { zh: '请联网查找这个问题的最新可靠资料，给出结论、来源 URL、抓取时间和引用：', en: 'Research this question on the web with current reliable sources, URLs, retrieval times, and citations:' },
   firstTaskRecommended: { zh: '推荐', en: 'Recommended' },
   firstTaskProgressCompute: { zh: '算力', en: 'Compute' },
   firstTaskProgressRun: { zh: '任务', en: 'Task' },
@@ -848,6 +850,8 @@ const DICT: Dict = {
   },
   providerProbe: { zh: '检测', en: 'Probe' },
   providerProbing: { zh: '检测中…', en: 'Probing…' },
+  providerSetDefault: { zh: '设为默认', en: 'Make default' },
+  providerSettingDefault: { zh: '设置中…', en: 'Setting…' },
   providerProbeOk: {
     zh: '连通性正常 · 获取 {n} 个模型 · {latencyMs}ms',
     en: 'Reachable · fetched {n} models · {latencyMs}ms'
@@ -869,6 +873,10 @@ const DICT: Dict = {
   providerEditTitle: { zh: '编辑 Provider', en: 'Edit Provider' },
   providerAddTitle: { zh: '添加 Provider', en: 'Add Provider' },
   providerQuickTitle: { zh: '快速开始', en: 'Quick start' },
+  providerQuickStepsLabel: { zh: 'Provider 配置步骤', en: 'Provider setup steps' },
+  providerQuickStepTemplate: { zh: '选择模板', en: 'Choose a template' },
+  providerQuickStepCredential: { zh: '填写凭据', en: 'Add credentials' },
+  providerQuickStepVerify: { zh: '验证并设为默认', en: 'Verify and make default' },
   providerQuickRecommended: { zh: '推荐', en: 'Recommended' },
   providerQuickName: { zh: 'CaoGen 快速服务', en: 'CaoGen Quick Service' },
   providerQuickKeyLabel: { zh: '主账号', en: 'Primary' },

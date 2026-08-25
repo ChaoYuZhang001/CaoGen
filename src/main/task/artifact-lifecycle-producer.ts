@@ -285,6 +285,7 @@ async function registerFileArtifactLifecycle(
 ): Promise<ArtifactLifecycleRecord> {
   assertEffectOwnership(run, effect)
   const outputPath = resolvedFileArtifactPath(effect)
+  const outputBytes = await readFile(outputPath)
   const kind = inferFileArtifactKind(outputPath, workItem)
   const [binding] = await registerSessionProducedArtifacts({
     sessionId: run.sessionId,
@@ -295,8 +296,8 @@ async function registerFileArtifactLifecycle(
       kind,
       title: basename(outputPath),
       content: {
-        storageKind: 'source_ref',
-        sourceRef: outputPath,
+        storageKind: 'blob',
+        bytes: outputBytes,
         expectedDigest: `sha256:${effect.target.expectedSha256}`
       },
       lineageKey: `file:${effect.target.relativePath}`,
@@ -307,14 +308,15 @@ async function registerFileArtifactLifecycle(
         effectId: effect.id,
         toolUseId: effect.toolUseId,
         relativePath: effect.target.relativePath,
-        expectedBytes: effect.target.expectedBytes
+        expectedBytes: effect.target.expectedBytes,
+        workspaceSourcePath: outputPath
       },
       evidenceKind: workItem.type === 'testing' ? 'test_result' : 'delivery_check',
       evidenceSummary:
         'The confirmed file output is available and matches the exact bytes frozen by its Effect.',
       evidenceVerifier: 'file-effect-runtime',
       acceptanceCriterion:
-        'The produced file is available and matches its confirmed Effect digest, size and Project ownership.',
+        'The produced file snapshot is available and matches its confirmed Effect digest, size and Project ownership.',
       attachToStage: authority.attachToStage,
       createdAt: effect.terminalAt ?? effect.updatedAt
     }],

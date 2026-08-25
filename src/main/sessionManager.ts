@@ -1662,7 +1662,9 @@ class SessionManager {
       sdkSessionId: snapshot.execution.sdkSessionId,
       resumeSessionAt: snapshot.execution.resumeSessionAt
     }
-    if (!meta.unassigned && !meta.projectId) meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
+    if (!meta.unassigned && !meta.projectId && !meta.workspaceId) {
+      meta.projectId = touchProject(meta.sourceCwd ?? meta.cwd).id
+    }
     resolveDigitalWorkerSessionScope(meta, app.getPath('userData'))
     bindAndValidateTaskRun(meta, recoveredRun)
     await restoreConversationLedgerJsonlFromArchive(

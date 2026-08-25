@@ -69,8 +69,8 @@ function verifyMigrationPreview({ assert, secretCanary }, state) {
 
 async function verifyMigrationDesktopLayout({ assert, captureScreenshot, sleep, targetPage }) {
   for (const viewport of [
-    { width: 1320, height: 860 },
-    { width: 1024, height: 640 }
+    { width: 1280, height: 800 },
+    { width: 960, height: 640 }
   ]) {
     await targetPage.setViewport({ ...viewport, deviceScaleFactor: 1 })
     await sleep(150)
@@ -80,7 +80,7 @@ async function verifyMigrationDesktopLayout({ assert, captureScreenshot, sleep, 
     assert(layout.visibleOffenders.length === 0, `migration ${viewport.width}: ${JSON.stringify(layout.visibleOffenders)}`)
     await captureScreenshot(targetPage, `migration-manager-${viewport.width}x${viewport.height}`)
   }
-  await targetPage.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await targetPage.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
 }
 
 function migrationArtifactPaths({ targetProject, userDataDir }) {

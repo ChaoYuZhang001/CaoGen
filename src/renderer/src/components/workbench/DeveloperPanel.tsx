@@ -1,5 +1,5 @@
 import { Bug, FilePenLine, FileText, FlaskConical } from 'lucide-react'
-import { useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useT } from '../../i18n'
 import FilePanel from './FilePanel'
 import TestPanel from './TestPanel'
@@ -9,12 +9,18 @@ import RefactorPanel from './RefactorPanel'
 type DeveloperView = 'files' | 'tests' | 'debug' | 'refactor'
 const DEVELOPER_VIEWS: DeveloperView[] = ['files', 'tests', 'debug', 'refactor']
 
-export default function DeveloperPanel(): React.JSX.Element {
+export default function DeveloperPanel({ developerView = 'files' }: { developerView?: DeveloperView }): React.JSX.Element {
   const t = useT()
-  const [view, setView] = useState<DeveloperView>('files')
+  const [view, setView] = useState<DeveloperView>(developerView)
   const [testsVisited, setTestsVisited] = useState(false)
   const [debugVisited, setDebugVisited] = useState(false)
   const [refactorVisited, setRefactorVisited] = useState(false)
+  useEffect(() => {
+    if (developerView === 'tests') setTestsVisited(true)
+    if (developerView === 'debug') setDebugVisited(true)
+    if (developerView === 'refactor') setRefactorVisited(true)
+    setView(developerView)
+  }, [developerView])
   const selectView = (next: DeveloperView): void => {
     if (next === 'tests') setTestsVisited(true)
     if (next === 'debug') setDebugVisited(true)

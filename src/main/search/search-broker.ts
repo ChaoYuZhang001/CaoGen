@@ -363,7 +363,9 @@ export class SearchBroker {
             mediaType: 'text/plain',
             verifier: 'caogen-search-broker',
             observedAt: fetchedAt,
-            contentDigest: `sha256:${contentSha256}`,
+            // Workflow Evidence stores the canonical digest as bare lowercase SHA-256;
+            // the human-facing citation retains the `sha256:` label.
+            contentDigest: contentSha256,
             metadata: {
               mode: input.mode,
               fetchedAt,

@@ -111,7 +111,9 @@ export async function restoreActiveSessionRegistry(
 
   try {
     for (const item of prepared) {
-      if (item.projectPath) item.meta.projectId = touchProject(item.projectPath).id
+      if (item.projectPath && !item.meta.projectId && !item.meta.workspaceId) {
+        item.meta.projectId = touchProject(item.projectPath).id
+      }
     }
   } catch (error) {
     await disposePreparedEngines(prepared)

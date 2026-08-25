@@ -276,7 +276,9 @@
       "test:1.0-acceptance-map:required",
       "test:product-1.0-acceptance",
       "test:product-1.0-acceptance:required",
-      "test:critical-recovery-matrix:required"
+      "test:critical-recovery-matrix:required",
+      "test:project-golden-delivery:required",
+      "test:cross-entry-continuity:required"
     ],
     "publicGateBindings": [
       {

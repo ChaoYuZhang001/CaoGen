@@ -5,6 +5,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Globe2,
   GitPullRequest,
   ListChecks,
   LoaderCircle,
@@ -109,11 +110,18 @@ function welcomeRecoveryKind(validationKey: string): WelcomeRecoveryKind | null 
 
 const WELCOME_TOOLS: WelcomeTool[] = [
   {
+    key: 'research',
+    labelKey: 'welcomeResearchWeb',
+    promptKey: 'welcomeResearchWebPrompt',
+    icon: Globe2,
+    taskStrategy: 'execute'
+  },
+  {
     key: 'understand',
     labelKey: 'welcomeUnderstandProject',
     promptKey: 'welcomeUnderstandProjectPrompt',
     icon: SearchCode,
-    requiresWorkspace: true,
+    requiresWorkspace: false,
     taskStrategy: 'view'
   },
   {
@@ -121,7 +129,7 @@ const WELCOME_TOOLS: WelcomeTool[] = [
     labelKey: 'welcomeReviewChanges',
     promptKey: 'welcomeReviewChangesPrompt',
     icon: GitPullRequest,
-    requiresWorkspace: true,
+    requiresWorkspace: false,
     taskStrategy: 'view'
   },
   {

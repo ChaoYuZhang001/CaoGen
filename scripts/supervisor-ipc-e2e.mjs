@@ -78,6 +78,31 @@ try {
 
   const ipc = await page.evaluate(async () => {
     const api = window.agentDesk
+    await api.createProjectWorkspace({
+      id: 'ipc-project',
+      name: 'Supervisor IPC fixture',
+      kind: 'software'
+    })
+    await api.createProjectGoal({
+      id: 'ipc-goal',
+      projectId: 'ipc-project',
+      title: 'Supervisor IPC goal',
+      objective: 'Exercise canonical Supervisor ownership through Electron IPC'
+    })
+    await api.createProjectWorkItem({
+      id: 'ipc-work',
+      projectId: 'ipc-project',
+      goalId: 'ipc-goal',
+      title: 'Manual Supervisor IPC work item',
+      type: 'testing'
+    })
+    await api.createProjectWorkItem({
+      id: 'ipc-task-run-work',
+      projectId: 'ipc-project',
+      goalId: 'ipc-goal',
+      title: 'TaskRun-owned Supervisor IPC work item',
+      type: 'testing'
+    })
     const created = await api.createSupervisorRun({
       id: 'ipc-run', projectId: 'ipc-project', goalId: 'ipc-goal', workItemId: 'ipc-work', maxRetries: 2
     })
@@ -102,6 +127,7 @@ try {
     const completed = await api.completeSupervisorRun('ipc-run', {
       ownerId: 'ipc-worker-2', leaseId: resumed.lease.id, fencingToken: resumed.lease.fencingToken, expectedRevision: resumed.revision
     })
+    const manualWorkItem = await api.getProjectWorkItem('ipc-work')
     let forgedError = ''
     try {
       await api.createSupervisorRun({ id: 'forged', projectId: 'ipc-project', workItemId: 'ipc-work' }, { actorId: 'forged-user' })
@@ -136,6 +162,7 @@ try {
       forgedError,
       directTaskRunMutationError,
       missingRuntimeControlError,
+      manualWorkItemRunRefs: manualWorkItem?.runRefs ?? [],
       taskRunRevisionBefore: taskRunBefore.revision,
       taskRunRevisionAfter: taskRunAfter.revision,
       taskRunEventsBefore,
@@ -148,6 +175,7 @@ try {
   assert.match(ipc.forgedError, /unknown field|contains unknown/i)
   assert.match(ipc.directTaskRunMutationError, /TaskRun-owned.*renderer cannot start/i)
   assert.match(ipc.missingRuntimeControlError, /TaskRun-owned.*no active canonical session runtime/i)
+  assert.deepEqual(ipc.manualWorkItemRunRefs, [])
   assert.equal(ipc.taskRunRevisionAfter, ipc.taskRunRevisionBefore)
   assert.equal(ipc.taskRunEventsAfter, ipc.taskRunEventsBefore)
 

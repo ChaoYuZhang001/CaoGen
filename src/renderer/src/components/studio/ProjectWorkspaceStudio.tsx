@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { ClipboardCheck, GitBranch, GitCommitHorizontal, RotateCcw, Terminal, TestTube2 } from 'lucide-react'
 import type { AcceptanceResult, Goal, GoalPatch, ProjectSquad, ProjectWorkspace, ProjectWorkspaceLeaseOptions, WorkItem, WorkItemComment, WorkItemOwner } from '../../../../shared/types'
 import {
   GoalCreateForm,
@@ -155,6 +156,12 @@ export function ProjectWorkspaceStudio({
         onImport={actions.importProject}
         onRefresh={() => void refresh()}
         onSelect={workspace.selectProject}
+      />
+
+      <ProjectFlowRail
+        project={selectedProject}
+        goalCount={contents.goals.length}
+        workItemCount={contents.workItems.length}
       />
 
       <WorkspaceStatus
@@ -418,8 +425,9 @@ function ProjectContents({
           {form === 'workItem' && (
             <WorkItemCreateForm projectId={project.id} goals={contents.goals.filter((goal) => goal.status !== 'archived')} workItems={contents.workItems} busy={actions.busy} onCancel={onCloseForm} onSubmit={actions.createWorkItem} />
           )}
-          <GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} />
-          <WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} />
+          <div data-project-flow-step="goals"><GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} /></div>
+          <div data-project-flow-step="work"><WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} /></div>
+          <ProjectExecutionActions projectId={project.id} />
           <ProgressiveProjectSection label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
             <ProjectDeliveryWorkbench
               active={active}
@@ -472,6 +480,7 @@ function ProgressiveProjectSection({
     <details
       className="pws-advanced-section"
       data-project-advanced-section={dataKey}
+      data-project-flow-step={dataKey}
       onToggle={(event) => {
         if (event.currentTarget.open) setMounted(true)
       }}
@@ -488,6 +497,68 @@ function ProgressiveProjectSection({
   )
 }
 
+/**
+ * Project 主路径的操作入口。底层能力仍由现有工作台面板提供，但入口和
+ * Goal/WorkItem/Run/Delivery 放在同一条路径，避免用户在多个侧栏工具中找功能。
+ */
+function ProjectExecutionActions({ projectId }: { projectId: string }): React.JSX.Element {
+  const activeId = useStore((state) => state.activeId)
+  const activeSession = useStore((state) => (activeId ? state.sessions[activeId]?.meta : undefined))
+  const openPanel = useStore((state) => state.openPanel)
+  const openLatestRewindPanel = useStore((state) => state.openLatestRewindPanel)
+  const setStudioSurface = useStore((state) => state.setStudioSurface)
+  const hasSession = Boolean(activeSession && (activeSession.workspaceId === projectId || activeSession.projectId === projectId))
+  const openSessionPanel = (panel: Parameters<typeof openPanel>[0], context?: Parameters<typeof openPanel>[1]): void => {
+    setStudioSurface('session')
+    openPanel(panel, context)
+  }
+  const scrollToDelivery = (): void => {
+    const target = document.querySelector<HTMLElement>('[data-project-flow-step="delivery"]')
+    if (target instanceof HTMLDetailsElement) target.open = true
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return (
+    <section className="pws-project-execution-actions" data-project-flow-step="supervisor" aria-labelledby="project-execution-actions-title">
+      <div className="pws-project-execution-heading">
+        <div>
+          <h2 id="project-execution-actions-title">执行与交付</h2>
+          <p>{hasSession ? '当前会话已绑定，可直接检查改动、运行测试并回退。' : '先从目标启动一次执行，随后这里会出现可检查的会话。'}</p>
+        </div>
+        <span className={`pws-project-session-state ${hasSession ? 'is-ready' : 'is-empty'}`}>{hasSession ? '会话已就绪' : '等待执行'}</span>
+      </div>
+      <div className="pws-project-execution-toolbar" role="toolbar" aria-label="项目执行操作">
+        <button type="button" className="btn btn-ghost btn-sm" data-project-execution-action="diff" disabled={!hasSession} onClick={() => openSessionPanel('diff')}>
+          <GitCommitHorizontal size={14} aria-hidden="true" />
+          Diff / 提交
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" data-project-execution-action="tests" disabled={!hasSession} onClick={() => openSessionPanel('files', { developerView: 'tests' })}>
+          <TestTube2 size={14} aria-hidden="true" />
+          运行测试
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" data-project-execution-action="rewind" disabled={!hasSession} onClick={() => {
+          setStudioSurface('session')
+          openLatestRewindPanel('button')
+        }}>
+          <RotateCcw size={14} aria-hidden="true" />
+          撤销检查点
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" data-project-execution-action="worktree" disabled={!hasSession} onClick={() => openSessionPanel('worktree')}>
+          <GitBranch size={14} aria-hidden="true" />
+          Worktree
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" data-project-execution-action="terminal" disabled={!hasSession} onClick={() => openSessionPanel('terminal')}>
+          <Terminal size={14} aria-hidden="true" />
+          终端
+        </button>
+        <button type="button" className="btn btn-primary btn-sm" data-project-execution-action="delivery" onClick={scrollToDelivery}>
+          <ClipboardCheck size={14} aria-hidden="true" />
+          验收交付
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function GoalTaskStarter({
   projectId,
   state
@@ -501,7 +572,7 @@ function GoalTaskStarter({
     if (await state.start(projectId, objective)) setObjective('')
   }
   return (
-    <form className="pws-goal-task-starter" onSubmit={(event) => void submit(event)} data-goal-task-starter>
+    <form className="pws-goal-task-starter" onSubmit={(event) => void submit(event)} data-goal-task-starter data-project-flow-step="goal-task-starter">
       <label className="pws-visually-hidden" htmlFor={`goal-task-${projectId}`}>{TEXT.goalTaskPlaceholder}</label>
       <input
         id={`goal-task-${projectId}`}
@@ -520,6 +591,40 @@ function GoalTaskStarter({
       {state.error && <p className="pws-goal-task-error" role="alert">{state.error}</p>}
       {state.announcement && <p className="pws-goal-task-success" role="status">{state.announcement}</p>}
     </form>
+  )
+}
+
+function ProjectFlowRail({
+  project,
+  goalCount,
+  workItemCount
+}: {
+  project: ProjectWorkspace | null
+  goalCount: number
+  workItemCount: number
+}): React.JSX.Element {
+  const steps = [
+    { id: 'goal-task-starter', label: '目标', detail: project ? (goalCount > 0 ? `${goalCount} 个` : '先描述目标') : '先创建项目' },
+    { id: 'work', label: '任务', detail: workItemCount > 0 ? `${workItemCount} 个` : '自动拆解或新增' },
+    { id: 'supervisor', label: '执行', detail: '分配数字员工' },
+    { id: 'delivery', label: '验收交付', detail: 'Diff · Test · Evidence' }
+  ]
+  const goTo = (id: string): void => {
+    const target = document.querySelector<HTMLElement>(`[data-project-flow-step="${id}"]`)
+    if (target instanceof HTMLDetailsElement) target.open = true
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return (
+    <nav className="pws-flow-rail" aria-label="项目执行流程" data-project-flow-rail>
+      {steps.map((step, index) => (
+        <span className="pws-flow-step-wrap" key={step.id}>
+          <button type="button" className="pws-flow-step" onClick={() => goTo(step.id)} disabled={!project && index > 0} data-project-flow-nav={step.id}>
+            <strong>{index + 1}. {step.label}</strong><small>{step.detail}</small>
+          </button>
+          {index < steps.length - 1 && <span className="pws-flow-arrow" aria-hidden="true">→</span>}
+        </span>
+      ))}
+    </nav>
   )
 }
 

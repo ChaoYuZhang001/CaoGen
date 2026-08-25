@@ -193,6 +193,17 @@ function ProviderConnectionDetails({
   </details>
 }
 
+function ProviderQuickSteps(): React.JSX.Element {
+  const t = useT()
+  return (
+    <ol className="provider-quick-steps" aria-label={t('providerQuickStepsLabel')}>
+      <li><strong>1</strong><span>{t('providerQuickStepTemplate')}</span></li>
+      <li><strong>2</strong><span>{t('providerQuickStepCredential')}</span></li>
+      <li><strong>3</strong><span>{t('providerQuickStepVerify')}</span></li>
+    </ol>
+  )
+}
+
 export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: ProviderQuickSetupProps): React.JSX.Element {
   const t = useT()
   const setupRef = useRef<HTMLElement>(null)
@@ -437,6 +448,7 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
         <h2 className="provider-editor-title">{t('providerQuickTitle')}</h2>
       </header>
       <div className="provider-quick-setup">
+        <ProviderQuickSteps />
         <ProviderQuickAccountOptions oauthFlow={oauthFlow} oauthBusy={oauthBusy} busy={busy} localBusy={localBusy} onConnectOAuth={connectOAuth} onConnectLocal={connectLocal} />
         <div className="provider-quick-divider"><span>{t('providerQuickOrKey')}</span></div>
         <label className="field-label">{t('providerQuickTemplateLabel')}</label>

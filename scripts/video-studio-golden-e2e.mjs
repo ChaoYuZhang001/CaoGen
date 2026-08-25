@@ -80,6 +80,7 @@ const report = {
   },
   checks: [],
   screenshots: [],
+  viewports: [],
   warnings: [],
   explicitlyNotVerified: [
     'commercial Provider generation quality or parity with external products',
@@ -449,6 +450,32 @@ try {
     }
   })
 
+  await check('supported desktop viewports keep the Video workflow contained and actionable', async () => {
+    await page.click('[data-experience-mode-option="video"]')
+    await page.waitForSelector('[data-video-studio-view]', { visible: true, timeout: 15_000 })
+    const productionSelector = `[data-sidebar-video-production-id="${report.productionId}"]`
+    await page.waitForSelector(productionSelector, { visible: true, timeout: 15_000 })
+    await page.click(productionSelector)
+    await page.waitForSelector('[data-video-compose-preview]', { visible: true, timeout: 15_000 })
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 960, height: 640 }
+    ]) {
+      await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
+      await sleep(200)
+      const measurement = await readVideoViewport(page)
+      report.viewports.push({ ...viewport, ...measurement })
+      assert(measurement.documentOverflow <= 1, `Video ${viewport.width}: document overflow ${measurement.documentOverflow}px`)
+      assert(measurement.appOverflow <= 1, `Video ${viewport.width}: app overflow ${measurement.appOverflow}px`)
+      assert(measurement.panelContained, `Video ${viewport.width}: panel is outside the viewport`)
+      assert(measurement.railContained, `Video ${viewport.width}: workflow rail is outside the viewport`)
+      assert(measurement.primaryVisible, `Video ${viewport.width}: preview action is not visible`)
+      assert.deepEqual(measurement.labelOverflows, [], `Video ${viewport.width}: workflow labels overflow`)
+      await screenshot(page, `${viewport.width}x${viewport.height}-created`)
+    }
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
+  })
+
   report.status = 'passed'
   writeReport()
   console.log(`video studio golden E2E: passed (${report.checks.length}/${report.checks.length})`)
@@ -513,7 +540,7 @@ async function connectElectron() {
     report.lifecycle.rendererClosedAt = new Date().toISOString()
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
-  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
   await waitForApp(page)
 }
 async function restartElectron() {
@@ -598,6 +625,39 @@ async function screenshot(targetPage, name) {
   const file = path.join(runDir, `${name}.png`)
   await targetPage.screenshot({ path: file, fullPage: false })
   report.screenshots.push(file)
+}
+async function readVideoViewport(targetPage) {
+  return targetPage.evaluate(() => {
+    const app = document.querySelector('.app')
+    const panel = document.querySelector('.video-studio-panel')
+    const rail = document.querySelector('[data-video-flow-rail]')
+    const primary = document.querySelector('[data-video-compose-preview]')
+    const panelRect = panel?.getBoundingClientRect()
+    const railRect = rail?.getBoundingClientRect()
+    const primaryRect = primary?.getBoundingClientRect()
+    const rect = (value) => value ? {
+      left: value.left,
+      right: value.right,
+      top: value.top,
+      bottom: value.bottom,
+      width: value.width,
+      height: value.height
+    } : null
+    const labelOverflows = Array.from(document.querySelectorAll('.video-flow-step strong'))
+      .filter((label) => label.scrollWidth - label.clientWidth > 1)
+      .map((label) => label.textContent?.trim() || '')
+    return {
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      appOverflow: app ? app.scrollWidth - app.clientWidth : -1,
+      panelContained: Boolean(panelRect && panelRect.left >= 0 && panelRect.right <= window.innerWidth + 1),
+      railContained: Boolean(railRect && railRect.left >= 0 && railRect.right <= window.innerWidth + 1),
+      primaryVisible: Boolean(primaryRect && primaryRect.width > 0 && primaryRect.height > 0 && primaryRect.left >= 0 && primaryRect.right <= window.innerWidth + 1),
+      panelRect: rect(panelRect),
+      railRect: rect(railRect),
+      primaryRect: rect(primaryRect),
+      labelOverflows
+    }
+  })
 }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 async function setInputValue(targetPage, selector, value) {

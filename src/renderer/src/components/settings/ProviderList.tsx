@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, Settings2 } from 'lucide-react'
+import { AUTO_MODEL } from '../../../../shared/types'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
 import ProviderProfileManager from './ProviderProfileManager'
@@ -45,12 +46,28 @@ export default function ProviderList({
   onRemove
 }: Props): React.JSX.Element {
   const t = useT()
+  const defaultProviderId = useStore((state) => state.settings.defaultProviderId)
+  const updateSettings = useStore((state) => state.updateSettings)
+  const [settingDefaultId, setSettingDefaultId] = useState('')
+  const [defaultError, setDefaultError] = useState('')
+  const setDefault = async (provider: ProviderView): Promise<void> => {
+    setSettingDefaultId(provider.id)
+    setDefaultError('')
+    try {
+      await updateSettings({ defaultProviderId: provider.id, defaultModel: AUTO_MODEL })
+    } catch (cause) {
+      setDefaultError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSettingDefaultId('')
+    }
+  }
   return (
     <ProviderProfileManager providers={providers} onAdd={onAdd}>
       <ProviderProfileSyncPanel />
       <ProviderProfileWebDavPanel />
       <ProviderProfileS3Panel />
       <ProviderAccountOverview providers={providers} onEdit={onEdit} />
+      {defaultError && <div className="notice notice-error provider-profile-notice" role="alert">{defaultError}</div>}
       <div className="provider-list">
         {providers.length === 0 && <div className="provider-empty">{t('providerEmpty')}</div>}
         {providers.map((provider) => (
@@ -60,9 +77,12 @@ export default function ProviderList({
             health={health.find((item) => item.providerId === (provider.id || 'local-login'))}
             providerProbe={providerProbe}
             checking={checkingProviderId === provider.id}
+            isDefault={provider.id === defaultProviderId}
+            settingDefault={settingDefaultId === provider.id}
             onProbe={onProbe}
             onEdit={onEdit}
             onRemove={onRemove}
+            onSetDefault={(next) => void setDefault(next)}
           />
         ))}
       </div>
@@ -327,17 +347,23 @@ function ProviderListRow({
   health,
   providerProbe,
   checking,
+  isDefault,
+  settingDefault,
   onProbe,
   onEdit,
-  onRemove
+  onRemove,
+  onSetDefault
 }: {
   provider: ProviderView
   health: ProviderHealthView | undefined
   providerProbe: ProviderProbe | null
   checking: boolean
+  isDefault: boolean
+  settingDefault: boolean
   onProbe: (provider: ProviderView) => void
   onEdit: (provider: ProviderView) => void
   onRemove: (provider: ProviderView) => void
+  onSetDefault: (provider: ProviderView) => void
 }): React.JSX.Element {
   const t = useT()
   const pricedModels = provider.advancedConfig?.modelProfiles?.filter((profile) => Boolean(profile.pricing)).length ?? 0
@@ -346,6 +372,7 @@ function ProviderListRow({
       <div className="provider-row-body">
         <div className="provider-row-name">
           {provider.name}
+          {isDefault && <span className="provider-tag provider-tag-default">{t('providerDefault')}</span>}
           <ProviderCredentialTag provider={provider} />
           <ProviderHealthDot health={health} />
         </div>
@@ -373,7 +400,10 @@ function ProviderListRow({
         <button className="btn btn-ghost btn-sm" disabled={checking} onClick={() => onProbe(provider)}>
           {checking ? t('providerProbing') : t('providerProbe')}
         </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => onEdit(provider)}>
+        {!isDefault && <button className="btn btn-ghost btn-sm" disabled={settingDefault || !provider.ready} data-provider-set-default onClick={() => onSetDefault(provider)}>
+          {settingDefault ? t('providerSettingDefault') : t('providerSetDefault')}
+        </button>}
+        <button className="btn btn-ghost btn-sm" data-provider-edit onClick={() => onEdit(provider)}>
           {t('providerConfigure')}
         </button>
         <button className="btn btn-ghost btn-sm" onClick={() => onRemove(provider)}>

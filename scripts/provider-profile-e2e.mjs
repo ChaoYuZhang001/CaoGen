@@ -19,7 +19,10 @@ const electron = process.platform === 'win32'
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'provider-profile-e2e', runId)
-const phaseTimeoutMs = positiveInteger(process.env.CAOGEN_PROVIDER_PROFILE_PHASE_TIMEOUT_MS, 120_000)
+// Provider Profile's UI phase includes multiple renderer reloads, catalog calls,
+// sync panels and credential transitions. Keep the timeout bounded but allow
+// the real Electron phase enough time on a loaded development machine.
+const phaseTimeoutMs = positiveInteger(process.env.CAOGEN_PROVIDER_PROFILE_PHASE_TIMEOUT_MS, 180_000)
 const phaseResults = []
 
 try {

@@ -22,6 +22,7 @@ import { DisclosureChevron } from './DisclosureChevron'
 import SidebarVideoSections from './SidebarVideoSections'
 import SidebarPrimaryAction from './SidebarPrimaryAction'
 import SidebarFooter from './SidebarFooter'
+import AppModeSwitcher from './AppModeSwitcher'
 import { sidebarSearchKey, sidebarVisibleCount, splitAssistantEntries } from './sidebar-mode-projection'
 import { restoreComposerFocus, SidebarPanelIcon } from './SidebarControls'
 import {
@@ -613,6 +614,8 @@ function Sidebar({
         </button>
       </div>
 
+      <AppModeSwitcher language={language} mode={experienceMode} onChange={onExperienceModeChange} />
+
       <nav className="sidebar-primary-nav" aria-label={t('primaryNavigation')}>
         <SidebarPrimaryAction
           mode={experienceMode}
@@ -736,10 +739,8 @@ function Sidebar({
 
       <SidebarFooter
         language={language}
-        mode={experienceMode}
         recommendation={experienceRecommendation}
         settings={settings}
-        onExperienceModeChange={onExperienceModeChange}
         onOpenControlRoom={() => {
           setShowTaskRecovery(false)
           setView('office')

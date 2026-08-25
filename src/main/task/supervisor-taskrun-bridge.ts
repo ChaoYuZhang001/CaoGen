@@ -8,7 +8,6 @@ import type {
   SupervisorRunCreateInput,
   SupervisorRunInput
 } from '../../shared/supervisor-types'
-import { createProjectWorkspaceCommandService } from '../project-workspace/command-service'
 import { openProjectWorkspaceStore } from '../project-workspace/store'
 import {
   SupervisorStateError,
@@ -91,61 +90,17 @@ export async function createCanonicalSupervisorRun(
   if (input.goalId !== undefined && item.goalId !== input.goalId) {
     throw new Error(`canonical WorkItem crosses Goal boundary:${input.workItemId}`)
   }
-  const created = await store.createRun({
+  // Manual Supervisor rows are coordination state, not executable TaskRuns.
+  // WorkItem.runRefs is reserved for Workflow Ledger Runs with a durable
+  // session/task identity; attaching this row would create a dangling
+  // reference that invalidates the verified canonical ProjectWorkspace view.
+  return store.createRun({
     ...input,
     ...(item.goalId ? { goalId: item.goalId } : {}),
     ...(item.inheritedGoalContract?.budget
       ? { budget: structuredClone(item.inheritedGoalContract.budget) }
       : {})
   }, options)
-  try {
-    await attachManualSupervisorRun(workspace, rootDir, item, created.id)
-    return created
-  } catch (error) {
-    try {
-      await store.cancelRun(created.id, { actorId: 'supervisor-binding-rollback' })
-    } catch (rollbackError) {
-      throw new AggregateError(
-        [error, rollbackError],
-        `Supervisor Run ${created.id} canonical binding and rollback both failed`
-      )
-    }
-    throw error
-  }
-}
-
-async function attachManualSupervisorRun(
-  initialStore: Awaited<ReturnType<typeof openProjectWorkspaceStore>>,
-  rootDir: string,
-  initialItem: WorkItem,
-  runId: string
-): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const workspace = attempt === 0 ? initialStore : await openProjectWorkspaceStore(rootDir)
-    const item = attempt === 0 ? initialItem : await workspace.getWorkItem(initialItem.id)
-    if (!item || item.projectId !== initialItem.projectId || item.goalId !== initialItem.goalId) {
-      throw new Error(`canonical WorkItem ownership changed:${initialItem.id}`)
-    }
-    if (item.runRefs.includes(runId)) return
-    const commands = createProjectWorkspaceCommandService(workspace, { rootDir })
-    await commands.reconcileShadowProjection()
-    try {
-      await commands.updateWorkItem(
-        item.id,
-        { runRefs: [...item.runRefs, runId] },
-        { expectedRevision: item.revision }
-      )
-      return
-    } catch (error) {
-      if (attempt < 2 && isStaleProjectWorkspaceRevision(error)) continue
-      throw error
-    }
-  }
-  throw new Error(`canonical Run binding retry exhausted:${runId}`)
-}
-
-function isStaleProjectWorkspaceRevision(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'stale_revision')
 }
 
 export type SupervisorRestartDisposition =

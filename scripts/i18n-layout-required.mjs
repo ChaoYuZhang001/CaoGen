@@ -25,7 +25,7 @@ const combinations = [
 ]
 const viewports = [
   { name: 'desktop-standard', width: 1280, height: 800 },
-  { name: 'desktop-minimum', width: 1024, height: 640 }
+  { name: 'desktop-minimum', width: 960, height: 640 }
 ]
 const report = {
   schemaVersion: 1,

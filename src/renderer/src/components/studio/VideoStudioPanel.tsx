@@ -41,6 +41,7 @@ import VideoContinuitySection, { type BibleDraft, type LockDraft } from './Video
 import './video-studio.css'
 
 const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation'])
+const VERIFIED_OPENAI_VIDEO_MODELS = ['grok-imagine-video', 'grok-imagine-video-1.5']
 
 export function VideoStudioPanel({ active, projectId, productionId }: { active: boolean; projectId?: string; productionId?: string }): React.JSX.Element | null {
   const language = useStore((state) => state.settings.language)
@@ -62,7 +63,7 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
   const [selectedMediaOperation, setSelectedMediaOperation] = useState<MediaOperation>('video.text-to-video')
   const [voiceDraft, setVoiceDraft] = useState('alloy')
   const [generationParameters, setGenerationParameters] = useState({ durationSeconds: 5, width: 1280, height: 720, quality: 'standard' as 'draft' | 'standard' | 'high', seed: '', negativePrompt: '', speechSpeed: 1 })
-  const [providerDraft, setProviderDraft] = useState({ displayName: '', providerId: '', model: '', estimatedCostUsd: '', endpointClass: 'openai-video' as MediaProviderProfile['endpointClass'] })
+  const [providerDraft, setProviderDraft] = useState({ displayName: 'OpenAI Video 兼容 Provider', providerId: '', model: 'grok-imagine-video', estimatedCostUsd: '', endpointClass: 'openai-video' as MediaProviderProfile['endpointClass'] })
   const [cueDraft, setCueDraft] = useState({ speaker: '', text: '', startMs: 0, endMs: 2_000, audioAssetId: '', subtitleEnabled: true })
   const [editingCueId, setEditingCueId] = useState('')
   const [backgroundVolumeDraft, setBackgroundVolumeDraft] = useState(0.2)
@@ -370,6 +371,11 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
       for (let attempt = 0; attempt < 4 && !terminalStatuses.has(current.status); attempt += 1) {
         current = await window.agentDesk.advanceMediaJob(current.id)
       }
+    } else {
+      // Submitting a remote job should enter the provider's queue immediately;
+      // later status transitions remain explicit so an asynchronous provider is
+      // never mistaken for a completed generation.
+      await window.agentDesk.advanceMediaJob(job.id)
     }
     return job
   }
@@ -411,6 +417,8 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
       </div>
     </header>
 
+    <VideoFlowRail hasProduction={Boolean(production)} hasPreview={Boolean(previewAsset)} />
+
     {error && <p className="video-studio-error" role="alert">{error}</p>}
     {!production ? <div className="video-studio-create">
       <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={text.productionTitlePlaceholder} aria-label={text.productionTitleLabel} />
@@ -426,11 +434,11 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
         shotCount={shots.length}
         ffmpegAvailable={Boolean(ffmpeg?.available)}
       />
-      <section className="video-studio-script" aria-label="剧本结构">
+      <section className="video-studio-script" aria-label="剧本结构" data-video-flow-step="script">
         <div className="video-studio-section-title"><strong>剧本与分镜</strong><span>结构修订 {production.structureRevisions.length}</span></div>
         <textarea className="input" value={revisionScript} onChange={(event) => setRevisionScript(event.target.value)} rows={5} aria-label="制作剧本" />
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy || revisionScript.trim() === production.script} onClick={reviseProduction} data-video-revise><Sparkles size={14} aria-hidden="true" />生成新结构版本</button>
-        <div className="video-studio-storyboard">
+        <div className="video-studio-storyboard" data-video-flow-step="shots">
           {visibleScenes.map((scene) => <div className="video-studio-scene" key={scene.id}>
             <div className="video-studio-scene-title"><strong>{scene.title}</strong><span>{scene.shotIds.length} 镜头</span><button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => createShot(scene.id)} disabled={busy} aria-label={`向 ${scene.title} 添加镜头`} title="添加镜头"><Plus size={13} /></button></div>
             <div className="video-studio-shot-grid">
@@ -536,7 +544,7 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
         </>}
       </section>
       </details>
-      <details className="video-studio-advanced-section" data-video-advanced-section="generation">
+      <details className="video-studio-advanced-section" data-video-advanced-section="generation" data-video-flow-step="generation">
         <summary><strong>生成与合成</strong><span>{activeJobCount} 个任务运行中 · 按需展开</span></summary>
       <section className="video-studio-queue" aria-label="媒体任务队列">
         <div className="video-studio-section-title"><strong>生成与合成</strong><span>{activeJobCount} 运行中</span></div>
@@ -551,7 +559,8 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
           <div>
             <input className="input" value={providerDraft.displayName} onChange={(event) => setProviderDraft((value) => ({ ...value, displayName: event.target.value }))} placeholder="显示名称" aria-label="媒体 Provider 显示名称" />
             <select className="input" value={providerDraft.providerId} onChange={(event) => setProviderDraft((value) => ({ ...value, providerId: event.target.value }))} aria-label="绑定 CaoGen Provider"><option value="">选择已配置 Provider</option>{appProviders.filter((item) => item.ready).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-            <input className="input" value={providerDraft.model} onChange={(event) => setProviderDraft((value) => ({ ...value, model: event.target.value }))} placeholder="媒体模型 ID" aria-label="媒体模型 ID" />
+            <input className="input" list="caogen-video-model-presets" value={providerDraft.model} onChange={(event) => setProviderDraft((value) => ({ ...value, model: event.target.value }))} placeholder="媒体模型 ID" aria-label="媒体模型 ID" />
+            <datalist id="caogen-video-model-presets">{VERIFIED_OPENAI_VIDEO_MODELS.map((model) => <option key={model} value={model} />)}</datalist>
             <input className="input" type="number" min={0} step={0.01} value={providerDraft.estimatedCostUsd} onChange={(event) => setProviderDraft((value) => ({ ...value, estimatedCostUsd: event.target.value }))} placeholder="每任务估价 USD" aria-label="媒体任务估价美元" />
             <select className="input" value={providerDraft.endpointClass} onChange={(event) => setProviderDraft((value) => ({ ...value, endpointClass: event.target.value as MediaProviderProfile['endpointClass'] }))} aria-label="媒体协议"><option value="openai-video">OpenAI 视频</option><option value="openai-image">OpenAI 图片</option><option value="openai-speech">OpenAI TTS</option><option value="generic-async">通用异步媒体</option><option value="openai-compatible">旧版兼容异步</option></select>
             <button type="button" className="btn btn-secondary btn-sm" onClick={saveMediaProvider} disabled={busy || !providerDraft.providerId || !providerDraft.model.trim() || !providerDraft.displayName.trim()}><Plus size={13} />添加</button>
@@ -667,6 +676,32 @@ function useStudioOperationRunner(
   }, [busy, refresh, setBusy, setError])
 }
 
+function VideoFlowRail({ hasProduction, hasPreview }: { hasProduction: boolean; hasPreview: boolean }): React.JSX.Element {
+  const steps = [
+    { id: 'script', label: '剧本', detail: '输入与修订' },
+    { id: 'shots', label: '分镜', detail: '镜头与素材' },
+    { id: 'generation', label: '生成', detail: '选择 Provider' },
+    { id: 'preview', label: '预览 / 导出', detail: hasPreview ? '可播放成片' : '先生成预览' }
+  ]
+  const goTo = (id: string): void => {
+    const target = document.querySelector<HTMLElement>(`[data-video-flow-step="${id}"]`)
+    if (target instanceof HTMLDetailsElement) target.open = true
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  return (
+    <nav className="video-flow-rail" aria-label="视频制作流程" data-video-flow-rail>
+      {steps.map((step, index) => (
+        <span className="video-flow-step-wrap" key={step.id}>
+          <button type="button" className="video-flow-step" onClick={() => goTo(step.id)} disabled={!hasProduction} data-video-flow-nav={step.id}>
+            <strong>{index + 1}. {step.label}</strong><small>{step.detail}</small>
+          </button>
+          {index < steps.length - 1 && <span className="video-flow-arrow" aria-hidden="true">→</span>}
+        </span>
+      ))}
+    </nav>
+  )
+}
+
 function VideoPreviewFlow({
   busy,
   ffmpegAvailable,
@@ -685,7 +720,7 @@ function VideoPreviewFlow({
   shotCount: number
 }): React.JSX.Element {
   return (
-    <section className="video-studio-preview-flow" aria-label="视频预览" data-video-preview-flow>
+    <section className="video-studio-preview-flow" aria-label="视频预览" data-video-preview-flow data-video-flow-step="preview">
       <div className="video-studio-preview-flow-heading">
         <div>
           <strong>预览</strong>

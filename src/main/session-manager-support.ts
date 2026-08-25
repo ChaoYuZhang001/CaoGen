@@ -343,9 +343,10 @@ export function canTrackCost(meta: SessionMeta): boolean {
   return Boolean(providerPricingForModel(provider?.advancedConfig, meta.model))
 }
 
-/** Goal-level USD accounting requires provider-reported cost, not a fallback model estimate. */
+/** Goal-level USD accounting requires provider-bound pricing, not a fallback catalog estimate. */
 export function canEnforceGoalCostBudget(meta: SessionMeta): boolean {
-  return canTrackCost(meta)
+  const provider = meta.providerId ? getProvider(meta.providerId) : undefined
+  return Boolean(providerPricingForModel(provider?.advancedConfig, meta.model))
 }
 
 export async function withSessionCreationJournalBarrier<T>(

@@ -483,8 +483,8 @@
     },
     "scripts/lib/product-acceptance-input.mjs": {
       "profile": "automation",
-      "lines": 549,
-      "contentHash": "0dd763c5036098e50683f4295a66d4ef2b4f66bebace275dec59677d59bec749",
+      "lines": 551,
+      "contentHash": "00ab66210e7532cbfdc45d120f60bae6bedb9d0f6fa95bccbf7abb383d6314fd",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 48,
       "complexFunctionCount": 1,
@@ -755,6 +755,19 @@
         }
       }
     },
+    "scripts/project-workspace-lifecycle-e2e.mjs": {
+      "profile": "automation",
+      "lines": 1228,
+      "contentHash": "4eec03ec4318dcbfa57331465bd4a418afd3dc0873db60756ee6e94092693d47",
+      "oversizedFunctionCount": 0,
+      "maxFunctionLines": 114,
+      "complexFunctionCount": 0,
+      "maxComplexity": 11,
+      "forbiddenSuppressionCount": 0,
+      "unreasonedSuppressionCount": 0,
+      "malformedDebtMarkerCount": 0,
+      "functionDebt": {}
+    },
     "scripts/provider-profile-smoke.mjs": {
       "profile": "automation",
       "lines": 1231,
@@ -907,12 +920,12 @@
     },
     "scripts/video-studio-golden-e2e.mjs": {
       "profile": "automation",
-      "lines": 606,
-      "contentHash": "df91661504dee181112b1f4fdcc0ce53619f6e0a5ce95243a867205bc57e2c73",
+      "lines": 666,
+      "contentHash": "1257e55fd9114546d40ef0da37f670d7ceed67a4eb94322ea82b79a8f6d4f63f",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 149,
       "complexFunctionCount": 0,
-      "maxComplexity": 6,
+      "maxComplexity": 10,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -1040,24 +1053,6 @@
         "executeBrowserTool#1": {
           "lines": 61,
           "complexity": 17
-        }
-      }
-    },
-    "src/main/agent/tools/p2-tools.ts": {
-      "profile": "product",
-      "lines": 796,
-      "contentHash": "a561b47b2f9e3c3ed52d80be88689165c658f80cfbf9f2e3b8abdd40c4554e8f",
-      "oversizedFunctionCount": 0,
-      "maxFunctionLines": 72,
-      "complexFunctionCount": 1,
-      "maxComplexity": 16,
-      "forbiddenSuppressionCount": 0,
-      "unreasonedSuppressionCount": 0,
-      "malformedDebtMarkerCount": 0,
-      "functionDebt": {
-        "executeWebSearch#1": {
-          "lines": 42,
-          "complexity": 16
         }
       }
     },
@@ -2507,10 +2502,10 @@
     },
     "src/main/search/search-broker.ts": {
       "profile": "product",
-      "lines": 637,
-      "contentHash": "b339c87388a33cde77f246ce7a7b3bfe1c36eb654d0363431e987df1a953e1b1",
+      "lines": 639,
+      "contentHash": "64c4c622a72ea81734af7244373506d238c1d600ce65752e1a3286b0f794250c",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 143,
+      "maxFunctionLines": 145,
       "complexFunctionCount": 2,
       "maxComplexity": 42,
       "forbiddenSuppressionCount": 0,
@@ -2518,7 +2513,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "executeSearch#1": {
-          "lines": 143,
+          "lines": 145,
           "complexity": 42
         },
         "isPrivateAddress#1": {
@@ -2547,26 +2542,26 @@
     },
     "src/main/session-active-registry.ts": {
       "profile": "product",
-      "lines": 346,
-      "contentHash": "4f64db07c27702c5b8084d81a58cfa7572faeb608682a406863886d05a4aee03",
+      "lines": 348,
+      "contentHash": "9afe14bb3069635b2c99888a6bc28661ab403d65f343f202ab81d2f03c2f8acf",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 71,
+      "maxFunctionLines": 73,
       "complexFunctionCount": 1,
-      "maxComplexity": 17,
+      "maxComplexity": 19,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "restoreActiveSessionRegistry#1": {
-          "lines": 71,
-          "complexity": 17
+          "lines": 73,
+          "complexity": 19
         }
       }
     },
     "src/main/sessionManager.ts": {
       "profile": "product",
-      "lines": 2705,
-      "contentHash": "691b1987440bfdb3fae8b454a76646136cfc74bc621a86b62a0c29023536a90b",
+      "lines": 2707,
+      "contentHash": "362911b1f97e6a6320f7652f8d2934cd6c025316881157babdbbaa3de4006ca0",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 102,
       "complexFunctionCount": 5,
@@ -2653,8 +2648,8 @@
     },
     "src/main/task/artifact-lifecycle-producer.ts": {
       "profile": "product",
-      "lines": 1122,
-      "contentHash": "3f18a6c6e0509f93e99dc626fbc1a5f7fc779e2c3910a6bc677c472352fb91f8",
+      "lines": 1124,
+      "contentHash": "d13bc83af85a0ca39beade35b34fcfc36e784e5bf436e56fd80372c80ed5e084",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 100,
       "complexFunctionCount": 5,
@@ -2705,8 +2700,8 @@
     },
     "src/main/task/conversation-ledger-store.ts": {
       "profile": "product",
-      "lines": 949,
-      "contentHash": "7ffb6ef5ef7e048cfedda9685313d57c721b50423a02436bd8f097db9c88ad12",
+      "lines": 955,
+      "contentHash": "ba8092f23f0404225556920cd81aae0f707f846ee2391574024fc3a7b342f293",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 111,
       "complexFunctionCount": 0,
@@ -3408,10 +3403,10 @@
     },
     "src/renderer/src/components/ProviderQuickSetup.tsx": {
       "profile": "product",
-      "lines": 508,
-      "contentHash": "49c90dd2e488c8a576dd4e730dcbeac4f1687e8c64b3f22bf7d89d16381668ad",
+      "lines": 520,
+      "contentHash": "294439f780e7a355d2787e9b94d91c801d53f2c2501a9bc86de7c7c391b14419",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 313,
+      "maxFunctionLines": 314,
       "complexFunctionCount": 1,
       "maxComplexity": 16,
       "forbiddenSuppressionCount": 0,
@@ -3419,7 +3414,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "ProviderQuickSetup#1": {
-          "lines": 313,
+          "lines": 314,
           "complexity": 16
         }
       }
@@ -3514,8 +3509,8 @@
     },
     "src/renderer/src/components/Sidebar.tsx": {
       "profile": "product",
-      "lines": 779,
-      "contentHash": "b5785a050b7c1e2ca714fcf85b33390cc4b86e62ee5b3e6cc263f7455fe3d4d2",
+      "lines": 780,
+      "contentHash": "fcf07551bc9559a59e98b1a74d167ed61efe74d70580467ab5d8ca524256dae4",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 676,
       "complexFunctionCount": 1,
@@ -3568,12 +3563,12 @@
     },
     "src/renderer/src/components/ToolCallCard.tsx": {
       "profile": "product",
-      "lines": 221,
-      "contentHash": "17998276619690504afad2d29dc43a68313cc350610b19df17ce505c97a6fd5e",
+      "lines": 233,
+      "contentHash": "04a6223cf0d1094b5d1c4fc7424d46c3c222b305fee33e11fc5f2e0c75ed70f7",
       "oversizedFunctionCount": 0,
-      "maxFunctionLines": 81,
+      "maxFunctionLines": 64,
       "complexFunctionCount": 2,
-      "maxComplexity": 23,
+      "maxComplexity": 18,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
@@ -3583,8 +3578,8 @@
           "complexity": 18
         },
         "ToolCallCard#1": {
-          "lines": 81,
-          "complexity": 23
+          "lines": 64,
+          "complexity": 16
         }
       }
     },
@@ -4130,10 +4125,10 @@
     },
     "src/renderer/src/components/studio/ProjectWorkspaceStudio.tsx": {
       "profile": "product",
-      "lines": 668,
-      "contentHash": "65529ac3cb31bd29ee726d5bd96c616dd2b0fec786879d0075ad176ac326c9e6",
+      "lines": 773,
+      "contentHash": "2c11331b69de31dec8735b19462780e69d42799f9b8f04362849106d6180b8ad",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 130,
+      "maxFunctionLines": 136,
       "complexFunctionCount": 0,
       "maxComplexity": 14,
       "forbiddenSuppressionCount": 0,
@@ -4141,7 +4136,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "ProjectWorkspaceStudio#1": {
-          "lines": 130,
+          "lines": 136,
           "complexity": 3
         }
       }
@@ -4184,10 +4179,10 @@
     },
     "src/renderer/src/components/studio/VideoStudioPanel.tsx": {
       "profile": "product",
-      "lines": 792,
-      "contentHash": "4cf39aa287832afabd352b485d3cf967d653462b684281d6ff30e58028900320",
+      "lines": 827,
+      "contentHash": "81656067b4b1c903f7f8dd7478ca4206d031d0fd31a9437847dcacaea064d1f5",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 571,
+      "maxFunctionLines": 579,
       "complexFunctionCount": 2,
       "maxComplexity": 91,
       "forbiddenSuppressionCount": 0,
@@ -4195,11 +4190,11 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "VideoStudioPanel#1": {
-          "lines": 571,
+          "lines": 579,
           "complexity": 91
         },
         "submitShot#1": {
-          "lines": 26,
+          "lines": 31,
           "complexity": 17
         }
       }
@@ -4392,10 +4387,10 @@
     },
     "src/renderer/src/components/workbench/WorkbenchRoot.tsx": {
       "profile": "product",
-      "lines": 669,
-      "contentHash": "f51eaa7389ca748676c5389172c89305ee3b0c22d30698120ee60a168ad6776f",
+      "lines": 673,
+      "contentHash": "b9e2eba64a7b7175facc2c03b09dd1d9b12aac5f1138d01ae6cc81bcddb11385",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 311,
+      "maxFunctionLines": 314,
       "complexFunctionCount": 1,
       "maxComplexity": 16,
       "forbiddenSuppressionCount": 0,
@@ -4403,7 +4398,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "WorkbenchRoot#1": {
-          "lines": 311,
+          "lines": 314,
           "complexity": 16
         }
       }
@@ -4512,8 +4507,8 @@
     },
     "src/renderer/src/i18n.ts": {
       "profile": "product",
-      "lines": 999,
-      "contentHash": "2f9420ca24caefefea7d248b1b4576641a5e17c54ad34be76829aec21aa83959",
+      "lines": 1007,
+      "contentHash": "1b4b44605cef6793771afcd7fa595817f41edd6db57f8b4fcdceae08523255d2",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 6,
       "complexFunctionCount": 0,
@@ -4543,10 +4538,10 @@
     },
     "src/renderer/src/store.ts": {
       "profile": "product",
-      "lines": 3797,
-      "contentHash": "965f03455ce7fc1f1539b8b205001908c4aadc56b2d610cd22fd3748151258aa",
+      "lines": 3801,
+      "contentHash": "fbc92fe1961779315b0e1b70c80790e4ab172494203b3117f0af253139a77c21",
       "oversizedFunctionCount": 2,
-      "maxFunctionLines": 2545,
+      "maxFunctionLines": 2547,
       "complexFunctionCount": 1,
       "maxComplexity": 58,
       "forbiddenSuppressionCount": 0,
@@ -4558,7 +4553,7 @@
           "complexity": 58
         },
         "create callback#1": {
-          "lines": 2545,
+          "lines": 2547,
           "complexity": 1
         }
       }

@@ -924,7 +924,7 @@ async function openProviderEditor(win, providerName) {
   return rendererValue(win, `(() => {
     const row = [...document.querySelectorAll('.provider-row')]
       .find((candidate) => candidate.querySelector('.provider-row-name')?.childNodes[0]?.textContent.trim() === ${JSON.stringify(providerName)});
-    const edit = row?.querySelector('.provider-row-actions button:nth-of-type(2)');
+    const edit = row?.querySelector('[data-provider-edit]');
     edit?.click();
     return Boolean(edit);
   })()`)

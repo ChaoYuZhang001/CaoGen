@@ -136,6 +136,7 @@ function WorkbenchRoot(): React.JSX.Element {
   const sessions = useStore((s) => s.sessions)
   const activePanelId = useStore((s) => s.workbench.activePanelId)
   const mountedPanels = useStore((s) => s.workbench.mountedPanels)
+  const developerView = useStore((s) => s.workbench.developerView)
   const layout = useStore((s) => s.settings.layout)
   const updateSettings = useStore((s) => s.updateSettings)
   const openPanel = useStore((s) => s.openPanel)
@@ -275,6 +276,8 @@ function WorkbenchRoot(): React.JSX.Element {
     switch (id) {
       case 'result':
         return { sessionId: activeId, standalone: false }
+      case 'files':
+        return { developerView }
       case 'pluginRegistry':
         return {
           items: pluginRegistry?.items ?? [],
@@ -474,6 +477,7 @@ function WorkbenchSidePanel({
         </button>
       </div>
       <section className={`workbench-pane workbench-side ${activePanelId === 'files' ? 'workbench-side-files' : ''}`}
+        data-workbench-active-panel={activePanelId ?? ''}
         style={{ display: open ? 'flex' : 'none' }}>
         {children}
       </section>

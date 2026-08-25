@@ -644,7 +644,13 @@ function assertImmutableOwnership(stream: StreamRow, identity: ReturnType<typeof
     sourceCwd: identity.sourceCwd
   }
   if (stableValueDigest(expected) !== stableValueDigest(actual)) {
-    throw new Error(`Conversation Ledger ${stream.sdkSessionId} immutable ownership changed`)
+    const changedFields = Object.keys(expected).filter((field) =>
+      stableValueDigest(expected[field as keyof typeof expected]) !==
+      stableValueDigest(actual[field as keyof typeof actual])
+    )
+    throw new Error(
+      `Conversation Ledger ${stream.sdkSessionId} immutable ownership changed: ${changedFields.join(', ') || 'unknown'}`
+    )
   }
 }
 

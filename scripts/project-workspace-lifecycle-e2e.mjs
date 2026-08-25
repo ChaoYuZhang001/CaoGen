@@ -604,7 +604,7 @@ async function launchRuntime(phase) {
       }
     })
     page.on('pageerror', (error) => report.warnings.push(`${phase} pageerror: ${error.message}`))
-    await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
     return { browser, child, output, page, phase }
   } catch (error) {
     const exited = await terminate(child)
@@ -717,8 +717,9 @@ async function verifyOneInputGoalTask(page) {
   state.goalTaskWorkItemId = workItem.id
   state.goalTaskSessionId = session.id
   await verifyCanonicalProjectGroup(page, { expectedSessionId: session.id, exerciseControls: true })
+  await verifyProjectExecutionActions(page)
   await screenshot(page, '00-one-input-started')
-  await page.setViewport({ width: 1024, height: 640, deviceScaleFactor: 1 })
+  await page.setViewport({ width: 960, height: 640, deviceScaleFactor: 1 })
   await sleep(250)
   const desktopLayout = await page.evaluate((projectId) => {
     const sidebar = document.querySelector('.sidebar')
@@ -748,12 +749,12 @@ async function verifyOneInputGoalTask(page) {
     `desktop Project navigation is not visible: ${JSON.stringify(desktopLayout)}`)
   assert(desktopLayout.inputWidth > 0 && desktopLayout.buttonWidth > 0,
     `desktop Goal Task controls are not visible: ${JSON.stringify(desktopLayout)}`)
-  assert(desktopLayout.starterLeft >= 0 && desktopLayout.starterRight <= 1024,
+  assert(desktopLayout.starterLeft >= 0 && desktopLayout.starterRight <= 960,
     `desktop Goal Task starter is outside the viewport: ${JSON.stringify(desktopLayout)}`)
   assert(desktopLayout.mobileTogglePresent === false,
     `desktop-only shell rendered a mobile sidebar control: ${JSON.stringify(desktopLayout)}`)
   await screenshot(page, '00-one-input-started-desktop-minimum')
-  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
   await page.evaluate((id) => window.agentDesk.closeSession(id), session.id)
   await waitForValue(
     () => page.evaluate(() => window.agentDesk.listSessions()),
@@ -761,6 +762,48 @@ async function verifyOneInputGoalTask(page) {
     10_000,
     'waiting for synthetic Goal Task Session to close'
   )
+}
+
+async function verifyProjectExecutionActions(page) {
+  await page.waitForSelector('[data-project-execution-action="diff"]', { visible: true, timeout: 10_000 })
+  const initial = await page.$$eval('[data-project-execution-action]', (buttons) => ({
+    actions: buttons.map((button) => button.getAttribute('data-project-execution-action')),
+    disabled: buttons.filter((button) => button.getAttribute('data-project-execution-action') !== 'delivery')
+      .some((button) => button.disabled)
+  }))
+  assert(initial.actions.join(',') === 'diff,tests,rewind,worktree,terminal,delivery' && !initial.disabled,
+    `Project execution actions are not ready: ${JSON.stringify(initial)}`)
+
+  const panelActions = [
+    ['diff', 'diff'],
+    ['worktree', 'worktree'],
+    ['terminal', 'terminal']
+  ]
+  for (const [action, panel] of panelActions) {
+    await page.click(`[data-project-execution-action="${action}"]`)
+    await page.waitForFunction(() => document.querySelector('[data-studio-projection-tab="session"]')?.getAttribute('aria-selected') === 'true')
+    await page.waitForFunction((expected) => document.querySelector('[data-workbench-active-panel]')?.getAttribute('data-workbench-active-panel') === expected, {}, panel)
+    await page.click('[data-studio-projection-tab="workspace"]')
+    await page.waitForSelector('[data-project-execution-action="diff"]', { visible: true, timeout: 5_000 })
+  }
+
+  await page.click('[data-project-execution-action="tests"]')
+  await page.waitForFunction(() => document.querySelector('[data-studio-projection-tab="session"]')?.getAttribute('aria-selected') === 'true')
+  await page.waitForFunction(() => document.querySelector('[data-workbench-active-panel]')?.getAttribute('data-workbench-active-panel') === 'files')
+  await page.waitForFunction(() => document.querySelector('[data-developer-view="tests"]')?.getAttribute('aria-selected') === 'true')
+  await page.click('[data-studio-projection-tab="workspace"]')
+  await page.waitForSelector('[data-project-execution-action="diff"]', { visible: true, timeout: 5_000 })
+
+  await page.click('[data-project-execution-action="rewind"]')
+  await page.waitForFunction(() => document.querySelector('[data-studio-projection-tab="session"]')?.getAttribute('aria-selected') === 'true')
+  await page.waitForFunction(() => Boolean(document.querySelector('.rewind-panel')) || document.body.textContent?.includes('当前会话还没有可回退的检查点'))
+  if (await page.$('.rewind-panel')) await page.click('.rewind-panel .modal-actions .btn-ghost')
+  await page.click('[data-studio-projection-tab="workspace"]')
+  await page.waitForSelector('[data-project-execution-action="diff"]', { visible: true, timeout: 5_000 })
+
+  await page.click('[data-project-execution-action="delivery"]')
+  await page.waitForFunction(() => document.querySelector('[data-project-flow-step="delivery"]')?.hasAttribute('open') === true)
+  report.checks.push({ name: 'Project execution action bar routes Diff/Test/Undo/Worktree/Terminal/Delivery to live surfaces', status: 'pass', durationMs: 0 })
 }
 
 function goalTaskRows(value, objective) {

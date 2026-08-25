@@ -653,6 +653,8 @@ export interface WorkbenchState {
   fileDiagnosticsError?: string
   fileLoading: boolean
   fileSaving: boolean
+  /** DeveloperPanel 最近一次明确请求的子视图。 */
+  developerView: 'files' | 'tests' | 'debug' | 'refactor'
   fileSessionId?: string
   fileTabs: FileEditorTab[]
   activeFileTabBySession: Record<string, string>
@@ -1275,6 +1277,7 @@ export const useStore = create<AppStore>((set, get) => {
     fileDiagnostics: [],
     fileLoading: false,
     fileSaving: false,
+    developerView: 'files',
     fileTabs: [],
     activeFileTabBySession: {},
     currentFileContent: '',
@@ -2045,7 +2048,8 @@ export const useStore = create<AppStore>((set, get) => {
       workbench: {
         ...s.workbench,
         activePanelId: id,
-        mountedPanels: new Set(s.workbench.mountedPanels).add(id)
+        mountedPanels: new Set(s.workbench.mountedPanels).add(id),
+        ...(id === 'files' && context?.developerView ? { developerView: context.developerView } : {})
       }
     }))
     panelActivators[id]?.(context)

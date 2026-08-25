@@ -1,9 +1,7 @@
 import type * as React from 'react'
 import type { AppSettings } from '../../../shared/types'
-import type { ExperienceMode } from '../store/experience-mode'
 import type { ExperiencePreferenceRecommendation } from '../store/experience-recommendation'
 import { useT } from '../i18n'
-import AppModeSwitcher from './AppModeSwitcher'
 import { HeaderIcon } from './ChatHeaderIcons'
 import { ExperiencePreferenceSuggestion } from './ExperiencePreferenceSuggestion'
 import { preloadOfficeView } from './office/loadOffice'
@@ -19,10 +17,8 @@ function preloadControlRoom(event: React.SyntheticEvent<HTMLButtonElement>): voi
 
 interface SidebarFooterProps {
   language: 'zh' | 'en'
-  mode: ExperienceMode
   recommendation?: ExperiencePreferenceRecommendation
   settings: AppSettings
-  onExperienceModeChange: (mode: ExperienceMode) => void
   onOpenControlRoom: () => void
   onOpenSettings: () => void
   onUpdateSettings: (patch: Partial<AppSettings>) => Promise<void>
@@ -30,10 +26,8 @@ interface SidebarFooterProps {
 
 export default function SidebarFooter({
   language,
-  mode,
   recommendation,
   settings,
-  onExperienceModeChange,
   onOpenControlRoom,
   onOpenSettings,
   onUpdateSettings
@@ -50,7 +44,6 @@ export default function SidebarFooter({
           onUpdate={onUpdateSettings}
         />
       )}
-      <AppModeSwitcher language={language} mode={mode} onChange={onExperienceModeChange} />
       <button
         type="button"
         className="sidebar-nav-item"

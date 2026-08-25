@@ -166,7 +166,7 @@ try {
   })
   page.on('pageerror', (error) => report.warnings.push(`pageerror: ${error.message}`))
   await waitForApp(page)
-  await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
 
   await check('Welcome exposes one usable View Plan Execute strategy control', async () => {
     await assertTaskStrategy(page, 'execute')
@@ -328,8 +328,8 @@ try {
   if (workspaceOnly) {
     await check('three workspace entries remain usable across supported desktop sizes', async () => {
       for (const viewport of [
-        { width: 1320, height: 860 },
-        { width: 1024, height: 640 }
+        { width: 1280, height: 800 },
+        { width: 960, height: 640 }
       ]) {
         await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
         await sleep(150)
@@ -652,7 +652,7 @@ try {
   })
 
   await check('command palette backdrop stays above the mode switcher', async () => {
-    await page.setViewport({ width: 1320, height: 860, deviceScaleFactor: 1 })
+    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
     await openCommandPalette(page)
     const stacking = await readOverlayStacking(page, '.command-palette-backdrop')
     assert(stacking.overlayZ > stacking.switcherZ, `palette z-index ${stacking.overlayZ} <= switcher ${stacking.switcherZ}`)
@@ -663,8 +663,8 @@ try {
 
   await check('desktop Assistant, Project, and Video panes do not overflow horizontally', async () => {
     for (const viewport of [
-      { width: 1320, height: 860 },
-      { width: 1024, height: 640 }
+      { width: 1280, height: 800 },
+      { width: 960, height: 640 }
     ]) {
       await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
       await sleep(250)

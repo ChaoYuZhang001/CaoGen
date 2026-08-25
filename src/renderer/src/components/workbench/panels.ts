@@ -59,6 +59,8 @@ function lazyPanel(loader: () => Promise<{ default: unknown }>): PanelComponent 
 export interface PanelOpenContext {
   url?: string
   path?: string
+  /** DeveloperPanel 的直接目标视图。 */
+  developerView?: 'files' | 'tests' | 'debug' | 'refactor'
 }
 
 /**
