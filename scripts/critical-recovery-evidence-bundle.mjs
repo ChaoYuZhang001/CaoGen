@@ -82,6 +82,8 @@ addCommandCell('TRUST-004', 'out_of_order', 'test:effect-reconciliation',
 
 addCommandCell('ART-002', 'duplicate_idempotency', 'test:acceptance-failure-ingress',
   'replayed Acceptance failure events do not create a second Evidence or repair')
+addCommandCell('ART-002', 'strong_kill', 'test:verified-delivery-flow:required',
+  'Artifact, Evidence, Acceptance, Link and staged delivery checkpoints recover after SIGKILL')
 addCommandCell('ART-002', 'out_of_order', 'test:acceptance-failure-ingress',
   'reordered criterion evidence is normalized without changing the Acceptance identity')
 
