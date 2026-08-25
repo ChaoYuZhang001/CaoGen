@@ -363,11 +363,11 @@ export class MediaStore {
     await previous
     try {
       const state = await this.read()
-      const result = fn(state, Date.now())
+      const previousDocument = canonicalJson(state), result = fn(state, Date.now())
+      if (canonicalJson(state) === previousDocument) return clone(result)
       state.revision += 1
-      await writeDurableFile(this.filePath, `${canonicalJson(state)}\n`, { mode: 0o600 })
-      this.state = state
-      return clone(result)
+      try { await writeDurableFile(this.filePath, `${canonicalJson(state)}\n`, { mode: 0o600 }) } catch (error) { this.state = undefined; this.initialLoad = undefined; throw error }
+      this.state = state; return clone(result)
     } finally {
       release()
     }
