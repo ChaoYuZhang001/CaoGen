@@ -21,9 +21,9 @@ check('dashboard defaults to today and exposes rolling 24 hour, 7 day, and 30 da
     && ['providerUsageRange_today', 'providerUsageRange_24h', 'providerUsageRange_7d', 'providerUsageRange_30d']
       .every((key) => translations.includes(key)))
 check('Provider settings exposes configuration and billing as peer views',
-  settings.includes('data-provider-surface={surface}')
-    && settings.includes("providerSurface === 'configuration'")
-    && settings.includes("providerSurface === 'usage'"))
+  settings.includes('data-provider-surface={value}')
+    && settings.includes("surface === 'configuration'")
+    && settings.includes("surface === 'usage'"))
 check('Provider and model filters are sent to the main-process query',
   dashboard.includes('providerId: providerId || undefined')
     && dashboard.includes('model: model || undefined')
@@ -64,9 +64,9 @@ check('truncated usage visibly blocks silent full-ledger interpretation',
     && dashboard.includes('data-provider-usage-truncated')
     && translations.includes('providerUsageTruncatedWarning'))
 check('billing reconciliation is scoped to an explicitly selected Provider',
-  dashboard.includes('<ProviderBillingReconciliation')
+    dashboard.includes('<ProviderBillingReconciliation')
     && dashboard.includes('providerId={providerId}')
-    && billing.includes('disabled={!providerId || loading}')
+    && billing.includes('disabled={!providerId || data.loading}')
     && billing.includes('providerBillingSelectProvider'))
 check('billing statements capture only period, USD amount, and a fixed source enum',
   billing.includes("type=\"datetime-local\"")
@@ -74,9 +74,9 @@ check('billing statements capture only period, USD amount, and a fixed source en
     && billing.includes("['provider-api', 'provider-console', 'invoice', 'balance-export', 'other']")
     && !/(apiKey|baseUrl|responseBody|invoiceFile|statementUrl)/.test(billing))
 check('billing reconciliation can sync a configured official API for the selected period',
-  billing.includes('inspectProviderBillingQuery')
+    billing.includes('inspectProviderBillingQuery')
     && billing.includes('syncProviderBillingStatement')
-    && billing.includes('periodStart: syncStart')
+    && billing.includes('periodStart: period.from')
     && billing.includes('periodEnd: syncEnd')
     && billing.includes("result.status === 'ready'"))
 check('billing sync exposes bounded failure states without rendering response payloads',
