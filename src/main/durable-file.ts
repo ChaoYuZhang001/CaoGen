@@ -19,7 +19,7 @@ export async function writeDurableFile(
   const mode = options.mode ?? 0o600
   const replace = options.replace ?? true
   await mkdir(parent, { recursive: true, mode: 0o700 })
-  await cleanupOrphanedTemporaryFiles(parent, basename(target))
+  await cleanupDurableFileOrphans(target)
   const temporary = join(parent, `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`)
   try {
     const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, mode)
@@ -48,7 +48,7 @@ export function writeDurableFileSync(
   const mode = options.mode ?? 0o600
   const replace = options.replace ?? true
   mkdirSync(parent, { recursive: true, mode: 0o700 })
-  cleanupOrphanedTemporaryFilesSync(parent, basename(target))
+  cleanupDurableFileOrphansSync(target)
   const temporary = join(parent, `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`)
   let descriptor: number | undefined
   try {
@@ -102,9 +102,18 @@ function syncDirectorySync(directory: string): void {
   }
 }
 
-async function cleanupOrphanedTemporaryFiles(parent: string, targetName: string): Promise<void> {
+export async function cleanupDurableFileOrphans(targetPath: string): Promise<void> {
+  const target = resolve(targetPath)
+  const parent = dirname(target)
+  const targetName = basename(target)
+  let entries
+  try {
+    entries = await readdir(parent, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
   const prefix = `.${targetName}.`
-  const entries = await readdir(parent, { withFileTypes: true })
   await Promise.all(entries.map(async (entry) => {
     const ownerPid = temporaryOwnerPid(entry.name, prefix)
     if (!entry.isFile() || ownerPid === undefined || processIsAlive(ownerPid)) return
@@ -112,9 +121,19 @@ async function cleanupOrphanedTemporaryFiles(parent: string, targetName: string)
   }))
 }
 
-function cleanupOrphanedTemporaryFilesSync(parent: string, targetName: string): void {
+export function cleanupDurableFileOrphansSync(targetPath: string): void {
+  const target = resolve(targetPath)
+  const parent = dirname(target)
+  const targetName = basename(target)
+  let entries
+  try {
+    entries = readdirSync(parent, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
   const prefix = `.${targetName}.`
-  for (const entry of readdirSync(parent, { withFileTypes: true })) {
+  for (const entry of entries) {
     const ownerPid = temporaryOwnerPid(entry.name, prefix)
     if (!entry.isFile() || ownerPid === undefined || processIsAlive(ownerPid)) continue
     try { rmSync(join(parent, entry.name), { force: true }) } catch { /* next write remains safe */ }
