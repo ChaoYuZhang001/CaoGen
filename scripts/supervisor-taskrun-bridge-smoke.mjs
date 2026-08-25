@@ -52,7 +52,10 @@ try {
     goalId: goal.id, workItemId: workItem.id
   }
   const run = taskRun('bridge-run', meta.id)
-  const supervisor = new supervisorModule.SupervisorStateStore(rootDir)
+  // Keep the synthetic snapshot timestamps in the same clock domain as the
+  // Supervisor store so recovery observations are not mistaken for delayed
+  // provider events.
+  const supervisor = new supervisorModule.SupervisorStateStore(rootDir, { now: () => 1_000 })
 
   await activationModule.prepareSessionDomainOwnershipForActivation(meta, rootDir)
   const snapshot = snapshotModule.buildTaskSnapshot({
