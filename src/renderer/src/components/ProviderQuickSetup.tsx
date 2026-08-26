@@ -16,7 +16,7 @@ import type {
 import { useT } from '../i18n'
 import { PROVIDER_PRESETS, useStore } from '../store'
 import ProviderConnectionDiagnostic from './ProviderConnectionDiagnostic'
-import ProviderPresetCatalog from './ProviderPresetCatalog'
+import ProviderQuickPresetPicker from './ProviderQuickPresetPicker'
 import ProviderGenerationProbe from './ProviderGenerationProbe'
 
 const QUICK_API_PRESETS = PROVIDER_PRESETS.filter((item) => item.key !== 'custom' && item.key !== 'local-openai')
@@ -451,8 +451,7 @@ export default function ProviderQuickSetup({ onAdvanced, onCancel, onSaved }: Pr
         <ProviderQuickSteps />
         <ProviderQuickAccountOptions oauthFlow={oauthFlow} oauthBusy={oauthBusy} busy={busy} localBusy={localBusy} onConnectOAuth={connectOAuth} onConnectLocal={connectLocal} />
         <div className="provider-quick-divider"><span>{t('providerQuickOrKey')}</span></div>
-        <label className="field-label">{t('providerQuickTemplateLabel')}</label>
-        <ProviderPresetCatalog compact presets={QUICK_API_PRESETS} onSelect={(next) => selectPreset(next.key)} />
+        <ProviderQuickPresetPicker preset={preset} presets={QUICK_API_PRESETS} onSelect={(next) => selectPreset(next)} />
         <div className="provider-quick-protocol">
           <span>{preset?.engine === 'anthropic'
             ? t('providerEngineAnthropic')

@@ -7293,6 +7293,47 @@ textarea {
   font-size: 11px;
 }
 
+.provider-quick-selected-service {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.provider-quick-selected-service span {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.provider-quick-selected-service strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.provider-quick-preset-picker {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 9px;
+}
+
+.provider-quick-preset-picker > summary {
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  list-style-position: inside;
+}
+
+.provider-quick-preset-picker > summary:hover,
+.provider-quick-preset-picker > summary:focus-visible,
+.provider-quick-preset-picker[open] > summary {
+  color: var(--text);
+}
+
 .provider-quick-connection-details {
   border-top: 1px solid var(--border-soft);
   padding-top: 10px;

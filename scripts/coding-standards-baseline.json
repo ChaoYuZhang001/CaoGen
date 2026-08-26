@@ -3399,10 +3399,10 @@
     },
     "src/renderer/src/components/ProviderQuickSetup.tsx": {
       "profile": "product",
-      "lines": 520,
-      "contentHash": "294439f780e7a355d2787e9b94d91c801d53f2c2501a9bc86de7c7c391b14419",
+      "lines": 519,
+      "contentHash": "6aa89f943233538d04f2bab221288e0bf8e441ccd401f34e72f3d4ce24af21e2",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 314,
+      "maxFunctionLines": 313,
       "complexFunctionCount": 1,
       "maxComplexity": 16,
       "forbiddenSuppressionCount": 0,
@@ -3410,7 +3410,7 @@
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "ProviderQuickSetup#1": {
-          "lines": 314,
+          "lines": 313,
           "complexity": 16
         }
       }
@@ -4176,7 +4176,7 @@
     "src/renderer/src/components/studio/VideoStudioPanel.tsx": {
       "profile": "product",
       "lines": 841,
-      "contentHash": "b896b70de0bebe59c732e5096ceece74a6aeacc48a90a50f1b0f4e0af9986e91",
+      "contentHash": "bc041946c0d0f3cac1a55a0eba898caf1a2845775b3d162c7795b0cf7c646aca",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 583,
       "complexFunctionCount": 2,

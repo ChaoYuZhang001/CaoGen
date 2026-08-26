@@ -549,6 +549,37 @@
   border-bottom: 1px solid var(--border-soft);
 }
 
+.pws-create-next-step {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.pws-template-details {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.pws-template-details > summary {
+  min-height: 38px;
+  padding: 10px 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  list-style-position: inside;
+}
+
+.pws-template-details > summary:hover,
+.pws-template-details > summary:focus-visible {
+  color: var(--text);
+}
+
+.pws-template-details[open] > summary {
+  color: var(--text);
+}
+
 .pws-template-preview > header {
   display: flex;
   align-items: flex-start;

@@ -23,6 +23,8 @@ export const PROVIDER_SETUP_TRANSLATIONS = {
   providerQuickKeyRequired: { zh: '请先粘贴 API Key', en: 'Paste an API key first' },
   providerQuickBaseUrlRequired: { zh: '\u8bf7\u5148\u586b\u5199 Base URL', en: 'Enter a Base URL first' },
   providerQuickTemplateLabel: { zh: '\u670d\u52a1\u6a21\u677f', en: 'Service preset' },
+  providerQuickBrowsePresets: { zh: '浏览全部服务', en: 'Browse all services' },
+  providerQuickSelectedPreset: { zh: '当前服务', en: 'Selected service' },
   providerCatalogSearch: { zh: '\u641c\u7d22\u5382\u5546\u3001\u534f\u8bae\u3001\u6a21\u578b', en: 'Search vendors, protocols, or models' },
   providerCatalogFilterAll: { zh: '\u5168\u90e8', en: 'All' },
   providerCatalogFilterOfficial: { zh: '\u5b98\u65b9', en: 'Official' },

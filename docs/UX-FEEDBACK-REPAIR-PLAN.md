@@ -17,6 +17,13 @@
 - Project：将执行面板放在验收交付之前，并移除执行操作栏对 `supervisor` 流程锚点的占用，流程条现在与页面顺序一致。
 - 回归：`npm run test:ux-feedback-repair` 覆盖上述入口、必填字段和 DOM 流程顺序；它不替代五名用户计时黄金任务、竞品盲测或发布门禁。
 
+## 2026-08-27 第二轮路径收敛
+
+- Project 新建首屏只保留项目名称、类型和创建动作；模板任务、产物与 Resource 建议默认折叠，并明确创建后立即输入一句话目标。
+- Video 生成区在已有 CaoGen Provider 明确提供 Grok/视频模型、且尚未配置远程视频适配器时，显示“一键启用”入口；普通聊天模型不会被误标为视频服务，手动媒体 Provider 仍可配置。
+- Provider 快速配置默认只展示当前服务、凭据和验证动作；完整预设目录改为按需展开。Provider 列表保留添加、健康检查和迁移能力，Codex/CC Switch 迁移继续位于 Provider 列表之后的兼容工具区。
+- 回归：UX smoke 当前覆盖 `13/13` 条断言；`typecheck`、`build`、Assistant/Studio UI `18/18`、首任务 `15/15`、Provider preset smoke 和本地视频 Provider parity `4/4` 通过。Video MVP 仍是 `contract_only`，不代表远程成片质量或真人验收。
+
 > 安全边界：聊天中出现的 Provider Key 不属于测试输入，不能复制到源码、`.env`、报告、截图或 Git 历史。该 Key 必须在服务端吊销后重新生成；真实 Provider parity 只允许从本机私密配置注入。
 
 ## 五条反馈到修复目标

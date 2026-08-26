@@ -35,6 +35,7 @@ try {
   await page.click('[data-settings-tab="providers"]')
   await page.waitForSelector('.provider-profile-actions button:last-child', { visible: true })
   await page.click('.provider-profile-actions button:last-child')
+  await page.click('[data-provider-quick-preset-picker] > summary')
   await page.waitForSelector('[data-provider-quick-setup] [data-provider-preset-catalog]', { visible: true })
 
   const initialCardCount = await page.$$eval('.provider-preset-card', (items) => items.length)

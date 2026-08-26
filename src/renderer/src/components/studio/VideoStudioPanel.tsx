@@ -38,10 +38,10 @@ import type {
 import { videoStudioText } from '../../i18n/studioTranslations'
 import { useStore } from '../../store'
 import VideoContinuitySection, { type BibleDraft, type LockDraft } from './VideoContinuitySection'
+import { hasRemoteVideoAdapter, VideoProviderQuickEnableButton, VERIFIED_OPENAI_VIDEO_MODELS } from './VideoProviderQuickEnable'
 import './video-studio.css'
 
 const terminalStatuses = new Set(['succeeded', 'failed', 'cancelled', 'waiting_reconciliation'])
-const VERIFIED_OPENAI_VIDEO_MODELS = ['grok-imagine-video', 'grok-imagine-video-1.5']
 
 export function VideoStudioPanel({ active, projectId, productionId }: { active: boolean; projectId?: string; productionId?: string }): React.JSX.Element | null {
   const language = useStore((state) => state.settings.language)
@@ -403,8 +403,7 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
   const advance = (id: string): void => void run(() => window.agentDesk.advanceMediaJob(id))
   const reconcile = (id: string): void => void run(() => window.agentDesk.reconcileMediaJob(id))
   const cancel = (id: string): void => void run(() => window.agentDesk.cancelMediaJob(id))
-  const activeJobCount = useMemo(() => jobs.filter((job) => !terminalStatuses.has(job.status)).length, [jobs])
-  const costSummary = useMemo(() => summarizeMediaCost(production, jobs), [production?.revision, jobs])
+  const activeJobCount = useMemo(() => jobs.filter((job) => !terminalStatuses.has(job.status)).length, [jobs]); const costSummary = useMemo(() => summarizeMediaCost(production, jobs), [production?.revision, jobs])
   if (!projectId) return null
   return <section className="video-studio-panel" aria-labelledby="video-studio-title">
     <header className="video-studio-header">
@@ -557,6 +556,7 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
           <label><span>媒体 Provider</span><select className="input" value={selectedMediaProvider?.id ?? ''} onChange={(event) => setSelectedMediaProviderId(event.target.value)} aria-label="媒体 Provider">{compatibleMediaProviders.map((item) => <option key={item.id} value={item.id}>{item.displayName}{item.model ? ` · ${item.model}` : ''}</option>)}</select></label>
           <span>{selectedMediaProvider?.endpointClass === 'mock' ? '本地模拟，不外发数据' : `使用 ${appProviders.find((item) => item.id === selectedMediaProvider?.providerId)?.name ?? '未绑定 Provider'} 的凭据`}</span>
           {selectedMediaProvider && selectedMediaProvider.id !== 'media-provider:mock-local' && <button type="button" className="btn btn-ghost btn-icon-sm" onClick={() => deleteMediaProvider(selectedMediaProvider.id)} disabled={busy} aria-label="删除媒体 Provider" title="删除媒体 Provider"><CircleMinus size={13} /></button>}
+          <VideoProviderQuickEnableButton busy={busy} appProviders={appProviders} hasRemoteAdapter={hasRemoteVideoAdapter(mediaProviders)} onRun={run} onSaved={setSelectedMediaProviderId} />
         </div>
         <details className="video-studio-provider-editor">
           <summary>添加媒体 Provider</summary>
