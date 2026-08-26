@@ -3997,8 +3997,8 @@
     },
     "src/renderer/src/components/settings/ProviderProfileManager.tsx": {
       "profile": "product",
-      "lines": 589,
-      "contentHash": "2b76706783da806f32219d4aeb6930fc35fffbfcec94e5e72b750ba3e23f5e36",
+      "lines": 597,
+      "contentHash": "912f13b5b3159f8a854f30bcbc7c69c58b63f84c3a0f1267c6d2c2aa7f0d84fb",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 133,
       "complexFunctionCount": 0,
@@ -4122,7 +4122,7 @@
     "src/renderer/src/components/studio/ProjectWorkspaceStudio.tsx": {
       "profile": "product",
       "lines": 785,
-      "contentHash": "3e7e897628a1798d3616bf83f9933ae54c8b12b65323c9c49567c754d5cc89e6",
+      "contentHash": "a70c0581f440470b185fae1fb03911c6ab8b20b87ade3d9ddab34c6eded16534",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 136,
       "complexFunctionCount": 0,
@@ -4175,19 +4175,19 @@
     },
     "src/renderer/src/components/studio/VideoStudioPanel.tsx": {
       "profile": "product",
-      "lines": 827,
-      "contentHash": "81656067b4b1c903f7f8dd7478ca4206d031d0fd31a9437847dcacaea064d1f5",
+      "lines": 841,
+      "contentHash": "b896b70de0bebe59c732e5096ceece74a6aeacc48a90a50f1b0f4e0af9986e91",
       "oversizedFunctionCount": 1,
-      "maxFunctionLines": 579,
+      "maxFunctionLines": 583,
       "complexFunctionCount": 2,
-      "maxComplexity": 91,
+      "maxComplexity": 90,
       "forbiddenSuppressionCount": 0,
       "unreasonedSuppressionCount": 0,
       "malformedDebtMarkerCount": 0,
       "functionDebt": {
         "VideoStudioPanel#1": {
-          "lines": 579,
-          "complexity": 91
+          "lines": 583,
+          "complexity": 90
         },
         "submitShot#1": {
           "lines": 31,
@@ -4503,8 +4503,8 @@
     },
     "src/renderer/src/i18n.ts": {
       "profile": "product",
-      "lines": 1007,
-      "contentHash": "1b4b44605cef6793771afcd7fa595817f41edd6db57f8b4fcdceae08523255d2",
+      "lines": 1014,
+      "contentHash": "5f4841493e9a5c3234226858511fef625eeb89a4bd1d4454edd58ffd3550cfc0",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 6,
       "complexFunctionCount": 0,
