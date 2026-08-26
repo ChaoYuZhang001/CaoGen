@@ -115,13 +115,13 @@
 
 ## 当前状态和下一动作
 
-截至 2026-08-27（Asia/Shanghai），当前 1.0 集成 clean SHA 为 `c4a8eb4a82c3875566a6fb53a600ec45e45e380b`；下列 UX 报告按各自分类记录，未明确绑定该 SHA 的均为 `local_targeted_not_release`：
+截至 2026-08-27（Asia/Shanghai），本计划的上一份 UX 证据曾绑定 `b1c29d54ad7b9e37e31bcf474fc27dde2b6292f6`。本次文档冻结后会产生新的 clean SHA；下面只把报告自身的 `sourceRevision` 当作证据绑定，未在最终 SHA 上重跑的报告一律标记为历史 `local_targeted_not_release`：
 
-- Assistant：当前 SHA 的 Search Golden `4/4`（`test-results/assistant-search-golden/latest.json`），完整 Deep 中首次任务、Assistant/Studio UI 和 live switch 门均通过；这些仍是 `local_targeted_not_release`，真人首任务尚未完成。
-- Project：当前 SHA 的 Golden Delivery `7/7`（`test-results/project-golden-delivery/latest.json`），完整 Deep 中 Project lifecycle、hunk/Diff/Test/Git 和恢复门均通过；真人 Multica/Codex/Claude Work 盲测尚未完成。
-- Video：当前 SHA 的 Provider parity `4/4`（`test-results/video-provider-parity/latest.json`）；Media Store Recovery `4/4` 仍绑定前一 clean SHA。现有证据只证明本地回环 `/v1/videos` 状态机，未调用聊天中暴露的 Key，也不证明商业成片质量、额度、延迟或计费。
-- Provider：当前 SHA 的 CC Switch 导入/原子应用/回滚 `13/13`、Profile Electron/重启、Key failover、target failover 和 Anthropic failover 均在完整 Deep 中通过；本轮 Provider Profile `159/159`、CC Switch smoke `37/37` 通过；仍需绑定发布账本并完成 15 分钟真人 CC Switch 盲测。
-- Cross-entry Continuity：当前 SHA 的 targeted 一轮 `5/5`（`test-results/cross-entry-continuity/latest.json`）。它验证了控制室独立路由返回后，Project 仍恢复同一 Session/Run/Artifact/Evidence/Acceptance 和交付面板，并验证 9 工位上限与来源入口返回；Video 跨入口真人路径仍开放。
+- Assistant：最近 Search Golden `4/4`（`test-results/assistant-search-golden/latest.json`）验证了无项目首任务和失败状态；它仍是 `local_targeted_not_release`，真人首任务尚未完成，最终 SHA 需重跑。
+- Project：最近 Golden Delivery `7/7`（`test-results/project-golden-delivery/latest.json`）验证了目标到交付链；它仍是 `local_targeted_not_release`，真人 Multica/Codex/Claude Work 盲测尚未完成，最终 SHA 需重跑。
+- Video：最近 Provider parity `4/4`（`test-results/video-provider-parity/latest.json`）；Media Store Recovery 的报告仍绑定前一候选。现有证据只证明本地回环 `/v1/videos` 状态机，未调用聊天中暴露的 Key，也不证明商业成片质量、额度、延迟或计费。
+- Provider：最近 CC Switch 导入/原子应用/回滚 `13/13`、Provider Profile `159/159`、CC Switch smoke `37/37` 通过；这些仍需在最终 SHA 绑定发布账本，并完成 15 分钟真人 CC Switch 盲测。
+- Cross-entry Continuity：最近 targeted 一轮 `5/5`（`test-results/cross-entry-continuity/latest.json`）验证了控制室来源返回、同一 Session/Run/Artifact/Evidence/Acceptance 和 9 工位上限；它仍是 `local_targeted_not_release`，最终 SHA 需重跑，Video 跨入口真人路径仍开放。
 - 可信交付恢复：Session deletion journal 与 Artifact content publication 新增独立四类 fault E2E；Artifact 内容改为 no-replace commit、digest readback、死亡临时文件回收和目录 durability。既有 Artifact lifecycle `18` checks、Artifact graph 和 Project permanent deletion 回归通过。
 - 基础质量：前一 clean SHA 的完整 Deep 已通过 `228/228`（`226/226 required pass`、`2 optional skip`、`0 blocked`、`0 fail`）；本轮 UX 提交后的当前 SHA 已通过 `npm run typecheck`、`npm run build`、UX smoke 和 Provider preset smoke，但尚未重跑完整 Deep。此前 Office 性能门的单次失败已由独立复跑和第二次 Deep 稳定通过，仍保留性能趋势观察。当前 SHA 的 `npm run secret:scan` 与 `npm run secret:scan:history` 尚未因本轮 UI 提交重跑；Electron runner 使用独立临时目录和端口，并全部等待退出。
 
