@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
@@ -54,6 +55,8 @@ const report = {
   gate: 'test:cross-entry-continuity',
   requirement: 'UX-GOLDEN-005',
   classification: 'local_targeted_not_release',
+  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+  worktreeStatusCount: gitStatusCount(),
   status: 'failed',
   checks,
   continuity: {},
@@ -448,4 +451,12 @@ function writeReport() {
   writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
   mkdirSync(reportRoot, { recursive: true })
   writeFileSync(path.join(reportRoot, 'latest.json'), output, 'utf8')
+}
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }

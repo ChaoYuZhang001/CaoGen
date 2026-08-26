@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import http from 'node:http'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -239,6 +240,8 @@ try {
   const report = {
     schemaVersion: 1, runId, gate: 'test:assistant-search-golden', status: 'passed',
     requirement: 'UX-GOLDEN-001 / SEARCH-001', classification: 'local_targeted_not_release',
+    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+    worktreeStatusCount: gitStatusCount(),
     checks, searchRequests, modelRequestCount: modelRequests.length,
     explicitlyNotVerified: ['five-user timed acceptance', 'clean release SHA binding', 'commercial search account parity']
   }
@@ -246,7 +249,7 @@ try {
   console.log(`assistant search golden e2e: passed (${checks.length}/${checks.length})`)
   console.log(path.join(reportDir, 'report.json'))
 } catch (error) {
-  writeReport({ schemaVersion: 1, runId, gate: 'test:assistant-search-golden', status: 'failed', checks, error: error instanceof Error ? error.message : String(error), tempRoot, electronStdout: electronStdout.slice(-8000), electronStderr: electronStderr.slice(-16000) })
+  writeReport({ schemaVersion: 1, runId, gate: 'test:assistant-search-golden', status: 'failed', sourceRevision: gitOutput(['rev-parse', 'HEAD']), worktreeStatusCount: gitStatusCount(), checks, error: error instanceof Error ? error.message : String(error), tempRoot, electronStdout: electronStdout.slice(-8000), electronStderr: electronStderr.slice(-16000) })
   throw error
 } finally {
   if (browser) browser.disconnect()
@@ -277,6 +280,14 @@ function copyBuiltApp() {
   rmSync(isolatedOutDir, { recursive: true, force: true })
   mkdirSync(isolatedOutDir, { recursive: true })
   for (const directory of ['main', 'preload', 'renderer']) cpSync(path.join(sourceOutDir, directory), path.join(isolatedOutDir, directory), { recursive: true })
+}
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }
 
 function parseJson(body) {

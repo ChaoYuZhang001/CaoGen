@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -148,6 +149,8 @@ try {
     gate: 'test:video-provider-parity',
     status: 'passed',
     classification: 'local_targeted_not_release',
+    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+    worktreeStatusCount: gitStatusCount(),
     models: ['grok-imagine-video', 'grok-imagine-video-1.5'],
     endpoint: 'POST /v1/videos',
     checks,
@@ -158,7 +161,7 @@ try {
   console.log(`video provider parity e2e: passed (${checks.length}/${checks.length})`)
   console.log(path.join(reportDir, 'report.json'))
 } catch (error) {
-  writeReport({ schemaVersion: 1, runId, gate: 'test:video-provider-parity', status: 'failed', checks, error: error instanceof Error ? error.message : String(error) })
+  writeReport({ schemaVersion: 1, runId, gate: 'test:video-provider-parity', status: 'failed', sourceRevision: gitOutput(['rev-parse', 'HEAD']), worktreeStatusCount: gitStatusCount(), checks, error: error instanceof Error ? error.message : String(error) })
   throw error
 } finally {
   if (browser) browser.disconnect()
@@ -201,6 +204,14 @@ function copyBuiltApp() {
   rmSync(isolatedOutDir, { recursive: true, force: true })
   mkdirSync(isolatedOutDir, { recursive: true })
   for (const directory of ['main', 'preload', 'renderer']) cpSync(path.join(sourceOutDir, directory), path.join(isolatedOutDir, directory), { recursive: true })
+}
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }
 
 function multipartField(body, name) {

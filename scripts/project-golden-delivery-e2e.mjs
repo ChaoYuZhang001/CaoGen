@@ -57,6 +57,8 @@ const report = {
   gate: 'test:project-golden-delivery',
   requirement: 'UX-GOLDEN-002',
   classification: 'local_targeted_not_release',
+  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+  worktreeStatusCount: gitStatusCount(),
   status: 'failed',
   checks,
   projectId: ids.project,
@@ -501,4 +503,12 @@ function writeReport() {
   writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
   mkdirSync(reportRoot, { recursive: true })
   writeFileSync(path.join(reportRoot, 'latest.json'), output, 'utf8')
+}
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }

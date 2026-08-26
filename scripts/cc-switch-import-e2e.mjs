@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -43,10 +43,22 @@ try {
     throw new Error(`CC Switch import E2E incomplete: ${JSON.stringify({ pass: report.pass, total: report.total })}`)
   }
   if (JSON.stringify(report).includes(secret)) throw new Error('CC Switch import E2E report contains secret material')
+  report.sourceRevision = gitOutput(['rev-parse', 'HEAD'])
+  report.worktreeStatusCount = gitStatusCount()
+  writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  writeFileSync(path.join(repoRoot, 'test-results', 'cc-switch-import-e2e', 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
   console.log(`CC Switch import E2E passed: ${report.pass}/${report.total}`)
   console.log(reportDir)
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }
 
 function createFixture() {
