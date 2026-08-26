@@ -2847,8 +2847,8 @@
     },
     "src/main/task/supervisor-state.ts": {
       "profile": "product",
-      "lines": 1208,
-      "contentHash": "4af0722b20ab0697e7519b19a78a4175333177b9ca5eecb7d72896a6a20c0a4f",
+      "lines": 1194,
+      "contentHash": "9c4eb9a49ec94f5c7e2d77798a2608c7f9bfa3545ed584ecd7c5a8429b74fec4",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 53,
       "complexFunctionCount": 1,
@@ -3017,8 +3017,8 @@
     },
     "src/main/task/workflow-artifact-delivery.ts": {
       "profile": "product",
-      "lines": 665,
-      "contentHash": "82dcb74d4e6188cc7356b2c92b15060e943db157819bf380378a83d0b2ae61ae",
+      "lines": 643,
+      "contentHash": "c0bde2cc767e235d5f5f1e50fabf4b464d6ad86b4e7bb998191e884a6a933e81",
       "oversizedFunctionCount": 0,
       "maxFunctionLines": 99,
       "complexFunctionCount": 1,
