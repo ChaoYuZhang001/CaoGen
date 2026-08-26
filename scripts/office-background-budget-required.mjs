@@ -162,7 +162,12 @@ function prepareFixture() {
 }
 
 function verifySourceContract() {
-  const officeView = readSource('src/renderer/src/components/office/OfficeView.tsx')
+  // The interactive 3D Canvas lives behind the lazy OfficeRuntime boundary;
+  // OfficeView owns only the lightweight cold-boot preview.
+  const officeView = [
+    readSource('src/renderer/src/components/office/OfficeView.tsx'),
+    readSource('src/renderer/src/components/office/OfficeRuntime.tsx')
+  ].join('\n')
   const quality = readSource('src/renderer/src/components/office/kit/OfficeRenderQuality.tsx')
   const contract = {
     frameloopNever: /frameloop=["']never["']/.test(officeView),

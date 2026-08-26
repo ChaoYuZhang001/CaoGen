@@ -16,6 +16,10 @@ export interface CodeSignatureProbeResult {
 export type CodeSignatureProbe = (executablePath: string) => CodeSignatureProbeResult
 
 const TEAM_IDENTIFIER = /^[A-Z0-9]{10}$/
+const CODESIGN_ENV: NodeJS.ProcessEnv = Object.freeze({
+  PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+  LC_ALL: 'C'
+})
 
 export function isProtectedStorageRuntimeEligible(
   runtime: ProtectedStorageRuntimeIdentity,
@@ -43,7 +47,7 @@ function probeCodeSignature(executablePath: string): CodeSignatureProbeResult {
   const result = spawnSync(
     '/usr/bin/codesign',
     ['--display', '--verbose=4', executablePath],
-    { encoding: 'utf8', timeout: 2_000, maxBuffer: 64 * 1024 }
+    { encoding: 'utf8', timeout: 2_000, maxBuffer: 64 * 1024, env: CODESIGN_ENV }
   )
   return {
     status: result.status,
