@@ -3,11 +3,11 @@ import {
   mkdir,
   open,
   readFile,
-  rename,
   stat,
   unlink
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { writeDurableFile } from '../durable-file'
 import type {
   SupervisorApprovalInput,
   SupervisorEvent,
@@ -1189,20 +1189,6 @@ function processIsAlive(pid: number): boolean {
   }
 }
 async function writeDocument(filePath: string, document: SupervisorStateDocument): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true })
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const handle = await open(temporary, 'wx', 0o600)
-  try {
-    await handle.writeFile(`${JSON.stringify(document, null, 2)}\n`, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close().catch(() => undefined)
-  }
-  try {
-    await rename(temporary, filePath)
-  } catch (error) {
-    await unlink(temporary).catch(() => undefined)
-    throw error
-  }
+  await writeDurableFile(filePath, `${JSON.stringify(document, null, 2)}\n`)
 }
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))

@@ -539,8 +539,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/task/supervisor-state.ts',
-    'SupervisorStateDocument', '1', 'atomic_fsync_rename', 'implemented_unverified',
-    'Persists Run state, leases, fencing tokens, approvals, budgets, and ordered events.'
+    'SupervisorStateDocument', '1', 'atomic_fsync_rename', 'verified',
+    'Persists Run state, leases, fencing tokens, approvals, budgets, and ordered events with directory durability, dead-writer cleanup, idempotent observations, and revision fencing.',
+    { evidence: ['test-results/supervisor-state-recovery/latest.json'] }
   ),
   domain(
     'src/main/task/task-plan-contract-store.ts',
