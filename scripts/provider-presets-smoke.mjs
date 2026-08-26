@@ -5,6 +5,7 @@ const repoRoot = process.cwd()
 const store = readFileSync(path.join(repoRoot, 'src/renderer/src/store.ts'), 'utf8')
 const editor = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ProviderEditor.tsx'), 'utf8')
 const quickSetup = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ProviderQuickSetup.tsx'), 'utf8')
+const quickPicker = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ProviderQuickPresetPicker.tsx'), 'utf8')
 const catalog = readFileSync(path.join(repoRoot, 'src/renderer/src/components/ProviderPresetCatalog.tsx'), 'utf8')
 const settings = readFileSync(path.join(repoRoot, 'src/main/settings.ts'), 'utf8')
 const providers = readFileSync(path.join(repoRoot, 'src/main/providers.ts'), 'utf8')
@@ -28,8 +29,9 @@ assert(editor.includes('<ProviderQuickSetup'), 'new Provider flow must route thr
 assert(quickSetup.includes('data-provider-quick-setup'), 'new Provider flow must expose the quick setup surface')
 assert(quickSetup.includes("useState('caogen-relay')"), 'quick setup must select the explicit relay preset instead of a hidden provider')
 assert(
-  quickSetup.includes('<ProviderPresetCatalog compact presets={QUICK_API_PRESETS}'),
-  'quick setup must expose the searchable Provider preset catalog'
+  quickSetup.includes('<ProviderQuickPresetPicker') &&
+    quickPicker.includes('<ProviderPresetCatalog compact presets={presets}'),
+  'quick setup must expose the searchable Provider preset catalog through its picker'
 )
 assert(editor.includes('<ProviderPresetCatalog'), 'advanced setup must expose the Provider preset catalog')
 assert(catalog.includes('providerCatalogSearch'), 'Provider preset catalog must support search')
