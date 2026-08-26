@@ -428,14 +428,14 @@ function ProjectContents({
           <div data-project-flow-step="goals"><GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} /></div>
           <div data-project-flow-step="work"><WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} /></div>
           <ProjectExecutionActions projectId={project.id} />
-          <ProgressiveProjectSection label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
+          <ProgressiveProjectSection key={`${project.id}-delivery`} projectId={project.id} label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
             <ProjectDeliveryWorkbench
               active={active}
               projectId={project.id}
               refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
             />
           </ProgressiveProjectSection>
-          <ProgressiveProjectSection label={TEXT.executionSection} description={TEXT.executionSectionDescription} dataKey="supervisor">
+          <ProgressiveProjectSection key={`${project.id}-supervisor`} projectId={project.id} label={TEXT.executionSection} description={TEXT.executionSectionDescription} dataKey="supervisor">
             <ProjectSupervisorView
               active={active}
               projectId={project.id}
@@ -444,7 +444,7 @@ function ProjectContents({
               onRefreshProject={contents.refreshContents}
             />
           </ProgressiveProjectSection>
-          <ProgressiveProjectSection label={TEXT.collaborationSection} description={TEXT.collaborationSectionDescription} dataKey="collaboration">
+          <ProgressiveProjectSection key={`${project.id}-collaboration`} projectId={project.id} label={TEXT.collaborationSection} description={TEXT.collaborationSectionDescription} dataKey="collaboration">
             <ProjectCollaborationView
               projectId={project.id}
               workItems={contents.workItems}
@@ -468,21 +468,29 @@ function ProgressiveProjectSection({
   children,
   dataKey,
   description,
-  label
+  label,
+  projectId
 }: {
   children: ReactNode
   dataKey: 'delivery' | 'supervisor' | 'collaboration'
   description: string
   label: string
+  projectId: string
 }): React.JSX.Element {
-  const [mounted, setMounted] = useState(false)
+  const storageKey = `caogen.project-workspace.section.${projectId}.${dataKey}.open.v1`
+  const [open, setOpen] = useState(() => readSectionOpen(storageKey))
+  const [mounted, setMounted] = useState(open)
   return (
     <details
+      open={open}
       className="pws-advanced-section"
       data-project-advanced-section={dataKey}
       data-project-flow-step={dataKey}
       onToggle={(event) => {
-        if (event.currentTarget.open) setMounted(true)
+        const nextOpen = event.currentTarget.open
+        setOpen(nextOpen)
+        if (nextOpen) setMounted(true)
+        try { window.localStorage.setItem(storageKey, String(nextOpen)) } catch { /* preference persistence is best effort */ }
       }}
     >
       <summary>
@@ -495,6 +503,10 @@ function ProgressiveProjectSection({
       {mounted && <div className="pws-advanced-section-content">{children}</div>}
     </details>
   )
+}
+
+function readSectionOpen(storageKey: string): boolean {
+  try { return window.localStorage.getItem(storageKey) === 'true' } catch { return false }
 }
 
 /**
