@@ -4121,8 +4121,8 @@
     },
     "src/renderer/src/components/studio/ProjectWorkspaceStudio.tsx": {
       "profile": "product",
-      "lines": 773,
-      "contentHash": "2c11331b69de31dec8735b19462780e69d42799f9b8f04362849106d6180b8ad",
+      "lines": 785,
+      "contentHash": "3e7e897628a1798d3616bf83f9933ae54c8b12b65323c9c49567c754d5cc89e6",
       "oversizedFunctionCount": 1,
       "maxFunctionLines": 136,
       "complexFunctionCount": 0,
