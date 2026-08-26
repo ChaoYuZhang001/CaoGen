@@ -2,7 +2,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { chmod, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, extname, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
 import ZipStream from 'zip-stream'
@@ -24,6 +24,7 @@ import {
   type WorkflowArtifactExportSource
 } from './workflow-artifact-export'
 import { readTaskSnapshotDatabase } from './task-snapshot'
+import { writeDurableFile } from '../durable-file'
 import { findWorkflowArtifact } from './workflow-ledger-query'
 import { setupWorkflowLedgerSchema } from './workflow-ledger-store'
 import {
@@ -453,16 +454,14 @@ async function writeDeliveryZipAtomically(
     try { await handle.sync() } finally { await handle.close() }
     const observed = await hashStableFile(temporaryPath)
     await beforePublish()
-    if (process.platform !== 'win32') await chmod(temporaryPath, 0o600)
-    const beforeRename = await lstat(temporaryPath, { bigint: true })
-    await rename(temporaryPath, targetPath)
-    await syncDirectory(parent)
-    const afterRename = await lstat(targetPath, { bigint: true })
-    if (!afterRename.isFile() || afterRename.isSymbolicLink() ||
-        beforeRename.dev !== afterRename.dev || beforeRename.ino !== afterRename.ino ||
-        beforeRename.size !== afterRename.size || beforeRename.mtimeNs !== afterRename.mtimeNs) {
-      throw new Error('Delivery package identity changed during atomic publish')
+    const packageBytes = await readFile(temporaryPath)
+    await writeDurableFile(targetPath, packageBytes)
+    const afterPublish = await lstat(targetPath, { bigint: true })
+    if (!afterPublish.isFile() || afterPublish.isSymbolicLink()) {
+      throw new Error('Delivery package target is not a regular file after durable publish')
     }
+    const published = await readFile(targetPath)
+    if (!published.equals(packageBytes)) throw new Error('Delivery package bytes changed after durable publish')
     return {
       fileName: basename(targetPath),
       sizeBytes: observed.sizeBytes,
@@ -591,33 +590,12 @@ async function writeManifestAtomically(
   const bytes = Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8')
   const parent = dirname(targetPath)
   await mkdir(parent, { recursive: true, mode: 0o700 })
-  const temporaryPath = resolve(parent, `.${basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`)
-  let handle: Awaited<ReturnType<typeof open>> | undefined
-  try {
-    handle = await open(temporaryPath, 'wx', 0o600)
-    await handle.writeFile(bytes)
-    await handle.sync()
-    await handle.close()
-    handle = undefined
-    if (process.platform !== 'win32') await chmod(temporaryPath, 0o600)
-    await rename(temporaryPath, targetPath)
-    await syncDirectory(parent)
-    const stats = await lstat(targetPath)
-    if (!stats.isFile() || stats.isSymbolicLink()) throw new Error('Delivery manifest target is not a regular file')
-    const observed = await readFile(targetPath)
-    if (!observed.equals(bytes)) throw new Error('Delivery manifest bytes changed after export')
-    return { fileName: basename(targetPath), sizeBytes: bytes.byteLength }
-  } catch (error) {
-    await handle?.close().catch(() => undefined)
-    await rm(temporaryPath, { force: true }).catch(() => undefined)
-    throw error
-  }
-}
-
-async function syncDirectory(directory: string): Promise<void> {
-  if (process.platform === 'win32') return
-  const handle = await open(directory, 'r')
-  try { await handle.sync() } finally { await handle.close() }
+  await writeDurableFile(targetPath, bytes)
+  const stats = await lstat(targetPath)
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error('Delivery manifest target is not a regular file')
+  const observed = await readFile(targetPath)
+  if (!observed.equals(bytes)) throw new Error('Delivery manifest bytes changed after export')
+  return { fileName: basename(targetPath), sizeBytes: bytes.byteLength }
 }
 
 async function mapWithConcurrency<T, R>(

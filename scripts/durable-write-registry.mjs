@@ -516,7 +516,8 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   implemented(
     'src/main/task/workflow-artifact-delivery.ts', 'user_artifact', 'atomic_fsync_rename',
-    'Publishes verified delivery manifests and ZIP packages after byte verification, file fsync, atomic rename, and directory sync.'
+    'Publishes verified delivery manifests and ZIP packages after byte verification through the shared fsync, atomic rename, directory durability, and dead-writer cleanup primitive.',
+    { evidence: ['test-results/workflow-artifact-delivery-recovery/latest.json', 'test-results/verified-delivery-flow/latest.json'] }
   ),
   implemented(
     'src/main/task/workflow-artifact-export.ts', 'user_artifact', 'atomic_fsync_rename',
