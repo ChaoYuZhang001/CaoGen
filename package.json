@@ -180,6 +180,7 @@
     "test:search-broker:required": "npm run test:search-broker:smoke && npm run test:search-broker:registration && npm run test:search-broker:runtime && npm run test:search-broker:store-recovery",
     "test:assistant-search-golden": "node scripts/assistant-search-golden-e2e.mjs",
     "test:assistant-search-golden:required": "npm run build && npm run test:assistant-search-golden",
+    "test:ux-feedback-repair": "node scripts/ux-feedback-repair-smoke.mjs",
     "test:video-mvp-contract": "node scripts/video-mvp-contract-smoke.mjs",
     "test:critical-recovery-matrix": "node scripts/critical-recovery-matrix-smoke.mjs",
     "test:critical-recovery-matrix:required": "node scripts/critical-recovery-matrix-smoke.mjs --required",

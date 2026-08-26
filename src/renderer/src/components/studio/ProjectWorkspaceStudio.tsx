@@ -427,14 +427,6 @@ function ProjectContents({
           )}
           <div data-project-flow-step="goals"><GoalsView goals={contents.goals} onCreate={() => onOpenForm('goal')} onControl={onGoalControl} onUpdate={onGoalUpdate} /></div>
           <div data-project-flow-step="work"><WorkItemsView key={project.id} projectId={project.id} goals={contents.goals} items={contents.workItems} view={view} onViewChange={onViewChange} onCreate={() => onOpenForm('workItem')} onControl={onWorkItemControl} onAcceptance={onWorkItemAcceptance} onReorder={onWorkItemReorder} onTransfer={onWorkItemTransfer} /></div>
-          <ProjectExecutionActions projectId={project.id} />
-          <ProgressiveProjectSection key={`${project.id}-delivery`} projectId={project.id} label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
-            <ProjectDeliveryWorkbench
-              active={active}
-              projectId={project.id}
-              refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
-            />
-          </ProgressiveProjectSection>
           <ProgressiveProjectSection key={`${project.id}-supervisor`} projectId={project.id} label={TEXT.executionSection} description={TEXT.executionSectionDescription} dataKey="supervisor">
             <ProjectSupervisorView
               active={active}
@@ -442,6 +434,14 @@ function ProjectContents({
               refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
               workItems={contents.workItems}
               onRefreshProject={contents.refreshContents}
+            />
+          </ProgressiveProjectSection>
+          <ProjectExecutionActions projectId={project.id} />
+          <ProgressiveProjectSection key={`${project.id}-delivery`} projectId={project.id} label={TEXT.deliverySection} description={TEXT.deliverySectionDescription} dataKey="delivery">
+            <ProjectDeliveryWorkbench
+              active={active}
+              projectId={project.id}
+              refreshToken={contents.workItems.map((item) => `${item.id}:${item.revision}`).join('|')}
             />
           </ProgressiveProjectSection>
           <ProgressiveProjectSection key={`${project.id}-collaboration`} projectId={project.id} label={TEXT.collaborationSection} description={TEXT.collaborationSectionDescription} dataKey="collaboration">
@@ -530,7 +530,7 @@ function ProjectExecutionActions({ projectId }: { projectId: string }): React.JS
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   return (
-    <section className="pws-project-execution-actions" data-project-flow-step="supervisor" aria-labelledby="project-execution-actions-title">
+    <section className="pws-project-execution-actions" data-project-execution-actions aria-labelledby="project-execution-actions-title">
       <div className="pws-project-execution-heading">
         <div>
           <h2 id="project-execution-actions-title">执行与交付</h2>

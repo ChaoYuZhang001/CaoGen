@@ -10,6 +10,7 @@ import {
   ListChecks,
   LoaderCircle,
   SearchCode,
+  Settings2,
   type LucideIcon
 } from 'lucide-react'
 import { modelOptionsForProvider, useStore } from '../store'
@@ -478,6 +479,7 @@ function WelcomeComposerBar({
   fixedModelOptions,
   localComputeStatus,
   onProjectPickerToggle,
+  onOpenSettings,
   onRoutingModeChange,
   projectPickerOpen,
   projection,
@@ -492,6 +494,7 @@ function WelcomeComposerBar({
   fixedModelOptions: WelcomeModelOptions
   localComputeStatus: ReturnType<typeof useLocalComputeActivation>['localComputeStatus']
   onProjectPickerToggle: () => void
+  onOpenSettings: () => void
   onRoutingModeChange: (mode: WelcomeRoutingMode) => void
   projectPickerOpen: boolean
   projection: WelcomeProjection
@@ -524,10 +527,23 @@ function WelcomeComposerBar({
         </button>
       )}
       {projection === 'assistant' && !welcomeDraft.forkFromSdkSessionId ? (
-        <AssistantComputeIndicator
-          available={computeAvailable || localComputeStatus === 'ready'}
-          checking={localComputeStatus === 'checking'}
-        />
+        <>
+          <AssistantComputeIndicator
+            available={computeAvailable || localComputeStatus === 'ready'}
+            checking={localComputeStatus === 'checking'}
+          />
+          {!computeAvailable && localComputeStatus !== 'checking' && localComputeStatus !== 'ready' && (
+            <button
+              type="button"
+              className="welcome-connect-service"
+              data-assistant-setup-action="configure-provider"
+              onClick={onOpenSettings}
+            >
+              <Settings2 size={14} aria-hidden="true" />
+              <span>{t('assistantConfigureCompute')}</span>
+            </button>
+          )}
+        </>
       ) : (
         <WelcomeRoutingControls
           driveMode={welcome.driveMode}
@@ -640,6 +656,7 @@ function WelcomeComposer({
           fixedModelOptions={fixedModelOptions}
           localComputeStatus={localComputeStatus}
           onProjectPickerToggle={() => setProjectPickerOpen((open) => !open)}
+          onOpenSettings={onOpenSettings}
           onRoutingModeChange={onRoutingModeChange}
           projectPickerOpen={projectPickerOpen}
           projection={projection}

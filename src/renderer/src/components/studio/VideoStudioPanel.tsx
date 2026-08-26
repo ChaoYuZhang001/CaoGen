@@ -140,8 +140,12 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
   useAssetRetentionDraft(selectedAsset, setRetentionModeDraft, setRetentionUntilDraft)
   const run = useStudioOperationRunner(busy, refresh, setBusy, setError)
   const createProduction = (): void => void run(async () => {
-    if (!projectId || !title.trim() || !script.trim()) throw new Error(text.productionInputRequired)
-    const created = await window.agentDesk.createVideoProduction({ projectId, title, script, autoStructure: true })
+    const productionScript = script.trim()
+    if (!projectId || !productionScript) throw new Error(text.productionInputRequired)
+    const productionTitle = title.trim() && !isDefaultProductionTitle(title, text.defaultProductionTitle)
+      ? title.trim()
+      : titleFromScript(productionScript, text.defaultProductionTitle)
+    const created = await window.agentDesk.createVideoProduction({ projectId, title: productionTitle, script: productionScript, autoStructure: true })
     setSelectedProductionId(created.id)
     setScript('')
   })
@@ -421,9 +425,9 @@ export function VideoStudioPanel({ active, projectId, productionId }: { active: 
 
     {error && <p className="video-studio-error" role="alert">{error}</p>}
     {!production ? <div className="video-studio-create">
-      <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={text.productionTitlePlaceholder} aria-label={text.productionTitleLabel} />
+      <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={text.productionTitlePlaceholder} aria-label={text.productionTitleLabel} data-video-title-optional />
       <textarea className="input" value={script} onChange={(event) => setScript(event.target.value)} placeholder={text.productionScriptPlaceholder} aria-label={text.productionScriptLabel} rows={5} />
-      <button type="button" className="btn btn-primary btn-sm" disabled={busy || !title.trim() || !script.trim()} onClick={createProduction}><Sparkles size={14} aria-hidden="true" />{text.createStoryboard}</button>
+      <button type="button" className="btn btn-primary btn-sm" disabled={busy || !script.trim()} onClick={createProduction}><Sparkles size={14} aria-hidden="true" />{text.createStoryboard}</button>
     </div> : <div className="video-studio-workspace">
       <VideoPreviewFlow
         busy={busy}
@@ -762,6 +766,16 @@ function finalAssetFor(production: VideoProduction | undefined): MediaAsset | un
   return production.assets
     .filter((asset) => asset.kind === 'video' && asset.authorization?.source === 'local_composition')
     .sort((left, right) => right.version - left.version || right.createdAt - left.createdAt)[0]
+}
+
+function titleFromScript(script: string, fallback: string): string {
+  const firstLine = script.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''
+  return firstLine.slice(0, 80) || fallback
+}
+
+function isDefaultProductionTitle(value: string, localizedDefault: string): boolean {
+  const normalized = value.trim()
+  return normalized === localizedDefault || normalized === '新短片' || normalized === 'New video'
 }
 
 const assetKinds: Array<[MediaAssetKind, string]> = [['character', '角色'], ['scene', '场景'], ['prop', '道具'], ['voice', '声线'], ['image', '图片'], ['video', '视频'], ['audio', '音频'], ['subtitle', '字幕']]

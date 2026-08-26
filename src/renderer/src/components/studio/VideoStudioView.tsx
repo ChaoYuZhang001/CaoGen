@@ -52,9 +52,9 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
   }, [])
 
   const createVideoProject = async (draft?: { name?: string; script?: string }): Promise<void> => {
-    const projectName = (draft?.name ?? name).trim()
     const productionScript = (draft?.script ?? script).trim()
-    if (!projectName || !productionScript || creating) return
+    const projectName = (draft?.name ?? name).trim() || titleFromScript(productionScript, text.defaultProductionTitle)
+    if (!productionScript || creating) return
     setCreating(true)
     setError('')
     try {
@@ -120,6 +120,11 @@ export default function VideoStudioView({ active = true }: { active?: boolean })
       )}
     </section>
   )
+}
+
+function titleFromScript(script: string, fallback: string): string {
+  const firstLine = script.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''
+  return firstLine.slice(0, 80) || fallback
 }
 
 function bindVideoSidebarEvents(
