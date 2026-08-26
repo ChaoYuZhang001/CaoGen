@@ -550,8 +550,9 @@ export const DURABLE_WRITE_REGISTRY = [
   ),
   domain(
     'src/main/task/task-snapshot.ts',
-    'workflow ledger and Task Snapshot SQLite', '9', 'sqlite_transaction_export', 'implemented_unverified',
-    'Serializes sql.js mutations and publishes the exported database through fsync and rename.'
+    'workflow ledger and Task Snapshot SQLite', '9', 'sqlite_transaction_export', 'verified',
+    'Serializes sql.js mutations and publishes the exported database through shared fsync, atomic rename, directory durability, dead-writer cleanup, and recovery-visible merge semantics.',
+    { evidence: ['test-results/task-snapshot-recovery/latest.json'] }
   ),
   journal(
     'src/main/task/workflow-ledger-migration-storage.ts',

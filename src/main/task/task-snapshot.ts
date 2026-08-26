@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import initSqlJs from 'sql.js'
 import type {
@@ -30,6 +30,7 @@ import { validateLegacyJsonMigrationSource } from './workflow-ledger-readiness'
 import { effectTargetsConflict } from './effect-target-conflict'
 import { setupTaskSnapshotSchema } from './task-snapshot-schema'
 import { stableValueDigest } from './tool-idempotency'
+import { writeDurableFile } from '../durable-file'
 import {
   backfillWorkflowRecoverySessions,
   commitWorkflowLedgerReadMode,
@@ -624,53 +625,7 @@ function validateLegacyJsonSource(sourceBytes: Uint8Array): TaskSnapshotRecord[]
 }
 
 async function persistStore(store: { db: SqlDatabase; path: string }): Promise<void> {
-  const tmpPath = `${store.path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
-  try {
-    await mkdir(dirname(store.path), { recursive: true, mode: 0o700 })
-    const handle = await open(tmpPath, 'w')
-    try {
-      await handle.writeFile(store.db.export())
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    await renameWithRetry(tmpPath, store.path)
-    await syncParentDirectory(store.path)
-  } catch (error) {
-    await rm(tmpPath, { force: true }).catch(() => undefined)
-    throw error
-  }
-}
-
-async function syncParentDirectory(path: string): Promise<void> {
-  if (process.platform === 'win32') return
-  const handle = await open(dirname(path), 'r').catch(() => null)
-  if (!handle) return
-  try {
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function renameWithRetry(tmpPath: string, targetPath: string): Promise<void> {
-  const maxAttempts = process.platform === 'win32' ? 5 : 1
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      await rename(tmpPath, targetPath)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (attempt >= maxAttempts || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) {
-        throw error
-      }
-      await delay(20 * attempt)
-    }
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  await writeDurableFile(store.path, store.db.export())
 }
 
 function readStoreVersion(db: SqlDatabase): number {

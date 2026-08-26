@@ -1045,9 +1045,7 @@ try {
   )
   assert(typeof snapshotStore.flushTaskSnapshotMutations === 'function', 'snapshot store should expose flushTaskSnapshotMutations')
   const taskSnapshotSource = readFileSync(path.join(repoRoot, 'src/main/task/task-snapshot.ts'), 'utf8')
-  assert(taskSnapshotSource.includes('renameWithRetry(tmpPath, store.path)'), 'snapshot store should atomically rename temp db')
-  assert(taskSnapshotSource.includes('rename(tmpPath, targetPath)'), 'snapshot store should use fs rename for replacement')
-  assert(taskSnapshotSource.includes("'.tmp'") || taskSnapshotSource.includes('}.tmp`'), 'snapshot store should write a temp db file')
+  assert(taskSnapshotSource.includes("writeDurableFile(store.path, store.db.export())"), 'snapshot store should use the shared durable publication primitive')
   assert(taskSnapshotSource.includes('mutationQueues.get(key) === queued'), 'settled snapshot mutation queues should be released')
   verifyRecoveryUiAndTray(repoRoot)
 
