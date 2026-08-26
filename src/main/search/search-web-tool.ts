@@ -32,7 +32,12 @@ export async function executeWebSearch(
   const brokerProjectId = meta.unassigned === true ? undefined : projectId
   const result = await broker.search(buildSearchRequest(args, meta, brokerProjectId, workflowRunId, operationId, automaticArtifact, requestedArtifactId, mode, requiredString, optionalNumber))
   await persistSearchOutcome(result, pendingEvidence, automaticArtifact, { projectId, goalId: meta.goalId, workItemId: meta.workItemId, runId: workflowRunId, artifactId: requestedArtifactId }, root)
-  return { ok: result.ok, output: JSON.stringify(result, null, 2) }
+  // Keep the public Assistant result unassigned (`projectId: null`) while
+  // exposing the app-owned durability partition used for replay and Evidence.
+  const output = meta.unassigned === true
+    ? { ...result, personalWorkspaceId: projectId }
+    : result
+  return { ok: result.ok, output: JSON.stringify(output, null, 2) }
 }
 
 function searchMode(value: unknown): SearchBrokerMode | undefined {
