@@ -122,7 +122,7 @@
 
 ## 当前状态和下一动作
 
-截至 2026-08-27（Asia/Shanghai），当前集成 SHA 为 `4f88b5d2e574d7a6a6b5f2c60e7da6a5ba160de3`，工作树 clean。下面只把报告自身的 `sourceRevision` 当作证据绑定；这些 targeted 报告仍不等价于真人验收或正式发布证据：
+截至 2026-08-27（Asia/Shanghai），当前集成代码/测试修复 SHA 为 `f1f91eb81b2902bda8dc2229687edb3d93adfd46`，工作树 clean。下面只把报告自身的 `sourceRevision` 当作证据绑定；这些 targeted 报告仍不等价于真人验收或正式发布证据：
 
 - Assistant：Search Broker required 与 Search Golden `4/4`（`test-results/assistant-search-golden/latest.json`）已绑定当前 SHA，覆盖无项目首任务和六类失败状态；仍是 `local_targeted_not_release`，真人首任务尚未完成。
 - Project：Project Golden Delivery `7/7`（`test-results/project-golden-delivery/latest.json`）已绑定当前 SHA，覆盖目标到交付链；真人 Multica/Codex/Claude Work 盲测尚未完成。
@@ -130,11 +130,11 @@
 - Provider：Provider Profile `159/159`、重启 `13/13`，以及 CC Switch 导入/重启 `37/37 + 12/12`、资产迁移 `22/22` 已在当前 SHA 运行；完整 Provider Electron `81/81` 仍保留上一代码 SHA 的 targeted 记录，仍需当前 SHA 重跑和 15 分钟真人 CC Switch 盲测。
 - Cross-entry Continuity：当前 SHA 的 targeted 报告 `5/5` 验证了控制室来源返回、同一 Session/Run/Artifact/Evidence/Acceptance 和 9 工位上限；仍是 `local_targeted_not_release`，Video 跨入口真人路径仍开放。
 - 可信交付恢复：当前 SHA 的 Search、Media、Artifact、Project、Session、Supervisor、Task Snapshot、Delivery、Routine、Memory、Git index 等 Store 恢复场景均通过各自四类 fault E2E；这不等价于全 writer 矩阵闭合。
-- 基础质量：当前 SHA 已通过 `npm run typecheck`、`npm run build`、UX smoke、Assistant/Studio UI、首任务、Project/Video/Provider/CC Switch targeted gates；Deep、`npm run secret:scan`、`npm run secret:scan:history` 和 Release Doctor 仍需在功能冻结后重新绑定。
+- 基础质量：`f1f91eb8` 已通过 `npm run test:provider-presets`、`npm run typecheck`、UX smoke；核心 targeted 报告仍绑定前一个 clean SHA `b3e2ce5e`。Deep 在 `b3e2ce5e` 暴露了 Provider preset smoke 与组件拆分不一致的问题，已修正为验证 Quick Setup → Picker → searchable Catalog 的真实边界；完整 Deep、`npm run build`、秘密/历史扫描和 Release Doctor 需在该测试修复后的最终 SHA 重新绑定。
 
 这些结果不能替代真人验收或发布门禁。当前 durable writer inventory 为 `109 modules / 612 sink calls / 19 verified / 66 implemented_unverified / 24 exempt`，状态仍是 `inventory_closed_unverified`（`test-results/durable-write-inventory/latest.json`）。Critical Recovery evidence bundle 已在代码 SHA `55d903dd` 重跑，为 `40/44 verified`；四个缺口全部是 `NFR-REC-002` 的 66 个 writer 尚无四类运行时证据。Acceptance Map 已在当前 clean SHA 重跑并失败关闭：`P0 26/64`、`P1 4/38`、关键恢复 `2/11`、88 个 closure failures（`test-results/product-1.0-acceptance-map/2026-08-26T22-27-21-604Z/report.json`）。
 
-当前硬 blocker：五名真人计时黄金任务、固定竞品版本与首轮盲测、N1 真人迁移记录、`NFR-REC-002`、完整 Provider Electron 当前 SHA 重跑、统一 provenance bundle、签名/公证/隔离安装/升级回滚、发布资产审计均未闭合。Recovery bundle 需在包含本次文档提交的最终 SHA 再绑定，当前代码 SHA 的结果为 `40/44 verified`。Deep、秘密/历史扫描和 Release Doctor 仍需在功能冻结后重新绑定；Release Doctor 仍不能视为 ready，包版本仍为 `0.1.9`，不能视为 1.0 发布。
+当前硬 blocker：五名真人计时黄金任务、固定竞品版本与首轮盲测、N1 真人迁移记录、`NFR-REC-002`、完整 Provider Electron 当前 SHA 重跑、完整 Deep 重跑、统一 provenance bundle、签名/公证/隔离安装/升级回滚、发布资产审计均未闭合。Recovery bundle 最近在代码 SHA `b3e2ce5e` 为 `40/44 verified`，测试修复后的最终 SHA 需重新绑定。秘密/历史扫描和 Release Doctor 仍需在功能冻结后重新绑定；Release Doctor 仍不能视为 ready，包版本仍为 `0.1.9`，不能视为 1.0 发布。
 
 下一执行顺序固定为：
 
