@@ -845,9 +845,16 @@ const DICT: Dict = {
   addProvider: { zh: '+ 添加', en: '+ Add' },
   officialAnthropic: { zh: '未选择 Provider', en: 'No Provider selected' },
   providerEmpty: {
-    zh: '尚未配置可用 Provider。新建会话前请先添加并填写 API key。',
-    en: 'No usable Provider is configured. Add one with an API key before starting a session.'
+    zh: '还没有可用服务',
+    en: 'No usable service yet'
   },
+  providerEmptyHint: {
+    zh: '添加一个服务并验证连接，之后助手、项目和视频会共用它。',
+    en: 'Add and verify one service; Assistant, Projects, and Video will share it.'
+  },
+  providerEmptyAction: { zh: '添加 Provider', en: 'Add Provider' },
+  providerCompatibilityTitle: { zh: '从其他工具迁移（可选）', en: 'Migrate from other tools (optional)' },
+  providerCompatibilityHint: { zh: 'CC Switch 和 Codex 配置只在需要迁移时使用，不影响直接添加服务。', en: 'Use CC Switch or Codex import only when you need migration; direct setup stays above.' },
   providerProbe: { zh: '检测', en: 'Probe' },
   providerProbing: { zh: '检测中…', en: 'Probing…' },
   providerSetDefault: { zh: '设为默认', en: 'Make default' },

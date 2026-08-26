@@ -69,7 +69,7 @@ export default function ProviderList({
       <ProviderAccountOverview providers={providers} onEdit={onEdit} />
       {defaultError && <div className="notice notice-error provider-profile-notice" role="alert">{defaultError}</div>}
       <div className="provider-list">
-        {providers.length === 0 && <div className="provider-empty">{t('providerEmpty')}</div>}
+        {providers.length === 0 && <ProviderEmpty onAdd={onAdd} />}
         {providers.map((provider) => (
           <ProviderListRow
             key={provider.id}
@@ -87,6 +87,20 @@ export default function ProviderList({
         ))}
       </div>
     </ProviderProfileManager>
+  )
+}
+
+function ProviderEmpty({ onAdd }: { onAdd: () => void }): React.JSX.Element {
+  const t = useT()
+  return (
+    <div className="provider-empty" role="status" data-provider-empty>
+      <strong>{t('providerEmpty')}</strong>
+      <span>{t('providerEmptyHint')}</span>
+      <button type="button" className="btn btn-primary btn-sm" data-provider-empty-action onClick={onAdd}>
+        <Settings2 size={14} aria-hidden="true" />
+        {t('providerEmptyAction')}
+      </button>
+    </div>
   )
 }
 

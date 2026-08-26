@@ -50,14 +50,22 @@ export default function ProviderProfileManager({ providers, onAdd, children }: P
         </div>
       </div>
       <p className="settings-hint provider-profile-hint">{t('providerProfileSafetyHint')}</p>
-      <CcSwitchImportPanel />
-      <CodexNativeConfigWorkspace />
       {profile.message && <div className="notice notice-info provider-profile-notice">{profile.message}</div>}
       {profile.error && <div className="notice notice-error provider-profile-notice">{profile.error}</div>}
       {profile.nativePreview && <ProviderNativeCodexPreview profile={profile} />}
       {profile.preview && <ProviderProfilePreviewPanel profile={profile} />}
       {profile.backupPreview && <ProviderProfileBackupPreviewPanel profile={profile} />}
       {children}
+      <section className="provider-compatibility-tools" aria-label={t('providerCompatibilityTitle')}>
+        <div className="provider-compatibility-tools-head">
+          <div>
+            <h4>{t('providerCompatibilityTitle')}</h4>
+            <p>{t('providerCompatibilityHint')}</p>
+          </div>
+        </div>
+        <CcSwitchImportPanel />
+        <CodexNativeConfigWorkspace />
+      </section>
       {profile.nativeBackups.length > 0 && <ProviderNativeBackups profile={profile} />}
       {profile.backups.length > 0 && <ProviderProfileBackups profile={profile} />}
     </>

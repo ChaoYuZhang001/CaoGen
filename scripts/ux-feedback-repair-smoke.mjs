@@ -8,6 +8,8 @@ const quickStart = source('src/renderer/src/components/studio/VideoQuickStart.ts
 const videoView = source('src/renderer/src/components/studio/VideoStudioView.tsx')
 const videoPanel = source('src/renderer/src/components/studio/VideoStudioPanel.tsx')
 const project = source('src/renderer/src/components/studio/ProjectWorkspaceStudio.tsx')
+const providerList = source('src/renderer/src/components/settings/ProviderList.tsx')
+const providerManager = source('src/renderer/src/components/settings/ProviderProfileManager.tsx')
 
 const assertions = [
   [welcome.includes('data-assistant-setup-action="configure-provider"'), 'Assistant exposes an inline provider setup action'],
@@ -17,7 +19,9 @@ const assertions = [
   [videoView.includes('titleFromScript(productionScript, text.defaultProductionTitle)'), 'Video quick start derives a title when omitted'],
   [videoPanel.includes('titleFromScript(productionScript, text.defaultProductionTitle)'), 'Existing project video creation derives a title when omitted'],
   [project.indexOf('data-project-flow-step="supervisor"') < project.indexOf('data-project-flow-step="delivery"'), 'Project execution appears before delivery in the DOM'],
-  [!project.includes('data-project-flow-step="supervisor" aria-labelledby="project-execution-actions-title"'), 'Execution actions do not shadow the execution flow anchor']
+  [!project.includes('data-project-flow-step="supervisor" aria-labelledby="project-execution-actions-title"'), 'Execution actions do not shadow the execution flow anchor'],
+  [providerList.includes('data-provider-empty-action'), 'Provider empty state exposes a primary add action'],
+  [providerManager.indexOf('<section className="provider-compatibility-tools"') > providerManager.indexOf('{children}'), 'Provider migration tools are secondary to the provider list']
 ]
 
 const failures = assertions.filter(([ok]) => !ok).map(([, message]) => message)

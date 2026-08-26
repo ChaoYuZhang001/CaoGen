@@ -7215,6 +7215,27 @@ textarea {
   background: var(--bg-input);
 }
 
+.provider-compatibility-tools {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.provider-compatibility-tools-head h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.provider-compatibility-tools-head p {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .provider-quick-steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
