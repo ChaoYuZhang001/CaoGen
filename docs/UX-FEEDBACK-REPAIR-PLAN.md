@@ -46,7 +46,7 @@
 - 保持 Assistant、Project、Video 三个业务入口；控制室只做真实状态投影。
 - 将模式切换固定在侧栏顶部，保留会话/草稿/运行状态，不因切换创建第二份任务。
 - 为 Project 固定“目标 → 任务 → 执行 → 验收交付”流程，为 Video 固定“剧本 → 分镜 → 生成 → 预览/导出”流程。
-- Provider 首屏只展示模板、凭据、验证/默认三步；高级字段折叠。
+- Provider 首屏只展示模板、凭据、验证/默认三步；高级字段折叠。CC Switch/Codex 迁移已降为列表之后的可选工具。
 - 每个入口补来源返回动作、空状态、失败状态、键盘焦点和紧凑桌面布局。
 
 阶段出口：`test:assistant-studio-ui:required`、`test:first-task-onboarding`、`test:coding-standards`、`npm run typecheck`、`npm run build` 均通过；不得出现遮挡、截断或失焦。
@@ -115,12 +115,12 @@
 
 ## 当前状态和下一动作
 
-截至 2026-08-27（Asia/Shanghai），当前 1.0 集成 clean SHA 为 `8968dd022cf99269714c40f0b4260f5b79bb6679`；下列 UX 报告按各自分类记录，未明确绑定该 SHA 的均为 `local_targeted_not_release`：
+截至 2026-08-27（Asia/Shanghai），当前 1.0 集成 clean SHA 为 `c4a8eb4a82c3875566a6fb53a600ec45e45e380b`；下列 UX 报告按各自分类记录，未明确绑定该 SHA 的均为 `local_targeted_not_release`：
 
 - Assistant：当前 SHA 的 Search Golden `4/4`（`test-results/assistant-search-golden/latest.json`），完整 Deep 中首次任务、Assistant/Studio UI 和 live switch 门均通过；这些仍是 `local_targeted_not_release`，真人首任务尚未完成。
 - Project：当前 SHA 的 Golden Delivery `7/7`（`test-results/project-golden-delivery/latest.json`），完整 Deep 中 Project lifecycle、hunk/Diff/Test/Git 和恢复门均通过；真人 Multica/Codex/Claude Work 盲测尚未完成。
 - Video：当前 SHA 的 Provider parity `4/4`（`test-results/video-provider-parity/latest.json`）；Media Store Recovery `4/4` 仍绑定前一 clean SHA。现有证据只证明本地回环 `/v1/videos` 状态机，未调用聊天中暴露的 Key，也不证明商业成片质量、额度、延迟或计费。
-- Provider：当前 SHA 的 CC Switch 导入/原子应用/回滚 `13/13`、Profile Electron/重启、Key failover、target failover 和 Anthropic failover 均在完整 Deep 中通过；仍需绑定发布账本并完成 15 分钟真人 CC Switch 盲测。
+- Provider：当前 SHA 的 CC Switch 导入/原子应用/回滚 `13/13`、Profile Electron/重启、Key failover、target failover 和 Anthropic failover 均在完整 Deep 中通过；本轮 Provider Profile `159/159`、CC Switch smoke `37/37` 通过；仍需绑定发布账本并完成 15 分钟真人 CC Switch 盲测。
 - Cross-entry Continuity：当前 SHA 的 targeted 一轮 `5/5`（`test-results/cross-entry-continuity/latest.json`）。它验证了控制室独立路由返回后，Project 仍恢复同一 Session/Run/Artifact/Evidence/Acceptance 和交付面板，并验证 9 工位上限与来源入口返回；Video 跨入口真人路径仍开放。
 - 可信交付恢复：Session deletion journal 与 Artifact content publication 新增独立四类 fault E2E；Artifact 内容改为 no-replace commit、digest readback、死亡临时文件回收和目录 durability。既有 Artifact lifecycle `18` checks、Artifact graph 和 Project permanent deletion 回归通过。
 - 基础质量：前一 clean SHA 的完整 Deep 已通过 `228/228`（`226/226 required pass`、`2 optional skip`、`0 blocked`、`0 fail`）；本轮 UX 提交后的当前 SHA 已通过 `npm run typecheck`、`npm run build`、UX smoke 和 Provider preset smoke，但尚未重跑完整 Deep。此前 Office 性能门的单次失败已由独立复跑和第二次 Deep 稳定通过，仍保留性能趋势观察。当前 SHA 的 `npm run secret:scan` 与 `npm run secret:scan:history` 尚未因本轮 UI 提交重跑；Electron runner 使用独立临时目录和端口，并全部等待退出。
