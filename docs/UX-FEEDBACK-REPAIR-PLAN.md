@@ -115,19 +115,19 @@
 
 ## 当前状态和下一动作
 
-截至 2026-08-27（Asia/Shanghai），当前 1.0 集成 clean SHA 为 `9fc10b5803aca438ca57b66ac1c541a3cc2f740c`；下列 UX 报告按各自分类记录，未明确绑定该 SHA 的均为 `local_targeted_not_release`：
+截至 2026-08-27（Asia/Shanghai），当前 1.0 集成 clean SHA 为 `8968dd022cf99269714c40f0b4260f5b79bb6679`；下列 UX 报告按各自分类记录，未明确绑定该 SHA 的均为 `local_targeted_not_release`：
 
 - Assistant：当前 SHA 的 Search Golden `4/4`（`test-results/assistant-search-golden/latest.json`），完整 Deep 中首次任务、Assistant/Studio UI 和 live switch 门均通过；这些仍是 `local_targeted_not_release`，真人首任务尚未完成。
 - Project：当前 SHA 的 Golden Delivery `7/7`（`test-results/project-golden-delivery/latest.json`），完整 Deep 中 Project lifecycle、hunk/Diff/Test/Git 和恢复门均通过；真人 Multica/Codex/Claude Work 盲测尚未完成。
-- Video：当前 SHA 的 Provider parity `4/4`（`test-results/video-provider-parity/latest.json`）和 Media Store Recovery `4/4`（`test-results/media-store-recovery/latest.json`），完整 Deep 中 Video Studio golden path 通过。现有证据只证明本地回环 `/v1/videos` 状态机，未调用聊天中暴露的 Key，也不证明商业成片质量、额度、延迟或计费。
+- Video：当前 SHA 的 Provider parity `4/4`（`test-results/video-provider-parity/latest.json`）；Media Store Recovery `4/4` 仍绑定前一 clean SHA。现有证据只证明本地回环 `/v1/videos` 状态机，未调用聊天中暴露的 Key，也不证明商业成片质量、额度、延迟或计费。
 - Provider：当前 SHA 的 CC Switch 导入/原子应用/回滚 `13/13`、Profile Electron/重启、Key failover、target failover 和 Anthropic failover 均在完整 Deep 中通过；仍需绑定发布账本并完成 15 分钟真人 CC Switch 盲测。
 - Cross-entry Continuity：当前 SHA 的 targeted 一轮 `5/5`（`test-results/cross-entry-continuity/latest.json`）。它验证了控制室独立路由返回后，Project 仍恢复同一 Session/Run/Artifact/Evidence/Acceptance 和交付面板，并验证 9 工位上限与来源入口返回；Video 跨入口真人路径仍开放。
 - 可信交付恢复：Session deletion journal 与 Artifact content publication 新增独立四类 fault E2E；Artifact 内容改为 no-replace commit、digest readback、死亡临时文件回收和目录 durability。既有 Artifact lifecycle `18` checks、Artifact graph 和 Project permanent deletion 回归通过。
-- 基础质量：当前 SHA 的完整 Deep 已通过 `228/228`（`226/226 required pass`、`2 optional skip`、`0 blocked`、`0 fail`），前后工作树和提交均未漂移；此前 Office 性能门的单次失败已由独立复跑和第二次 Deep 稳定通过，仍保留性能趋势观察。当前 SHA 的 `npm run secret:scan` 与 `npm run secret:scan:history` 已通过，历史扫描已改为唯一 blob 流式遍历；Electron runner 使用独立临时目录和端口，并全部等待退出。
+- 基础质量：前一 clean SHA 的完整 Deep 已通过 `228/228`（`226/226 required pass`、`2 optional skip`、`0 blocked`、`0 fail`）；本轮 UX 提交后的当前 SHA 已通过 `npm run typecheck`、`npm run build`、UX smoke 和 Provider preset smoke，但尚未重跑完整 Deep。此前 Office 性能门的单次失败已由独立复跑和第二次 Deep 稳定通过，仍保留性能趋势观察。当前 SHA 的 `npm run secret:scan` 与 `npm run secret:scan:history` 尚未因本轮 UI 提交重跑；Electron runner 使用独立临时目录和端口，并全部等待退出。
 
 这些结果不能替代真人验收或发布门禁。当前 durable writer inventory 为 `109 modules / 612 sink calls / 19 verified / 66 implemented_unverified / 24 exempt`，状态仍是 `inventory_closed_unverified`（`test-results/durable-write-inventory/latest.json`）。Critical Recovery evidence bundle 已在当前 SHA 重跑，为 `40/44 verified`；四个缺口全部是 `NFR-REC-002` 的 66 个 writer 尚无四类运行时证据（`test-results/critical-recovery-evidence/latest.json`）。Acceptance Map 已重新绑定但仍为 `P0 26/64`、`P1 4/38`、关键恢复 `2/11`、88 个 closure failure，不能作为发布通过证据（`test-results/product-1.0-acceptance-map/latest.json`）。
 
-当前硬 blocker：五名真人计时黄金任务、固定竞品版本与首轮盲测、N1 真人迁移记录、`NFR-REC-002`、统一 provenance bundle、签名/公证/隔离安装/升级回滚、发布资产审计均未闭合。跨入口、Project delivery、Assistant Search、Video Provider parity 已绑定当前 clean SHA；Acceptance Map 仍为 `P0 26/64`、`P1 4/38`、关键恢复 `2/11`、88 个 closure failure；Recovery bundle 最新仍为 `40/44 verified`，四个缺口全部来自 `NFR-REC-002`。Deep 已通过但不等价于产品验收或发布准备。Release Doctor 最新仍为 `not_ready`（`test-results/workos-release-doctor/latest.json`，绑定 `9fc10b58`），包版本仍为 `0.1.9`，不能视为 1.0 发布。
+当前硬 blocker：五名真人计时黄金任务、固定竞品版本与首轮盲测、N1 真人迁移记录、`NFR-REC-002`、统一 provenance bundle、签名/公证/隔离安装/升级回滚、发布资产审计均未闭合。跨入口、Project delivery、Assistant Search、Video Provider parity 已绑定当前 clean SHA；Acceptance Map 仍为 `P0 26/64`、`P1 4/38`、关键恢复 `2/11`、88 个 closure failure，且仍绑定前一 clean SHA；Recovery bundle 最新仍为 `40/44 verified`，四个缺口全部来自 `NFR-REC-002`，也仍绑定前一 clean SHA。Deep 尚未针对当前 UX 提交重跑，且不等价于产品验收或发布准备。Release Doctor 最新仍为 `not_ready`（`test-results/workos-release-doctor/latest.json`，绑定 `9fc10b58`），包版本仍为 `0.1.9`，不能视为 1.0 发布。
 
 下一执行顺序固定为：
 
