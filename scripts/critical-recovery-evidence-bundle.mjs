@@ -29,6 +29,16 @@ const reportSources = {
   providerProfileRestart: findLatestReport('test-results/provider-profile-restart')
 }
 
+const prerequisiteReportCommands = [
+  'test:supervisor-state',
+  'test:supervisor-restart:required',
+  'test:domain-restart-parity:required',
+  'test:notification-effect:required',
+  'test:session-deletion-recovery:required',
+  'test:provider-profile:restart'
+]
+for (const script of prerequisiteReportCommands) runCommand(script)
+
 addReportCell('RUN-004', 'strong_kill', 'supervisorRestart',
   'SIGKILL child recovery blocks the run, expires the lease, and preserves fencing')
 addReportCell('RUN-004', 'network_unknown_result', 'supervisorState',
@@ -154,7 +164,9 @@ const expectedFaults = ['strong_kill', 'network_unknown_result', 'duplicate_idem
 for (const requirementId of expectedRequirements) {
   for (const faultClass of expectedFaults) {
     if (cells.some((cell) => cell.requirementId === requirementId && cell.faultClass === faultClass)) continue
-    const reason = 'no explicit runtime evidence mapping exists yet'
+    const reason = requirementId === 'NFR-REC-002'
+      ? durableWriterGapReason()
+      : 'no explicit runtime evidence mapping exists yet'
     cells.push({ requirementId, faultClass, status: 'open', reason, evidence: [] })
     gaps.push({ requirementId, faultClass, reason })
   }
@@ -286,6 +298,21 @@ function findLatestReport(root) {
 
 function hasCheck(report, id) {
   return Array.isArray(report.checks) && report.checks.some((check) => check.id === id)
+}
+
+function durableWriterGapReason() {
+  const sourcePath = path.join(repoRoot, 'test-results', 'durable-write-inventory', 'latest.json')
+  if (!existsSync(sourcePath)) return 'durable writer runtime evidence inventory is missing'
+  try {
+    const inventory = JSON.parse(readFileSync(sourcePath, 'utf8'))
+    const recovery = inventory.summary?.recovery ?? {}
+    const open = Number(recovery.implemented_unverified ?? 0) + Number(recovery.gap ?? 0)
+    return open > 0
+      ? `${open} durable writers still lack runtime recovery evidence`
+      : 'durable writer inventory is not fully bound to four-class runtime evidence'
+  } catch {
+    return 'durable writer runtime evidence inventory is invalid'
+  }
 }
 
 function git(args) {
