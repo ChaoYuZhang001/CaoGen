@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -24,6 +25,7 @@ if (workerMode) await runWorker()
 else await runParent()
 
 async function runParent() {
+  const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
   let report
   try {
     compileSources()
@@ -40,10 +42,11 @@ async function runParent() {
       runId,
       status: 'passed',
       verification: 'runtime_store_verified',
-      sourceRevision: git(['rev-parse', 'HEAD']),
-      worktreeStatusCount: gitStatusCount(),
+      sourceRevision: sourceEvidenceAtStart.commit,
+      worktreeStatusCount: sourceEvidenceAtStart.statusEntryCount,
       writer: 'src/main/media/media-store.ts',
       scope: 'MediaJob durable operation transitions',
+      warnings: [],
       faults: {
         strong_kill: { status: 'verified', scenarios: strongKill },
         network_unknown_result: { status: 'verified', scenario: unknownResult },
@@ -65,12 +68,25 @@ async function runParent() {
       runId,
       status: 'failed',
       verification: 'not_verified',
-      sourceRevision: git(['rev-parse', 'HEAD']),
-      worktreeStatusCount: gitStatusCount(),
+      sourceRevision: sourceEvidenceAtStart.commit,
+      worktreeStatusCount: sourceEvidenceAtStart.statusEntryCount,
+      warnings: [],
       error: serializeError(error)
     }
     process.exitCode = 1
   } finally {
+    const sourceEvidenceAtEnd = readSourceEvidenceState(repoRoot)
+    bindSourceEvidence(report, sourceEvidenceAtStart, sourceEvidenceAtEnd, 'Media Store recovery')
+    report.releaseBinding = {
+      sourceRevision: report.sourceRevision,
+      sourceRevisionAtEnd: report.sourceRevisionAtEnd,
+      git: sourceEvidenceAtEnd,
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.version
+    }
+    report.status = report.status === 'passed' && !report.error ? 'passed' : 'failed'
+    if (report.status !== 'passed') process.exitCode = 1
     mkdirSync(reportDir, { recursive: true })
     const serialized = `${JSON.stringify(report, null, 2)}\n`
     writeFileSync(path.join(reportDir, 'report.json'), serialized, 'utf8')
@@ -317,14 +333,6 @@ function readDocument(root) {
 function temporaryFiles(root) {
   if (!existsSync(root)) return []
   return readdirSync(root).filter((name) => name.startsWith('.media-studio.json.') && name.endsWith('.tmp')).sort()
-}
-
-function git(args) {
-  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
-}
-
-function gitStatusCount() {
-  return git(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }
 
 function requiredEnv(name) {

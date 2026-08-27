@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -9,10 +8,13 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
+const packageJson = require(path.join(repoRoot, 'package.json'))
+const electronPackage = require('electron/package.json')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
@@ -27,6 +29,27 @@ const fixtureCredential = randomUUID()
 const requests = []
 const jobs = new Map()
 const checks = []
+const sourceGitAtStart = readSourceEvidenceState(repoRoot)
+const report = {
+  schemaVersion: 1,
+  runId,
+  gate: 'test:video-provider-parity',
+  status: 'running',
+  classification: 'local_targeted_not_release',
+  packageVersion: packageJson.version,
+  sourceRevision: sourceGitAtStart.commit,
+  worktreeStatusCount: sourceGitAtStart.statusEntryCount,
+  platform: process.platform,
+  arch: process.arch,
+  nodeVersion: process.version,
+  electronVersion: electronPackage.version,
+  models: ['grok-imagine-video', 'grok-imagine-video-1.5'],
+  endpoint: 'POST /v1/videos',
+  checks,
+  requestSummary: [],
+  warnings: [],
+  explicitlyNotVerified: ['real ciyuan2api.com credentials or production quota', 'commercial video quality parity', 'five-user timed acceptance and clean release SHA binding']
+}
 
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
   assert(existsSync(path.join(sourceOutDir, entry)), `Built app entry missing: out/${entry}. Run npm run build first.`)
@@ -143,32 +166,39 @@ try {
     assert.equal(cancelled.status, 'cancelled')
   })
 
-  const report = {
-    schemaVersion: 1,
-    runId,
-    gate: 'test:video-provider-parity',
-    status: 'passed',
-    classification: 'local_targeted_not_release',
-    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
-    worktreeStatusCount: gitStatusCount(),
-    models: ['grok-imagine-video', 'grok-imagine-video-1.5'],
-    endpoint: 'POST /v1/videos',
-    checks,
-    requestSummary: requests.map((item) => ({ method: item.method, path: item.path, contentType: item.contentType, model: multipartField(Buffer.from(item.body), 'model') || undefined })),
-    explicitlyNotVerified: ['real ciyuan2api.com credentials or production quota', 'commercial video quality parity', 'five-user timed acceptance and clean release SHA binding']
-  }
-  writeReport(report)
-  console.log(`video provider parity e2e: passed (${checks.length}/${checks.length})`)
-  console.log(path.join(reportDir, 'report.json'))
+  report.status = 'passed'
+  report.requestSummary = requests.map((item) => ({ method: item.method, path: item.path, contentType: item.contentType, model: multipartField(Buffer.from(item.body), 'model') || undefined }))
 } catch (error) {
-  writeReport({ schemaVersion: 1, runId, gate: 'test:video-provider-parity', status: 'failed', sourceRevision: gitOutput(['rev-parse', 'HEAD']), worktreeStatusCount: gitStatusCount(), checks, error: error instanceof Error ? error.message : String(error) })
-  throw error
+  report.status = 'failed'
+  report.error = error instanceof Error ? error.stack || error.message : String(error)
 } finally {
   if (browser) browser.disconnect()
   if (electron) await terminateElectronTestProcess(electron)
   await close(server)
+  const sourceGitAtEnd = readSourceEvidenceState(repoRoot)
+  bindSourceEvidence(report, sourceGitAtStart, sourceGitAtEnd, 'Video Provider parity')
+  report.releaseBinding = {
+    packageVersion: report.packageVersion,
+    sourceRevision: report.sourceRevision,
+    sourceRevisionAtEnd: report.sourceRevisionAtEnd,
+    git: sourceGitAtEnd,
+    platform: report.platform,
+    arch: report.arch,
+    nodeVersion: report.nodeVersion,
+    electronVersion: report.electronVersion
+  }
+  report.status = checks.every((item) => item.status === 'pass') && !report.error ? 'passed' : 'failed'
+  writeReport(report)
   rmSync(tempRoot, { recursive: true, force: true })
 }
+
+if (report.status === 'passed') {
+  console.log(`video provider parity e2e: passed (${checks.length}/${checks.length})`)
+  console.log(path.join(reportDir, 'report.json'))
+} else {
+  console.error(`video provider parity e2e: failed: ${report.error || 'check failure'}`)
+}
+process.exit(report.status === 'passed' ? 0 : 1)
 
 async function runSuccessfulModel(fixture, model) {
   const job = await page.evaluate((value) => window.agentDesk.submitMediaJob({
@@ -204,14 +234,6 @@ function copyBuiltApp() {
   rmSync(isolatedOutDir, { recursive: true, force: true })
   mkdirSync(isolatedOutDir, { recursive: true })
   for (const directory of ['main', 'preload', 'renderer']) cpSync(path.join(sourceOutDir, directory), path.join(isolatedOutDir, directory), { recursive: true })
-}
-
-function gitOutput(args) {
-  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
-}
-
-function gitStatusCount() {
-  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }
 
 function multipartField(body, name) {

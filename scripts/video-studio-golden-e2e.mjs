@@ -3,11 +3,11 @@
 import assert from 'node:assert/strict'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -29,8 +29,7 @@ const electronBin = process.platform === 'win32'
 const projectName = `Video Golden ${runId}`
 const initialScript = 'Scene one: a camera moves from the city morning into the workbench.\nScene two: the product completes a clear demonstration.'
 const revisedScript = `${initialScript}\nScene three: the ending shows a clear call to action.`
-const gitCommit = readGit(['rev-parse', 'HEAD'])
-const worktreeStatus = readGit(['status', '--porcelain=v1']).split('\n').filter(Boolean)
+const sourceGitAtStart = readSourceEvidenceState(repoRoot)
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
@@ -48,10 +47,12 @@ const report = {
   requirement: 'VID-MVP-001',
   gate: 'test:video-studio-golden',
   packageVersion: packageJson.version,
-  gitCommit,
+  sourceRevision: sourceGitAtStart.commit,
+  worktreeStatusCount: sourceGitAtStart.statusEntryCount,
+  gitCommit: sourceGitAtStart.commit,
   worktree: {
-    clean: worktreeStatus.length === 0,
-    changedPathCount: worktreeStatus.length
+    clean: sourceGitAtStart.worktreeClean,
+    changedPathCount: sourceGitAtStart.statusEntryCount
   },
   platform: process.platform,
   arch: process.arch,
@@ -477,24 +478,46 @@ try {
   })
 
   report.status = 'passed'
-  writeReport()
-  console.log(`video studio golden E2E: passed (${report.checks.length}/${report.checks.length})`)
-  console.log(reportPath())
 } catch (error) {
   report.status = 'failed'
   report.error = error instanceof Error ? error.stack || error.message : String(error)
   report.process = { stdout: stdout.slice(-4000), stderr: stderr.slice(-4000) }
-  writeReport()
-  throw error
 } finally {
   if (browser) await browser.disconnect().catch(() => undefined)
   await terminateElectronTestProcess(electron)
+  const sourceGitAtEnd = readSourceEvidenceState(repoRoot)
+  report.gitCommit = sourceGitAtEnd.commit
+  bindSourceEvidence(report, sourceGitAtStart, sourceGitAtEnd, 'Video Studio golden')
+  report.releaseBinding = {
+    requirement: report.requirement,
+    packageVersion: report.packageVersion,
+    sourceRevision: report.sourceRevision,
+    sourceRevisionAtEnd: report.sourceRevisionAtEnd,
+    git: sourceGitAtEnd,
+    platform: report.platform,
+    arch: report.arch,
+    nodeVersion: report.nodeVersion,
+    electronVersion: report.electronVersion
+  }
+  report.status = report.checks.every((item) => item.status === 'pass') && !report.error ? 'passed' : 'failed'
+  writeReport()
   rmSync(tempRoot, { recursive: true, force: true })
 }
 
+if (report.status === 'passed') {
+  console.log(`video studio golden E2E: passed (${report.checks.length}/${report.checks.length})`)
+  console.log(reportPath())
+} else {
+  console.error(`video studio golden E2E: failed: ${report.error || 'check failure'}`)
+}
+process.exit(report.status === 'passed' ? 0 : 1)
+
 function reportPath() { return path.join(runDir, 'report.json') }
-function writeReport() { writeFileSync(reportPath(), `${JSON.stringify(report, null, 2)}\n`, 'utf8') }
-function readGit(args) { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() }
+function writeReport() {
+  const body = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(reportPath(), body, 'utf8')
+  writeFileSync(path.join(outputRoot, 'latest.json'), body, 'utf8')
+}
 function startElectronProcess() {
   activeStderr = ''
   const child = spawnElectronTestProcess(electronBin, [

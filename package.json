@@ -154,7 +154,7 @@
     "test:video-studio-golden:required": "npm run build && npm run test:video-studio-golden",
     "test:video-provider-parity": "node scripts/video-provider-parity-e2e.mjs",
     "test:media-store:recovery": "node scripts/media-store-recovery-e2e.mjs",
-    "test:video-provider-parity:required": "npm run test:video-provider-parity && npm run test:media-store:recovery",
+    "test:video-provider-parity:required": "npm run build && npm run test:video-provider-parity && npm run test:media-store:recovery",
     "test:cross-entry-continuity": "node scripts/cross-entry-continuity-e2e.mjs",
     "test:cross-entry-continuity:required": "npm run build && npm run test:cross-entry-continuity",
     "test:assistant-studio-consistency": "node scripts/assistant-studio-consistency-e2e.mjs",

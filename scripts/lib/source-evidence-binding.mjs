@@ -38,7 +38,10 @@ export function bindSourceEvidence(report, start, end, label) {
   }
   if (drift.length > 0) {
     const message = `${label} evidence invalidated: ${drift.join('; ')}`
-    report.error = report.error ? `${report.error}; ${message}` : message
+    const existingError = typeof report.error === 'string'
+      ? report.error
+      : report.error ? JSON.stringify(report.error) : ''
+    report.error = existingError ? `${existingError}; ${message}` : message
     report.warnings.push(message)
   }
   return report.provenance
