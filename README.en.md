@@ -39,6 +39,18 @@ The current public release can:
 - Use terminal, files, browser, Git, and previews for PDFs, images, and Office documents in the app.
 - Inspect real session, approval, failure, cost, and workspace state in the 3D office.
 
+## One core, three work surfaces
+
+The current `main` development build has three business surfaces. They share sessions, projects, and runtime state, so switching surfaces does not duplicate a task:
+
+| Surface | Best for | Primary controls |
+|---|---|---|
+| **Assistant** | Quick questions, web research, writing, image understanding, and everyday work | Conversation, attachments, model, and permission controls |
+| **Project Workbench** | Long tasks, code, files, terminal, Git, diffs, plans, and delivery review | Projects, WorkItems, tool panels, and the result workbench |
+| **Video Studio** | Scripts, storyboards, assets, previews, revisions, and exports | Productions, jobs, assets, providers, and output state |
+
+The 3D office is a cross-surface operations view. It projects real sessions, task state, approvals, failures, providers, cost, worktrees, and Git state; it is not a fourth business surface.
+
 ## Current status
 
 `v0.1.8` is the current public release. `main` contains unreleased development work. Treat the notes and checksums on each GitHub Release as the public capability boundary; unreleased source is not a stable product claim.
@@ -59,7 +71,7 @@ The current public release can:
 
 1. **Download and verify the source**: use only this repository's GitHub Releases and verify SHA-256 values in the Release Notes.
 2. **Add a provider and key**: open Settings, select a provider template or enter the base URL of a compatible service, then add your own API key. Keys are never committed to this repository.
-3. **Run your first task**: create a session, select a local project directory or use an unassigned session, then try: `Read this project and tell me how it starts, which files matter most, and the three highest-value issues. Do not change anything yet.`
+3. **Run your first task**: open Assistant and enter: `Read this project and tell me how it starts, which files matter most, and the three highest-value issues. Do not change anything yet.` Linking a project is optional; use the Project Workbench for longer workflows.
 
 > macOS and Windows have different signing states. Use the corresponding GitHub Release notes as the authority for each platform's signing and trust state.
 
