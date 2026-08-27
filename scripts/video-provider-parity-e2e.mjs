@@ -68,6 +68,10 @@ const server = http.createServer(async (request, response) => {
     const id = `parity-${jobs.size + 1}`
     jobs.set(id, { model })
     if (model === 'failure-model') return json(response, 503, { error: { message: 'simulated provider failure' } })
+    // Some OpenAI-compatible gateways wrap the OpenAI video object in a
+    // `data` envelope and use task_id/state aliases. Keep this fixture close
+    // to that wire contract so the CaoGen adapter cannot rely on one shape.
+    if (model === 'grok-imagine-video-1.5') return json(response, 200, { data: { task_id: id, state: 'queued', model } })
     return json(response, 200, { id, status: 'queued', model })
   }
   const match = /^\/v1\/videos\/([^/]+)(?:\/content)?$/.exec(url.pathname)
@@ -81,7 +85,11 @@ const server = http.createServer(async (request, response) => {
     response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': String(bytes.length) })
     return response.end(bytes)
   }
-  if (request.method === 'GET') return json(response, 200, { id, status: 'completed', output_url: `${serverBase}/v1/videos/${id}/content`, media_type: 'video/mp4' })
+  if (request.method === 'GET') {
+    const output = { url: `${serverBase}/v1/videos/${id}/content`, media_type: 'video/mp4' }
+    if (job.model === 'grok-imagine-video-1.5') return json(response, 200, { data: { task_id: id, state: 'completed', output } })
+    return json(response, 200, { id, status: 'completed', output_url: output.url, media_type: output.media_type })
+  }
   return json(response, 405, { error: { message: 'method not allowed' } })
 })
 
@@ -145,6 +153,7 @@ try {
   await check('grok-imagine-video-1.5 uses the same canonical endpoint and state machine', async () => {
     const result = await runSuccessfulModel(fixture, 'grok-imagine-video-1.5')
     assert.equal(result.status, 'succeeded')
+    assert.equal(result.providerExternalJobId, 'parity-2', 'nested task_id was not retained as the Provider job identity')
     assert(requests.some((item) => item.method === 'POST' && item.path === '/v1/videos' && item.body.includes('grok-imagine-video-1.5')), 'grok-imagine-video-1.5 submission was not observed')
   })
 

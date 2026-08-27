@@ -178,11 +178,11 @@ async function parseObservation(
   rootDir: string,
   base: string
 ): Promise<MediaRemoteJobObservation> {
-  const externalJobId = typeof body.id === 'string' && body.id.trim() ? body.id : job.providerExternalJobId ?? job.externalJobId
+  const externalJobId = extractExternalJobId(body) ?? job.providerExternalJobId ?? job.externalJobId
   const billing = providerBilling(body, bytes)
-  const status = typeof body.status === 'string' ? body.status.toLowerCase() : ''
-  if (status === 'cancelled' || status === 'canceled') return { status: 'cancelled', externalJobId, ...billing }
-  if (status === 'failed' || status === 'error') return { status: 'failed', externalJobId, reason: providerError(body), ...billing }
+  const status = extractRemoteStatus(body)
+  if (status === 'cancelled' || status === 'canceled' || status === 'cancelled_by_user') return { status: 'cancelled', externalJobId, ...billing }
+  if (status === 'failed' || status === 'failure' || status === 'error' || status === 'expired') return { status: 'failed', externalJobId, reason: providerError(body), ...billing }
   const output = extractJsonOutput(body)
   if (output.base64) {
     const decoded = Buffer.from(output.base64, 'base64')
@@ -192,10 +192,16 @@ async function parseObservation(
     const persisted = await persistRemoteBytes(decoded, rootDir, job, output.mediaType)
     return { status: 'downloading', externalJobId, ...persisted, ...billing }
   }
-  if (output.url || status === 'succeeded' || status === 'completed') {
+  if (output.url || status === 'succeeded' || status === 'success' || status === 'complete' || status === 'completed' || status === 'done') {
     const outputUrl = output.url ? safeDownloadUrl(output.url, base) : undefined
     if (output.url && !outputUrl) return { status: 'failed', externalJobId, reason: 'Remote media output URL is outside the bound Provider origin', ...billing }
     return { status: 'downloading', externalJobId, ...(outputUrl ? { outputUrl } : {}), mediaType: output.mediaType, ...billing }
+  }
+  // A provider can acknowledge a request with an implementation-specific
+  // status. Keep it explicit and require a user/scheduler reconciliation
+  // instead of allowing an unrecognized value to look like progress forever.
+  if (status && !isKnownRemoteProgressStatus(status)) {
+    return { status: 'waiting_reconciliation', externalJobId, reason: `Remote media Provider returned an unknown status: ${status}`, ...billing }
   }
   return { status: 'running', externalJobId, ...billing }
 }
@@ -369,39 +375,95 @@ async function readBoundedResponse(response: Response, maxBytes: number): Promis
 }
 
 function extractJsonOutput(body: Record<string, unknown>): { url?: string; base64?: string; mediaType?: string } {
-  const data = Array.isArray(body.data) && body.data[0] && typeof body.data[0] === 'object'
-    ? body.data[0] as Record<string, unknown>
-    : undefined
-  const output = body.output && typeof body.output === 'object' && !Array.isArray(body.output)
-    ? body.output as Record<string, unknown>
-    : undefined
-  const rawUrl = firstString(body.output_url, body.url, data?.url, output?.url)
-  const base64 = firstString(body.b64_json, data?.b64_json, output?.b64_json)
+  let rawUrl: string | undefined
+  let base64: string | undefined
+  let mediaType: string | undefined
+  for (const candidate of remoteEnvelopeCandidates(body)) {
+    const output = candidate.output && typeof candidate.output === 'object' && !Array.isArray(candidate.output)
+      ? candidate.output as Record<string, unknown>
+      : undefined
+    rawUrl ??= firstString(candidate.output_url, candidate.video_url, candidate.download_url, candidate.url, output?.output_url, output?.video_url, output?.download_url, output?.url)
+    base64 ??= firstString(candidate.b64_json, candidate.base64, output?.b64_json, output?.base64)
+    mediaType ??= firstString(candidate.media_type, candidate.content_type, candidate.mime_type, output?.media_type, output?.content_type, output?.mime_type)
+  }
   return {
     ...(rawUrl ? { url: rawUrl } : {}),
     ...(base64 ? { base64 } : {}),
-    ...(firstString(body.media_type, body.content_type, data?.media_type, output?.media_type) ? {
-      mediaType: firstString(body.media_type, body.content_type, data?.media_type, output?.media_type)
-    } : {})
+    ...(mediaType ? { mediaType } : {})
   }
 }
 
 function providerBilling(body: Record<string, unknown>, bytes: Buffer): Pick<MediaRemoteJobObservation, 'actualUsd' | 'billingReceiptDigest'> {
-  const billing = body.billing && typeof body.billing === 'object' && !Array.isArray(body.billing)
-    ? body.billing as Record<string, unknown>
-    : undefined
-  const raw = body.actual_cost_usd ?? body.cost_usd ?? billing?.actual_usd ?? billing?.cost_usd
+  const candidates = remoteEnvelopeCandidates(body)
+  const raw = firstNumber(...candidates.flatMap((candidate) => {
+    const billing = candidate.billing && typeof candidate.billing === 'object' && !Array.isArray(candidate.billing)
+      ? candidate.billing as Record<string, unknown>
+      : undefined
+    return [candidate.actual_cost_usd, candidate.cost_usd, billing?.actual_usd, billing?.cost_usd]
+  }))
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > 1_000_000) return {}
   return { actualUsd: raw, billingReceiptDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }
 }
 
 function providerError(body: Record<string, unknown>): string {
-  if (typeof body.error === 'string' && body.error.trim()) return body.error.trim()
-  if (body.error && typeof body.error === 'object' && !Array.isArray(body.error)) {
-    const message = (body.error as Record<string, unknown>).message
-    if (typeof message === 'string' && message.trim()) return message.trim()
+  for (const candidate of remoteEnvelopeCandidates(body)) {
+    if (typeof candidate.error === 'string' && candidate.error.trim()) return candidate.error.trim()
+    if (candidate.error && typeof candidate.error === 'object' && !Array.isArray(candidate.error)) {
+      const error = candidate.error as Record<string, unknown>
+      const message = firstString(error.message, error.detail, error.code)
+      if (message) return message
+    }
+    const message = firstString(candidate.message, candidate.detail)
+    if (message) return message
   }
   return 'Remote media Provider reported failure'
+}
+
+function extractExternalJobId(body: Record<string, unknown>): string | undefined {
+  for (const candidate of remoteEnvelopeCandidates(body)) {
+    const id = firstString(candidate.id, candidate.task_id, candidate.taskId, candidate.request_id, candidate.requestId, candidate.video_id, candidate.videoId)
+    if (id) return id
+  }
+  return undefined
+}
+
+function extractRemoteStatus(body: Record<string, unknown>): string {
+  for (const candidate of remoteEnvelopeCandidates(body)) {
+    const status = firstString(candidate.status, candidate.state)
+    if (status) return status.toLowerCase().replace(/[\s-]+/g, '_')
+  }
+  return ''
+}
+
+function isKnownRemoteProgressStatus(status: string): boolean {
+  return ['queued', 'pending', 'submitted', 'created', 'accepted', 'processing', 'in_progress', 'running'].includes(status)
+}
+
+function remoteEnvelopeCandidates(body: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates: Record<string, unknown>[] = []
+  const seen = new Set<Record<string, unknown>>()
+  const envelopeKeys = ['data', 'result', 'output', 'video', 'videos', 'response', 'content', 'metadata', 'payload', 'billing']
+  const visit = (value: unknown, depth: number): void => {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      // A media response can contain multiple outputs; the first one is the
+      // canonical output for a single MediaJob. Bound traversal for safety.
+      for (const item of value.slice(0, 4)) visit(item, depth)
+      return
+    }
+    const candidate = value as Record<string, unknown>
+    if (seen.has(candidate)) return
+    seen.add(candidate)
+    candidates.push(candidate)
+    if (depth >= 3) return
+    for (const key of envelopeKeys) visit(candidate[key], depth + 1)
+  }
+  visit(body, 0)
+  return candidates
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  return values.find((value): value is number => typeof value === 'number' && Number.isFinite(value))
 }
 
 function firstString(...values: unknown[]): string | undefined {
