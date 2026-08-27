@@ -514,10 +514,14 @@ export const DURABLE_WRITE_REGISTRY = [
       evidence: ['test-results/artifact-lifecycle-content-recovery/latest.json']
     }
   ),
-  implemented(
-    'src/main/task/workflow-artifact-delivery.ts', 'user_artifact', 'atomic_fsync_rename',
-    'Publishes verified delivery manifests and ZIP packages after byte verification through the shared fsync, atomic rename, directory durability, and dead-writer cleanup primitive.',
-    { evidence: ['test-results/workflow-artifact-delivery-recovery/latest.json', 'test-results/verified-delivery-flow/latest.json'] }
+  nonDomain(
+    'src/main/task/workflow-artifact-delivery.ts', 'user_artifact', 'atomic_fsync_rename', 'verified',
+    'Publishes verified delivery manifests and signed ZIP packages through separately exercised streaming-temp and durable candidate/fsync/rename/directory-fsync boundaries.',
+    {
+      delegate: 'src/main/durable-file.ts',
+      evidence: ['test-results/workflow-artifact-delivery-recovery/latest.json'],
+      requiredRecoverySurfaces: ['manifest', 'package']
+    }
   ),
   implemented(
     'src/main/task/workflow-artifact-export.ts', 'user_artifact', 'atomic_fsync_rename',

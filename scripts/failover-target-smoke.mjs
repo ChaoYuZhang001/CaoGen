@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-failover-target-build-'))
 const outDir = path.join(repoRoot, 'test-results', 'failover-target')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
@@ -227,14 +229,28 @@ try {
 } finally {
   rmSync(buildDir, { recursive: true, force: true })
   const report = {
+    schemaVersion: 1,
     runId,
+    gate: 'test:failover-target',
     status: finalStatus,
     checks,
     error: finalError,
-    generatedAt: new Date().toISOString()
+    generatedAt: new Date().toISOString(),
+    warnings: []
   }
-  writeFileSync(path.join(runDir, 'failover-target-smoke.json'), JSON.stringify(report, null, 2))
-  writeFileSync(path.join(outDir, 'latest.json'), JSON.stringify(report, null, 2))
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider failover target'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'fail'
+    process.exitCode = 1
+  }
+  const output = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(runDir, 'failover-target-smoke.json'), output)
+  writeFileSync(path.join(outDir, 'latest.json'), output)
 }
 
 if (finalStatus === 'pass') {

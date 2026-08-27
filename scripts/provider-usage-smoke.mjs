@@ -1,15 +1,22 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-usage-'))
 const outDir = path.join(tempRoot, 'compiled')
 const checks = []
+const runId = new Date().toISOString().replace(/[:.]/g, '-')
+const reportRoot = path.join(repoRoot, 'test-results', 'provider-usage-smoke')
+const reportDir = path.join(reportRoot, runId)
+let finalStatus = 'failed'
+let finalError
 
 try {
   execFileSync(process.execPath, [
@@ -168,9 +175,47 @@ try {
   equal(truncated.truncated, true, 'attempt scan truncation propagates to the public usage summary')
   assertThrows(() => api.summarizeProviderUsage([], providers, { from: 10, to: 9 }, now),
     'invalid time range is rejected')
-  console.log(`provider usage smoke ok: ${checks.length}/${checks.length} checks passed`)
+  finalStatus = 'passed'
+} catch (error) {
+  finalError = error instanceof Error ? error.stack || error.message : String(error)
+  process.exitCode = 1
 } finally {
   rmSync(tempRoot, { recursive: true, force: true })
+  const report = {
+    schemaVersion: 1,
+    runId,
+    gate: 'test:provider-usage:summary',
+    status: finalStatus,
+    ok: finalStatus === 'passed',
+    generatedAt: new Date().toISOString(),
+    pass: checks.filter((check) => check.status === 'pass').length,
+    total: checks.length,
+    checks,
+    failures: finalError ? [{ message: finalError }] : [],
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider Usage summary'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.ok = false
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const body = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), body, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), body, 'utf8')
+}
+
+if (finalStatus === 'passed' && !process.exitCode) {
+  console.log(`provider usage smoke ok: ${checks.length}/${checks.length} checks passed`)
+} else {
+  console.error(`provider usage smoke failed: ${finalError ?? 'evidence provenance failed'}`)
 }
 
 function credentialFingerprint(providerId, keyId) {

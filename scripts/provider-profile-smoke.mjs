@@ -16,22 +16,20 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { provider, verifyOperationJournalFileGuards } from './lib/provider-profile-smoke-helpers.mjs'
-
+import { createProviderEvidenceReport, markProviderEvidenceFailed, markProviderEvidencePassed, writeProviderEvidenceReport } from './lib/provider-evidence-report.mjs'
+import { readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-profile-smoke-'))
 const outDir = path.join(tempRoot, 'compiled')
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
-const reportDir = path.join(repoRoot, 'test-results', 'provider-profile-smoke', runId)
+const reportRoot = path.join(repoRoot, 'test-results', 'provider-profile-smoke'); const reportDir = path.join(reportRoot, runId)
 const checks = []
 const backupPersistentPlaintextCanary = ['provider', 'profile', 'persistent', 'canary'].join('-')
 const backupPersistentCipherCanary = Buffer.from(backupPersistentPlaintextCanary, 'utf8').toString('base64')
 const backupSessionCanary = ['provider', 'profile', 'session', 'canary'].join('-')
-const backupSensitiveMarkers = [
-  backupPersistentPlaintextCanary,
-  backupPersistentCipherCanary,
-  backupSessionCanary
-]
-
+const backupSensitiveMarkers = [backupPersistentPlaintextCanary, backupPersistentCipherCanary, backupSessionCanary]
+let report = createProviderEvidenceReport(runId, 'test:provider-profile', checks); let runError; let stdoutLines = []
 try {
   compile(outDir)
   const userDataDir = path.join(tempRoot, 'user-data')
@@ -1080,37 +1078,40 @@ try {
   ].join('\n')
   assert(!containsSensitiveMarker(projectedStdout, backupSensitiveMarkers),
     'Provider Profile stdout summary must contain zero credential canary material')
-  const reportContent = `${JSON.stringify({
-    schemaVersion: 1,
-    gate: 'test:provider-profile',
-    status: 'passed',
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    sourceRevision: gitOutput(['rev-parse', 'HEAD']),
-    worktreeStatusCount: gitOutput([
-      'status', '--porcelain=v1', '--untracked-files=all'
-    ]).split('\n').filter(Boolean).length,
-    pass: checks.length,
-    total: checks.length,
-    checks,
-    failures: []
-  }, null, 2)}\n`
-  if (containsSensitiveMarker(reportContent, backupSensitiveMarkers)) {
-    throw new Error('Provider Profile report contains credential canary material')
-  }
-  writeFileSync(path.join(reportDir, 'report.json'), reportContent)
-  const stdoutLines = [
+  markProviderEvidencePassed(report)
+  stdoutLines = [
     `provider profile smoke ok: ${reportDir}`,
     `${checks.length}/${checks.length} checks passed`
   ]
   if (containsSensitiveMarker(stdoutLines.join('\n'), backupSensitiveMarkers)) {
     throw new Error('Provider Profile stdout contains credential canary material')
   }
-  for (const line of stdoutLines) console.log(line)
+} catch (error) {
+  runError = error
+  markProviderEvidenceFailed(report, error, 'Provider Profile smoke failed')
+  process.exitCode = 1
 } finally {
+  const passed = writeProviderEvidenceReport({
+    report,
+    repoRoot,
+    reportRoot,
+    reportDir,
+    sourceAtStart: sourceEvidenceAtStart,
+    label: 'Provider Profile smoke',
+    redaction: {
+      contains: containsSensitiveMarker,
+      markers: backupSensitiveMarkers,
+      failureMessage: 'Provider Profile report redaction failed'
+    }
+  })
+  if (!passed) process.exitCode = 1
   rmSync(tempRoot, { recursive: true, force: true })
 }
-
+if (report.status === 'passed' && !process.exitCode) {
+  for (const line of stdoutLines) console.log(line)
+} else {
+  console.error(`Provider Profile smoke failed (${runError ? 'see report digest' : 'evidence provenance'})`)
+}
 function compile(outDirPath) {
   execFileSync(
     process.execPath,
@@ -1134,7 +1135,6 @@ function compile(outDirPath) {
     { cwd: repoRoot, stdio: 'inherit' }
   )
 }
-
 function gitOutput(args) {
   return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
 }

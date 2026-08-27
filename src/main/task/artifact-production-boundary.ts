@@ -41,6 +41,9 @@ export interface CanonicalProducedArtifactEvidence {
   source?: WorkflowEvidenceSource
   verifier: string
   uri?: string
+  mediaType?: string
+  observedAt?: number
+  contentDigest?: string
   metadata?: Record<string, unknown>
 }
 
@@ -192,8 +195,8 @@ function projectProducedArtifactRecords(
     title: input.evidence.title,
     summary: input.evidence.summary,
     uri: input.evidence.uri,
-    mediaType: registered.artifact.mediaType,
-    contentDigest: evidenceContentDigest(lifecycle.digest),
+    mediaType: input.evidence.mediaType ?? registered.artifact.mediaType,
+    contentDigest: input.evidence.contentDigest ?? evidenceContentDigest(lifecycle.digest),
     metadata: {
       producer: input.lifecycle.metadata?.producer,
       ...input.evidence.metadata
@@ -201,7 +204,7 @@ function projectProducedArtifactRecords(
   }, {
     source: input.evidence.source ?? 'runtime',
     verifier: input.evidence.verifier,
-    observedAt
+    observedAt: input.evidence.observedAt ?? observedAt
   })
   if (input.acceptance && acceptance) {
     linkWorkflowEvidence(db, {

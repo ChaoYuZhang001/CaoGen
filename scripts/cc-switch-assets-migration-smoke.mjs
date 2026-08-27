@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-cc-switch-assets-'))
 const outDir = path.join(tempRoot, 'compiled')
 const home = path.join(tempRoot, 'home')
@@ -15,6 +17,11 @@ const databasePath = path.join(sourceRoot, 'cc-switch.db')
 const backupRoot = path.join(tempRoot, 'backups')
 const secret = ['cc', 'switch', 'asset', 'secret', 'canary'].join('-')
 const checks = []
+const reportRoot = path.join(repoRoot, 'test-results', 'cc-switch-assets-migration-smoke')
+const runId = new Date().toISOString().replace(/[:.]/g, '-')
+const reportDir = path.join(reportRoot, runId)
+let finalStatus = 'failed'
+let finalError
 
 try {
   compile()
@@ -84,9 +91,48 @@ try {
   assert(!targetDrift.ok && targetDrift.errorCode === 'migration_target_changed', 'target drift is rejected')
   equal(readFileSync(targetDriftMcp.targetPath, 'utf8'), '{"mcpServers":{}}\n', 'target drift preserves external bytes')
 
-  console.log(`CC Switch asset migration smoke passed: ${checks.length}/${checks.length}`)
+  finalStatus = 'passed'
+} catch (error) {
+  finalError = error instanceof Error ? error.stack || error.message : String(error)
+  process.exitCode = 1
 } finally {
+  const report = {
+    schemaVersion: 1,
+    runId,
+    gate: 'test:cc-switch-assets',
+    status: finalStatus,
+    ok: finalStatus === 'passed',
+    generatedAt: new Date().toISOString(),
+    pass: checks.length,
+    total: checks.length,
+    checks,
+    failures: finalError ? [{ message: finalError }] : [],
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'CC Switch asset migration smoke'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.ok = false
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const output = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), output, 'utf8')
   rmSync(tempRoot, { recursive: true, force: true })
+}
+
+if (finalStatus === 'passed' && !process.exitCode) {
+  console.log(`CC Switch asset migration smoke passed: ${checks.length}/${checks.length}`)
+  console.log(reportDir)
+} else {
+  console.error(`CC Switch asset migration smoke failed: ${finalError ?? 'evidence provenance failed'}`)
 }
 
 function compile() {
@@ -194,8 +240,8 @@ function exists(target) {
 }
 
 function assert(condition, name) {
-  checks.push(name)
   if (!condition) throw new Error(name)
+  checks.push(name)
 }
 
 function equal(actual, expected, name) {

@@ -14,6 +14,7 @@ import { PROVIDER_GATEWAY_TRANSLATIONS } from './i18n/providerGatewayTranslation
 import { PLUGIN_REGISTRY_TRANSLATIONS } from './i18n/pluginRegistryTranslations'
 import { CHAT_TRANSLATIONS } from './i18n/chatTranslations'
 import { DATA_RETENTION_TRANSLATIONS } from './i18n/dataRetentionTranslations'
+import { PROVIDER_HEALTH_TRANSLATIONS } from './i18n/providerHealthTranslations'
 /**
  * 轻量 i18n:按当前语言查字典,缺失回退中文再回退 key。
  * 支持 {name} 占位符插值:t('key', { name: 'x' })。
@@ -868,10 +869,7 @@ const DICT: Dict = {
     en: 'Connection failed · {message}'
   },
   ...PROVIDER_PROFILE_TRANSLATIONS,
-  healthOkTip: { zh: '健康 · 成功 {s} 失败 {f} · 最近延迟 {latencyMs}ms', en: 'Healthy · {s} succeeded, {f} failed · latest latency {latencyMs}ms' },
-  healthBadTip: { zh: '异常 · 连续失败 {n} · {error}', en: 'Unhealthy · {n} consecutive failures · {error}' },
-  healthCircuitOpenTip: { zh: '已熔断 · 暂停自动路由 · {error}', en: 'Circuit open · excluded from automatic routing · {error}' },
-  healthCircuitHalfOpenTip: { zh: '半开恢复 · 仅允许受限探测请求', en: 'Half-open recovery · only a limited probe is allowed' },
+  ...PROVIDER_HEALTH_TRANSLATIONS,
   officialEndpoint: { zh: '未填写 Base URL', en: 'No Base URL' },
   modelsCount: { zh: '{n} 个模型', en: '{n} models' },
   // Provider 编辑器

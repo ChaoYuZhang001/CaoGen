@@ -322,9 +322,8 @@ export default function OfficeView(): React.JSX.Element {
   const experienceMode = useStore((s) => s.experienceMode)
   const setExperienceMode = useStore((s) => s.setExperienceMode)
   const sourceExperienceModeRef = useRef(experienceMode)
-  const initialBusinessViewRef = useRef<OfficeFacilityKey>(
-    sourceExperienceModeRef.current === 'studio' ? 'project' : sourceExperienceModeRef.current === 'video' ? 'video' : 'assistant'
-  )
+  const initialBusinessViewRef = useRef<OfficeFacilityKey>(sourceExperienceModeRef.current === 'studio'
+    ? 'project' : sourceExperienceModeRef.current === 'video' ? 'video' : 'assistant')
   const [businessView, setBusinessView] = useState<OfficeBusinessView>(initialBusinessViewRef.current)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('facilities')
   const [selectedFacility, setSelectedFacility] = useState<OfficeFacilityKey | null>(initialBusinessViewRef.current)

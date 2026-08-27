@@ -1,16 +1,61 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { lstatSync, readFileSync, readlinkSync } from 'node:fs'
+import path from 'node:path'
 
 export function readSourceEvidenceState(repoRoot) {
   const commit = gitText(repoRoot, ['rev-parse', 'HEAD'])
-  const status = gitText(repoRoot, ['status', '--porcelain=v1', '--untracked-files=all'])
+  const status = execFileSync(
+    'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: repoRoot }
+  )
+  const statusEntryCount = countPorcelainEntries(status)
   const trackedDiff = execFileSync('git', ['diff', '--binary', '--no-ext-diff', 'HEAD', '--'], { cwd: repoRoot })
+  const untrackedPaths = nullSeparatedEntries(execFileSync(
+    'git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: repoRoot }
+  )).sort(Buffer.compare)
+  const hash = createHash('sha256').update(status).update('\0').update(trackedDiff)
+  for (const relativePath of untrackedPaths) {
+    const relativePathText = relativePath.toString('utf8')
+    const absolutePath = path.join(repoRoot, relativePathText)
+    const stat = lstatSync(absolutePath)
+    hash.update('\0untracked\0').update(relativePath).update('\0')
+    if (stat.isSymbolicLink()) {
+      hash.update('symlink\0').update(readlinkSync(absolutePath, 'buffer'))
+    } else if (stat.isFile()) {
+      hash.update('file\0').update(String(stat.mode & 0o777)).update('\0').update(readFileSync(absolutePath))
+    } else {
+      hash.update(`other:${stat.mode & 0o170000}`)
+    }
+  }
   return {
     commit,
     worktreeClean: status.length === 0,
-    statusEntryCount: status ? status.split(/\r?\n/).length : 0,
-    checkoutDigest: createHash('sha256').update(status).update('\0').update(trackedDiff).digest('hex')
+    statusEntryCount,
+    checkoutDigest: hash.digest('hex')
   }
+}
+
+function countPorcelainEntries(buffer) {
+  const records = nullSeparatedEntries(buffer)
+  let count = 0
+  for (let index = 0; index < records.length; index += 1) {
+    const status = records[index].subarray(0, 2).toString('ascii')
+    count += 1
+    if (status.includes('R') || status.includes('C')) index += 1
+  }
+  return count
+}
+
+function nullSeparatedEntries(buffer) {
+  const entries = []
+  let start = 0
+  for (let index = 0; index < buffer.length; index += 1) {
+    if (buffer[index] !== 0) continue
+    if (index > start) entries.push(buffer.subarray(start, index))
+    start = index + 1
+  }
+  if (start < buffer.length) entries.push(buffer.subarray(start))
+  return entries
 }
 
 export function sourceEvidenceDrift(start, end) {
@@ -22,6 +67,7 @@ export function sourceEvidenceDrift(start, end) {
 
 export function bindSourceEvidence(report, start, end, label) {
   const drift = sourceEvidenceDrift(start, end)
+  if (!Array.isArray(report.warnings)) report.warnings = []
   report.sourceRevision = start.commit
   report.sourceRevisionAtEnd = end.commit
   report.sourceWorktreeClean = start.worktreeClean

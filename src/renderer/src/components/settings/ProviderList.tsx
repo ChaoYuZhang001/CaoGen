@@ -388,7 +388,7 @@ function ProviderListRow({
           {provider.name}
           {isDefault && <span className="provider-tag provider-tag-default">{t('providerDefault')}</span>}
           <ProviderCredentialTag provider={provider} />
-          <ProviderHealthDot health={health} />
+          <ProviderHealthSummary health={health} />
         </div>
         <div className="provider-row-sub">
           {provider.baseUrl || t('officialEndpoint')} · {t('modelsCount', { n: provider.models.length })} ·{' '}
@@ -450,36 +450,63 @@ function ProviderCredentialTag({ provider }: { provider: ProviderView }): React.
   return null
 }
 
-function ProviderHealthDot({ health }: { health: ProviderHealthView | undefined }): React.JSX.Element | null {
+function ProviderHealthSummary({ health }: { health: ProviderHealthView | undefined }): React.JSX.Element {
   const t = useT()
-  if (!health) return null
-  const title = health.circuitState === 'open'
-    ? t('healthCircuitOpenTip', {
-        error: health.recentFailures?.[0]?.message ?? health.lastError ?? '-'
-      })
+  if (!health) {
+    return (
+      <span className="provider-health-summary is-unknown" data-provider-health-summary role="status">
+        <span className="health-dot health-unknown" aria-hidden="true" />
+        <span className="provider-health-label">{t('providerHealthNotChecked')}</span>
+      </span>
+    )
+  }
+  const failure = safeProviderHealthMessage(health.recentFailures?.[0]?.message ?? health.lastError)
+  const probeFailure = safeProviderHealthMessage(health.lastProbeError)
+  const status = health.circuitState === 'open'
+    ? { key: 'providerHealthCircuitOpen', className: 'is-open', dot: 'health-bad', detail: failure }
     : health.circuitState === 'half_open'
-      ? t('healthCircuitHalfOpenTip')
-      : health.healthy
-    ? t('healthOkTip', {
+      ? { key: 'providerHealthCircuitHalfOpen', className: 'is-half-open', dot: 'health-warn', detail: '' }
+      : !health.healthy
+        ? { key: 'providerHealthUnhealthy', className: 'is-unhealthy', dot: 'health-bad', detail: failure }
+        : failure
+          ? { key: 'providerHealthDegraded', className: 'is-degraded', dot: 'health-warn', detail: failure }
+          : probeFailure
+            ? { key: 'providerHealthProbeFailed', className: 'is-degraded', dot: 'health-warn', detail: probeFailure }
+            : { key: 'providerHealthHealthy', className: 'is-healthy', dot: 'health-ok', detail: '' }
+  const label = status.key === 'providerHealthHealthy'
+    ? t(status.key, {
         s: health.successes,
         f: health.failures,
         latencyMs: health.latencyEmaMs ?? health.lastLatencyMs ?? '-'
       })
-    : t('healthBadTip', {
-        n: health.consecutiveFailures,
-        error: health.recentFailures?.[0]?.message ?? health.lastError ?? '-'
-      })
-  const statusClass = health.circuitState === 'open'
-    ? 'health-bad'
-    : health.circuitState === 'half_open'
-      ? 'health-warn'
-      : health.healthy ? 'health-ok' : 'health-bad'
+    : status.key === 'providerHealthUnhealthy'
+      ? t(status.key, { n: health.consecutiveFailures })
+      : t(status.key)
+  const accessibleLabel = status.detail ? `${label} · ${status.detail}` : label
   return (
     <span
-      className={`health-dot ${statusClass}`}
-      title={title}
-    />
+      className={`provider-health-summary ${status.className}`}
+      data-provider-health-summary
+      role="status"
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
+    >
+      <span className={`health-dot ${status.dot}`} aria-hidden="true" />
+      <span className="provider-health-label">{label}</span>
+      {status.detail && <span className="provider-health-detail">{status.detail}</span>}
+    </span>
   )
+}
+
+function safeProviderHealthMessage(value: string | undefined): string {
+  if (!value) return ''
+  return value
+    .replace(/\s+/g, ' ')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gi, '[redacted]')
+    .replace(/(bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted]')
+    .replace(/((?:api[-_ ]?key|token|secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/(?:https?|wss?):\/\/[^\s"'<>]+/gi, '[URL]')
+    .slice(0, 180)
 }
 
 function providerCredentialSummary(provider: ProviderView, t: ReturnType<typeof useT>): string {

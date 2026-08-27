@@ -133,10 +133,26 @@ function verifyContractDefinition(contract) {
   )
   assert.equal(contract.humanExperienceAcceptance.tasks[0].timeLimitMinutes, 10)
   assert.equal(contract.humanExperienceAcceptance.tasks[2].qualityBoundary.includes('does not claim remote generation quality parity'), true)
+  assert.equal(
+    contract.closurePolicy.requiredPackageScripts.includes('test:assistant-search-golden:required'),
+    true
+  )
   assert.deepEqual(checkAcceptanceContractScripts(contract, {
     ...Object.fromEntries(contract.closurePolicy.requiredPackageScripts.map((name) => [name, 'node gate.mjs'])),
     'test:workitem-board:required': 'node board.mjs'
   }), [])
+  const scriptsWithoutSearch = Object.fromEntries(
+    contract.closurePolicy.requiredPackageScripts
+      .filter((name) => name !== 'test:assistant-search-golden:required')
+      .map((name) => [name, 'node gate.mjs'])
+  )
+  assert.match(
+    checkAcceptanceContractScripts(contract, {
+      ...scriptsWithoutSearch,
+      'test:workitem-board:required': 'node board.mjs'
+    }).join('\n'),
+    /test:assistant-search-golden:required/
+  )
 
   const changedCounts = structuredClone(contract)
   changedCounts.inventory.P0 = 63

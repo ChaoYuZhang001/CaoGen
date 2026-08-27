@@ -4,6 +4,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { connectCdp } from './lib/cdp-websocket-client.mjs'
 
 const repoRoot = process.cwd()
 const outDir = path.join(repoRoot, 'test-results', 'openai-mock-e2e')
@@ -850,22 +851,62 @@ async function chooseSelectOptionByText(cdp, text) {
   await sleep(250)
 }
 
-async function focusComposer(cdp) {
-  const ok = await evalValue(
-    cdp,
-    `(() => {
-      const el = document.querySelector('.composer-input');
-      if (!el) return false;
-      el.focus();
-      return true;
-    })()`
-  )
-  assert(ok === true, 'composer input not found')
+async function focusComposer(cdp, timeout = 10_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const state = await evalValue(
+      cdp,
+      `(() => {
+        const el = document.querySelector('.composer-input');
+        if (!el) return { ready: false, reason: 'missing' };
+        const style = getComputedStyle(el);
+        const visible = style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0;
+        if (!visible || el.disabled || el.getAttribute('aria-disabled') === 'true') {
+          return { ready: false, reason: visible ? 'disabled' : 'hidden' };
+        }
+        el.focus();
+        return { ready: document.activeElement === el, reason: document.activeElement === el ? '' : 'focus-rejected' };
+      })()`
+    )
+    if (state?.ready === true) return
+    await sleep(100)
+  }
+  const body = await visibleText(cdp)
+  throw new Error(`composer did not become ready within ${timeout}ms\nVisible text:\n${body.slice(0, 2200)}`)
 }
 
 async function typeText(cdp, text) {
   for (const char of text) await cdp.send('Input.dispatchKeyEvent', { type: 'char', text: char })
-  await sleep(250)
+  const typed = await evalValue(
+    cdp,
+    `(() => {
+      const el = document.querySelector('.composer-input');
+      return {
+        focused: document.activeElement === el,
+        value: el && 'value' in el ? el.value : ''
+      };
+    })()`
+  )
+  assert(typed?.focused === true, 'composer lost focus while typing')
+  assert(String(typed?.value ?? '').endsWith(text), `composer did not retain typed prompt: ${JSON.stringify(typed?.value ?? '')}`)
+  const start = Date.now()
+  while (Date.now() - start < 10_000) {
+    const ready = await evalValue(
+      cdp,
+      `(() => {
+        const input = document.querySelector('.composer-input');
+        const send = document.querySelector('.composer-send');
+        return document.activeElement === input && Boolean(send) && !send.disabled;
+      })()`
+    )
+    if (ready === true) {
+      await sleep(250)
+      return
+    }
+    await sleep(100)
+  }
+  const body = await visibleText(cdp)
+  throw new Error(`composer send action did not become ready within 10000ms\nVisible text:\n${body.slice(0, 2200)}`)
 }
 
 async function press(cdp, key) {
@@ -1134,45 +1175,4 @@ function electronSpawnArgs(args) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function connectCdp(url) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url)
-    let nextId = 1
-    const pending = new Map()
-    ws.addEventListener('message', (event) => {
-      const data = JSON.parse(event.data)
-      if (!data.id || !pending.has(data.id)) return
-      const item = pending.get(data.id)
-      pending.delete(data.id)
-      if (data.error) item.reject(new Error(data.error.message || JSON.stringify(data.error)))
-      else item.resolve(data.result ?? {})
-    })
-    ws.addEventListener(
-      'open',
-      () => {
-        resolve({
-          send(method, params = {}) {
-            const id = nextId++
-            ws.send(JSON.stringify({ id, method, params }))
-            return new Promise((resolveSend, rejectSend) => {
-              pending.set(id, { resolve: resolveSend, reject: rejectSend })
-              setTimeout(() => {
-                if (pending.has(id)) {
-                  pending.delete(id)
-                  rejectSend(new Error(`CDP timeout: ${method}`))
-                }
-              }, 10_000)
-            })
-          },
-          close() {
-            ws.close()
-          }
-        })
-      },
-      { once: true }
-    )
-    ws.addEventListener('error', () => reject(new Error('DevTools WebSocket connection failed')), { once: true })
-  })
 }

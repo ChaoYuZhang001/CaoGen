@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -54,11 +55,25 @@ if (phase === '--phase-source') {
 }
 
 async function orchestrate() {
-  const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-cross-resume-'))
-  const outDir = path.join(tempRoot, 'compiled')
-  const userData = path.join(tempRoot, 'user-data')
-  const reportFile = path.join(tempRoot, 'target-report.json')
+  const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
+  const runId = new Date().toISOString().replace(/[:.]/g, '-')
+  const reportRoot = path.join(repoRoot, 'test-results', 'provider-cross-resume')
+  const reportDir = path.join(reportRoot, runId)
+  let tempRoot
+  let evidenceReport = {
+    schemaVersion: 1,
+    runId,
+    gate: 'test:provider-cross-resume',
+    status: 'failed',
+    failures: [],
+    warnings: []
+  }
+  let finalError
   try {
+    tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-cross-resume-'))
+    const outDir = path.join(tempRoot, 'compiled')
+    const userData = path.join(tempRoot, 'user-data')
+    const reportFile = path.join(tempRoot, 'target-report.json')
     compileSources(outDir)
     installElectronStub(outDir, userData)
     const childEnv = {
@@ -92,7 +107,11 @@ async function orchestrate() {
     assertEqual(report.artifact.byteVerified, true, 'target must verify canonical Artifact bytes')
     assertEqual(report.artifact.crossProjectRejected, true, 'target must reject cross-Project Artifact access')
     assertEqual(report.artifact.tamperRejected, true, 'target must reject tampered Artifact bytes')
-    console.log(JSON.stringify({
+    evidenceReport = {
+      schemaVersion: 1,
+      runId,
+      gate: 'test:provider-cross-resume',
+      status: 'passed',
       ok: true,
       restartBoundary: 'two-node-processes',
       source: report.source,
@@ -107,10 +126,39 @@ async function orchestrate() {
       canonicalContextDigest: report.canonicalContextDigest,
       artifact: report.artifact,
       sourceJsonlRecovered: report.sourceJsonlRecovered,
-      sideEffectReplay: false
-    }, null, 2))
+      sideEffectReplay: false,
+      failures: [],
+      warnings: []
+    }
+  } catch (error) {
+    finalError = error
+    evidenceReport.failures.push({
+      message: 'Provider cross-resume verification failed',
+      errorDigest: `sha256:${createHash('sha256').update(error instanceof Error ? error.stack || error.message : String(error)).digest('hex')}`
+    })
+    process.exitCode = 1
   } finally {
-    rmSync(tempRoot, { recursive: true, force: true })
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true })
+    const provenance = bindSourceEvidence(
+      evidenceReport,
+      sourceEvidenceAtStart,
+      readSourceEvidenceState(repoRoot),
+      'Provider cross-resume'
+    )
+    if (provenance.status !== 'pass') {
+      evidenceReport.status = 'failed'
+      evidenceReport.failures.push({ message: evidenceReport.error })
+      process.exitCode = 1
+    }
+    mkdirSync(reportDir, { recursive: true })
+    const body = `${JSON.stringify(evidenceReport, null, 2)}\n`
+    writeFileSync(path.join(reportDir, 'report.json'), body, 'utf8')
+    writeFileSync(path.join(reportRoot, 'latest.json'), body, 'utf8')
+  }
+  if (evidenceReport.status === 'passed' && !process.exitCode) {
+    console.log(JSON.stringify({ ...evidenceReport, reportDir }, null, 2))
+  } else {
+    console.error(`Provider cross-resume verification failed (${finalError ? 'see report digest' : 'evidence provenance'})`)
   }
 }
 

@@ -13,6 +13,7 @@ const REQUIRED_PACKAGE_SCRIPTS = [
   'test:product-1.0-acceptance',
   'test:product-1.0-acceptance:required',
   'test:critical-recovery-matrix:required',
+  'test:assistant-search-golden:required',
   'test:project-golden-delivery:required',
   'test:cross-entry-continuity:required'
 ]

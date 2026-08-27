@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import {
+  durableWriterGapReason,
+  durableWriterInventoryClosed,
+  workflowDeliverySurfacesClosed
+} from './lib/durable-recovery-closure.mjs'
 
 const repoRoot = process.cwd()
 const required = process.argv.includes('--required')
@@ -26,6 +31,8 @@ const reportSources = {
   externalEffect: 'test-results/external-effect-recovery/latest.json',
   sessionDeletion: 'test-results/session-deletion-recovery/latest.json',
   durableDirectWrite: 'test-results/durable-direct-write-recovery/latest.json',
+  durableWriteInventory: 'test-results/durable-write-inventory/latest.json',
+  workflowArtifactDelivery: 'test-results/workflow-artifact-delivery-recovery/latest.json',
   providerProfileRestart: findLatestReport('test-results/provider-profile-restart')
 }
 
@@ -115,6 +122,10 @@ addCommandCell('NFR-REC-001', 'network_unknown_result', 'test:conversation-ledge
   'post-rename directory fsync uncertainty leaves one complete digest-valid ledger and resumes without a false receipt')
 addCommandCell('NFR-REC-001', 'out_of_order', 'test:project-workspace:required',
   'concurrent durable Project writers reject the delayed stale revision without regressing the Store')
+
+for (const faultClass of ['strong_kill', 'network_unknown_result', 'duplicate_idempotency', 'out_of_order']) {
+  addDurableWriterCell(faultClass)
+}
 
 addReportCell('NFR-REC-003', 'strong_kill', 'providerProfileRestart',
   'Provider profile import and rollback survive process interruption',
@@ -236,6 +247,32 @@ function addCommandCell(requirementId, faultClass, script, reason) {
   cells.push(cell)
 }
 
+function addDurableWriterCell(faultClass) {
+  const requirementId = 'NFR-REC-002'
+  const reason = 'every durable writer has current-SHA runtime evidence for all four fault classes'
+  const cell = { requirementId, faultClass, status: 'open', reason, evidence: [] }
+  const inventoryPath = reportSources.durableWriteInventory
+  const deliveryPath = reportSources.workflowArtifactDelivery
+  const inventory = loadReport('durableWriteInventory', inventoryPath)
+  const delivery = loadReport('workflowArtifactDelivery', deliveryPath)
+  const inventoryClosed = durableWriterInventoryClosed(inventory)
+  const deliveryClosed = workflowDeliverySurfacesClosed(delivery, faultClass)
+  if (inventoryClosed && deliveryClosed) {
+    cell.status = 'verified'
+    cell.evidence.push(
+      { source: inventoryPath, sourceRevision: inventory.sourceRevision },
+      { source: deliveryPath, sourceRevision: delivery.sourceRevision }
+    )
+  } else {
+    const missing = []
+    if (!inventoryClosed) missing.push(durableWriterGapReason(inventory))
+    if (!deliveryClosed) missing.push(`workflow delivery ${faultClass} lacks manifest and ZIP package runtime evidence`)
+    cell.reason = `${reason}; ${missing.join('; ')}`
+    gaps.push({ requirementId, faultClass, reason: cell.reason })
+  }
+  cells.push(cell)
+}
+
 function loadReport(key, sourcePath) {
   if (reportCache.has(key)) return reportCache.get(key)
   if (!sourcePath || !existsSync(path.join(repoRoot, sourcePath))) {
@@ -298,21 +335,6 @@ function findLatestReport(root) {
 
 function hasCheck(report, id) {
   return Array.isArray(report.checks) && report.checks.some((check) => check.id === id)
-}
-
-function durableWriterGapReason() {
-  const sourcePath = path.join(repoRoot, 'test-results', 'durable-write-inventory', 'latest.json')
-  if (!existsSync(sourcePath)) return 'durable writer runtime evidence inventory is missing'
-  try {
-    const inventory = JSON.parse(readFileSync(sourcePath, 'utf8'))
-    const recovery = inventory.summary?.recovery ?? {}
-    const open = Number(recovery.implemented_unverified ?? 0) + Number(recovery.gap ?? 0)
-    return open > 0
-      ? `${open} durable writers still lack runtime recovery evidence`
-      : 'durable writer inventory is not fully bound to four-class runtime evidence'
-  } catch {
-    return 'durable writer runtime evidence inventory is invalid'
-  }
 }
 
 function git(args) {

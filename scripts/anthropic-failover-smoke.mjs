@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   mkdtempSync,
   mkdirSync,
@@ -12,14 +13,28 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const require = createRequire(import.meta.url)
 const Module = require('node:module').Module
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-anthropic-failover-'))
 const outDir = path.join(tempRoot, 'compiled')
 const userData = path.join(tempRoot, 'user-data')
 const checks = []
+const runId = new Date().toISOString().replace(/[:.]/g, '-')
+const reportRoot = path.join(repoRoot, 'test-results', 'anthropic-failover')
+const reportDir = path.join(reportRoot, runId)
+let report = {
+  schemaVersion: 1,
+  runId,
+  gate: 'test:anthropic-failover:required',
+  status: 'failed',
+  checks,
+  failures: [],
+  warnings: []
+}
 
 process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
   .filter(Boolean)
@@ -29,6 +44,7 @@ Module._initPaths()
 let runtime
 let previousSettings
 let previousProviders
+let finalError
 try {
   compileRuntime()
   runtime = loadRuntime()
@@ -47,7 +63,11 @@ try {
   await check('abort cancels without failover', verifyAbortBlock)
   await check('all attempted credentials remain redacted across a failover chain', verifyCredentialRedaction)
 
-  console.log(JSON.stringify({ status: 'pass', checks }, null, 2))
+  report.status = 'passed'
+} catch (error) {
+  finalError = error
+  report.failures.push({ message: 'Anthropic failover verification failed', errorDigest: errorDigest(error) })
+  process.exitCode = 1
 } finally {
   runtime?.registry.taskRuntimeRegistry.clear()
   if (runtime && previousSettings) runtime.settings.updateSettings(previousSettings)
@@ -58,6 +78,27 @@ try {
     }
   }
   rmSync(tempRoot, { recursive: true, force: true })
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Anthropic failover'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const body = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), body, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), body, 'utf8')
+}
+
+if (report.status === 'passed' && !process.exitCode) {
+  console.log(JSON.stringify({ status: 'pass', checks, reportDir }, null, 2))
+} else {
+  console.error(`Anthropic failover verification failed (${errorDigest(finalError)})`)
 }
 
 async function verifyKeyFailover() {
@@ -807,8 +848,18 @@ async function eventually(predicate, label, timeoutMs = 10_000) {
 
 async function check(name, fn) {
   const startedAt = Date.now()
-  await fn()
-  checks.push({ name, status: 'pass', durationMs: Date.now() - startedAt })
+  try {
+    await fn()
+    checks.push({ name, status: 'pass', durationMs: Date.now() - startedAt })
+  } catch (error) {
+    checks.push({ name, status: 'fail', durationMs: Date.now() - startedAt, errorDigest: errorDigest(error) })
+    throw error
+  }
+}
+
+function errorDigest(error) {
+  const message = error instanceof Error ? error.stack || error.message : String(error ?? 'unknown')
+  return `sha256:${createHash('sha256').update(message).digest('hex')}`
 }
 
 function projectDirectory(name) {

@@ -4,8 +4,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-provider-key-failover-'))
 const buildDir = path.join(tempRoot, 'compiled')
 const reportRoot = path.join(repoRoot, 'test-results', 'provider-key-failover')
@@ -132,11 +134,24 @@ try {
   process.exitCode = 1
 } finally {
   const report = {
+    schemaVersion: 1,
     runId,
+    gate: 'test:provider-key-failover',
     status: finalStatus,
     checks,
     error: finalError,
-    generatedAt: new Date().toISOString()
+    generatedAt: new Date().toISOString(),
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider key failover'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'fail'
+    process.exitCode = 1
   }
   mkdirSync(runDir, { recursive: true })
   writeFileSync(path.join(runDir, 'provider-key-failover-smoke.json'), `${JSON.stringify(report, null, 2)}\n`)

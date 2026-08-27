@@ -6,6 +6,7 @@ import { DRIVE_MODE_OPTIONS } from '../../store'
 import type { ModelOption } from '../../commands'
 import { useT } from '../../i18n'
 import type { WelcomeRoutingMode } from '../../store/welcome-draft'
+import BoundedSelect from '../BoundedSelect'
 
 interface WelcomeRoutingControlsProps {
   driveMode: CaoGenDriveMode
@@ -51,19 +52,22 @@ export default function WelcomeRoutingControls({
         ))}
       </div>
       {routingMode !== 'global' && (
-        <select
-          className="welcome-mini-select"
-          data-welcome-routing-control="provider"
+        <BoundedSelect
+          ariaLabel={t('provider')}
+          nativeClassName="welcome-mini-select"
+          nativeDataAttributes={{ 'data-welcome-routing-control': 'provider' }}
+          rootClassName="welcome-bounded-select-mini"
           value={providerId}
-          onChange={(event) => onProviderChange(event.target.value)}
-        >
-          <option value="" disabled>{t('selectProviderPlaceholder')}</option>
-          {providers.map((provider) => (
-            <option key={provider.id} value={provider.id} disabled={!provider.ready}>
-              {provider.name}{provider.ready ? '' : ` (${t('noKeyConfigured')})`}
-            </option>
-          ))}
-        </select>
+          onChange={onProviderChange}
+          options={[
+            { value: '', label: t('selectProviderPlaceholder'), disabled: true },
+            ...providers.map((provider) => ({
+              value: provider.id,
+              label: `${provider.name}${provider.ready ? '' : ` (${t('noKeyConfigured')})`}`,
+              disabled: !provider.ready
+            }))
+          ]}
+        />
       )}
       <select
         className="welcome-mini-select"
@@ -74,15 +78,18 @@ export default function WelcomeRoutingControls({
         {DRIVE_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
       {routingMode === 'fixed' ? (
-        <select
-          className="welcome-mini-select"
-          data-welcome-routing-control="model"
+        <BoundedSelect
+          ariaLabel={t('model')}
+          nativeClassName="welcome-mini-select"
+          nativeDataAttributes={{ 'data-welcome-routing-control': 'model' }}
+          rootClassName="welcome-bounded-select-mini"
           value={model}
-          onChange={(event) => onModelChange(event.target.value)}
-        >
-          <option value="" disabled>{t('selectModelPlaceholder')}</option>
-          {fixedModelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </select>
+          onChange={onModelChange}
+          options={[
+            { value: '', label: t('selectModelPlaceholder'), disabled: true },
+            ...fixedModelOptions.map((option) => ({ value: option.value, label: option.label }))
+          ]}
+        />
       ) : (
         <span className="welcome-routing-summary">
           {routingMode === 'global' ? t('routingModeGlobalSummary') : t('routingModeProviderSummary')}

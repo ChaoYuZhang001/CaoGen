@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
+const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
+const runId = new Date().toISOString().replace(/[:.]/g, '-')
+const reportRoot = path.join(repoRoot, 'test-results', 'provider-usage-dashboard-smoke')
+const reportDir = path.join(reportRoot, runId)
 const dashboard = readFileSync('src/renderer/src/components/settings/ProviderUsageDashboard.tsx', 'utf8')
 const billing = readFileSync('src/renderer/src/components/settings/ProviderBillingReconciliation.tsx', 'utf8')
 const billingService = readFileSync('src/main/provider/providerBillingReconciliation.ts', 'utf8')
@@ -10,7 +17,10 @@ const summary = readFileSync('src/main/provider/providerUsageSummary.ts', 'utf8'
 const styles = readFileSync('src/renderer/src/styles.css', 'utf8')
 const translations = readFileSync('src/renderer/src/i18n/providerSetupTranslations.ts', 'utf8')
 const checks = []
+let finalStatus = 'failed'
+let finalError
 
+try {
 check('dashboard is a dedicated Provider settings surface',
   settings.includes('<ProviderUsageDashboard providers={providers} />')
     && dashboard.includes('data-provider-usage-dashboard'))
@@ -167,7 +177,47 @@ check('refresh motion respects reduced-motion preference',
   styles.includes('@media (prefers-reduced-motion: reduce)')
     && styles.includes('animation: none'))
 
-console.log(`provider usage dashboard smoke ok: ${checks.length}/${checks.length} checks passed`)
+  finalStatus = 'passed'
+} catch (error) {
+  finalError = error instanceof Error ? error.stack || error.message : String(error)
+  process.exitCode = 1
+} finally {
+  const report = {
+    schemaVersion: 1,
+    runId,
+    gate: 'test:provider-usage:dashboard',
+    status: finalStatus,
+    ok: finalStatus === 'passed',
+    generatedAt: new Date().toISOString(),
+    pass: checks.length,
+    total: checks.length,
+    checks: checks.map((name) => ({ name, status: 'pass' })),
+    failures: finalError ? [{ message: finalError }] : [],
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider Usage dashboard smoke'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.ok = false
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const body = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), body, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), body, 'utf8')
+}
+
+if (finalStatus === 'passed' && !process.exitCode) {
+  console.log(`provider usage dashboard smoke ok: ${checks.length}/${checks.length} checks passed`)
+} else {
+  console.error(`provider usage dashboard smoke failed: ${finalError ?? 'evidence provenance failed'}`)
+}
 
 function check(name, condition) {
   assert.equal(Boolean(condition), true, name)

@@ -36,6 +36,7 @@ async function runParent() {
     }
     const unknownResult = await verifyUnknownResult(modulePath)
     const duplicate = await verifyImmutableDuplicate(modulePath)
+    const orphanOwnership = await verifyOrphanOwnership(modulePath)
     report = {
       schemaVersion: 1,
       gate: 'test:durable-file-recovery:required',
@@ -45,6 +46,7 @@ async function runParent() {
       sourceRevision: git(['rev-parse', 'HEAD']),
       worktreeStatusCount: gitStatusCount(),
       kernel: 'src/main/durable-file.ts',
+      orphanOwnership,
       faults: {
         strong_kill: { status: 'verified', scenarios: strongKill },
         network_unknown_result: { status: 'verified', scenario: unknownResult },
@@ -140,6 +142,42 @@ async function verifyImmutableDuplicate(modulePath) {
   assert.deepEqual(after, before, 'duplicate no-replace publication must preserve canonical bytes')
   assert.deepEqual(temporaryFiles(root, target), [], 'duplicate publication must remove its candidate')
   return { errorCode: 'EEXIST', canonicalDigest: sha256(after), storeByteStable: true }
+}
+
+async function verifyOrphanOwnership(modulePath) {
+  const root = path.join(tempRoot, 'orphan-ownership')
+  const target = path.join(root, 'store.json')
+  const runtime = require(modulePath)
+  mkdirSync(root, { recursive: true })
+
+  const asyncDeadWriter = durableTemporaryPath(target, '00000000-0000-4000-8000-000000000001')
+  const asyncLookalike = path.join(root, `.${path.basename(target)}.2000000000.not-a-caogen-uuid.tmp`)
+  writeFileSync(asyncDeadWriter, 'dead async writer', 'utf8')
+  writeFileSync(asyncLookalike, 'preserve async lookalike', 'utf8')
+  await runtime.cleanupDurableFileOrphans(target)
+  assert.equal(existsSync(asyncDeadWriter), false)
+  assert.equal(readFileSync(asyncLookalike, 'utf8'), 'preserve async lookalike')
+  rmSync(asyncLookalike, { force: true })
+
+  const syncDeadWriter = durableTemporaryPath(target, '00000000-0000-4000-8000-000000000002')
+  const syncLookalike = path.join(root, `.${path.basename(target)}.2000000000.still-not-a-uuid.tmp`)
+  writeFileSync(syncDeadWriter, 'dead sync writer', 'utf8')
+  writeFileSync(syncLookalike, 'preserve sync lookalike', 'utf8')
+  runtime.cleanupDurableFileOrphansSync(target)
+  assert.equal(existsSync(syncDeadWriter), false)
+  assert.equal(readFileSync(syncLookalike, 'utf8'), 'preserve sync lookalike')
+  rmSync(syncLookalike, { force: true })
+
+  assert.deepEqual(temporaryFiles(root, target), [])
+  return {
+    asyncDeadWriterReaped: true,
+    syncDeadWriterReaped: true,
+    malformedLookalikesPreserved: 2
+  }
+}
+
+function durableTemporaryPath(target, uuid) {
+  return path.join(path.dirname(target), `.${path.basename(target)}.2000000000.${uuid}.tmp`)
 }
 
 function invokeWorker(modulePath, target, checkpoint, killAtCheckpoint) {

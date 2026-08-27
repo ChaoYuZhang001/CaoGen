@@ -15,6 +15,7 @@
 - Assistant：在首屏输入框旁提供可见的“设置可用服务”入口。用户无需先提交一次失败任务，便可直接进入 Provider 设置；自动本机检测仍保留。
 - Video：快速开始和已有项目的制作创建都允许只填写脚本。标题留空时从脚本首行生成不超过 80 个字符的项目/制作标题，保留手动标题能力。
 - Project：将执行面板放在验收交付之前，并移除执行操作栏对 `supervisor` 流程锚点的占用，流程条现在与页面顺序一致。
+- Project 下拉：移除标题栏里会被 macOS 原生菜单按长项目名撑宽的 `<select>`；多项目使用窗口内受限 listbox，长名称在固定宽度内处理，单项目显示静态项目名，并保留键盘导航、外部点击关闭、Escape 返回焦点和自动化状态桥。
 - 回归：`npm run test:ux-feedback-repair` 覆盖上述入口、必填字段和 DOM 流程顺序；它不替代五名用户计时黄金任务、竞品盲测或发布门禁。
 
 ## 2026-08-27 第二轮路径收敛
@@ -57,6 +58,8 @@
 - 每个入口补来源返回动作、空状态、失败状态、键盘焦点和紧凑桌面布局。
 
 阶段出口：`test:assistant-studio-ui:required`、`test:first-task-onboarding`、`test:coding-standards`、`npm run typecheck`、`npm run build` 均通过；不得出现遮挡、截断或失焦。
+
+下拉回归出口：`npm run test:project-lifecycle-ui:required` 必须在 `1280x800` 和 `960x640` 的真实 Electron 窗口中证明菜单不越界；静态 UX smoke 必须证明 ProjectWorkspaceStudio 不重新引入可见原生 `<select>`。旧进程或旧 bundle 的截图不能作为修复后的视觉证据。
 
 ### 阶段 B：Assistant 首任务和搜索闭环
 

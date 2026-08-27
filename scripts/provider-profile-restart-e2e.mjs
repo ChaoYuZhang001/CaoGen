@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { runProviderProfileRestartServiceWorker } from './lib/provider-profile-restart-service-worker.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(import.meta.url)
@@ -31,6 +32,7 @@ if (workerAction) {
   process.exit(0)
 }
 
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'provider-profile-restart', runId)
 const reportPath = path.join(reportDir, 'report.json')
@@ -43,12 +45,9 @@ const report = {
   faultClasses: ['strong_kill', 'network_unknown_result', 'duplicate_idempotency', 'out_of_order'],
   status: 'failed',
   generatedAt: new Date().toISOString(),
-  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
-  worktreeStatusCount: gitOutput([
-    'status', '--porcelain=v1', '--untracked-files=all'
-  ]).split('\n').filter(Boolean).length,
   scenarios: [],
-  failures: []
+  failures: [],
+  warnings: []
 }
 
 try {
@@ -83,6 +82,17 @@ try {
   process.exitCode = 1
 } finally {
   report.finishedAt = new Date().toISOString()
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider Profile restart'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.failures.push(serializeError(new Error(report.error)))
+    process.exitCode = 1
+  }
   mkdirSync(reportDir, { recursive: true })
   const serialized = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(reportPath, serialized, 'utf8')

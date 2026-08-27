@@ -8,6 +8,7 @@ import {
   discoverDurableWriteModules,
   validateDurableWriteRegistry
 } from './lib/durable-write-inventory.mjs'
+import { durableRecoveryRequirementStatus } from './lib/durable-recovery-closure.mjs'
 
 const repoRoot = process.cwd()
 const discovery = discoverDurableWriteModules(repoRoot)
@@ -50,7 +51,7 @@ try {
   const summary = summarize(DURABLE_WRITE_REGISTRY, discovery)
   report.status = 'passed'
   report.inventoryStatus = 'complete'
-  report.requirementStatus = summary.recovery.gap > 0 ? 'open' : 'inventory_closed_unverified'
+  report.requirementStatus = durableRecoveryRequirementStatus(summary.recovery)
   report.summary = summary
   report.writers = discovery.map((item) => ({
     ...item,
@@ -122,6 +123,14 @@ function runNegativeFixtures() {
     replaceEntry(delegatedEntry.file, { delegate: '' }),
     /requires a concrete delegate/,
     'delegated writer without an owner is rejected'
+  )
+
+  const verifiedEntry = DURABLE_WRITE_REGISTRY.find((entry) => entry.recovery === 'verified')
+  assert(verifiedEntry, 'negative fixtures require a verified writer')
+  assertFailure(
+    replaceEntry(verifiedEntry.file, { requiredRecoverySurfaces: [] }),
+    /must name unique runtime surfaces/,
+    'empty runtime recovery surface contract is rejected'
   )
 
 }
@@ -202,6 +211,11 @@ function validateRuntimeRecoveryEvidence(registry) {
       if (report.writer !== entry.file) failures.push(`${entry.file}: runtime evidence writer mismatch: ${relativePath}`)
       for (const faultClass of ['strong_kill', 'network_unknown_result', 'duplicate_idempotency', 'out_of_order']) {
         if (report.faults?.[faultClass]?.status !== 'verified') failures.push(`${entry.file}: runtime evidence fault is open: ${faultClass}`)
+        for (const surface of entry.requiredRecoverySurfaces ?? []) {
+          if (report.faults?.[faultClass]?.surfaces?.[surface]?.status !== 'verified') {
+            failures.push(`${entry.file}: runtime evidence surface is open: ${faultClass}/${surface}`)
+          }
+        }
       }
     }
   }

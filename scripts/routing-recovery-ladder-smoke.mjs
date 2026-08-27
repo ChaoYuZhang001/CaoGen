@@ -5,8 +5,10 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const buildDir = mkdtempSync(path.join(tmpdir(), 'caogen-routing-recovery-ladder-'))
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'routing-recovery-ladder', runId)
@@ -126,7 +128,26 @@ try {
   process.exitCode = 1
 } finally {
   rmSync(buildDir, { recursive: true, force: true })
-  const report = { schemaVersion: 1, gate: 'test:routing-recovery-ladder:required', runId, status, checks, error: failure }
+  const report = {
+    schemaVersion: 1,
+    gate: 'test:routing-recovery-ladder:required',
+    runId,
+    status,
+    checks,
+    error: failure,
+    failures: failure ? [{ message: failure }] : [],
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Routing recovery ladder'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    process.exitCode = 1
+  }
   writeFileSync(path.join(reportDir, 'report.json'), JSON.stringify(report, null, 2))
   writeFileSync(
     path.join(repoRoot, 'test-results', 'routing-recovery-ladder', 'latest.json'),

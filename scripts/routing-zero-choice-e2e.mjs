@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import http from 'node:http'
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { createRequire } from 'node:module'
+import { verifyBuildEvidence } from './lib/build-evidence.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const require = createRequire(path.join(repoRoot, 'package.json'))
 const puppeteer = require('puppeteer-core')
 const packageJson = require(path.join(repoRoot, 'package.json'))
@@ -26,23 +29,10 @@ const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 
-assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
-for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
-  assert(existsSync(path.join(sourceOutDir, entry)), `Built app entry missing: out/${entry}. Run npm run build first.`)
-}
-
-mkdirSync(runDir, { recursive: true })
-mkdirSync(userDataDir, { recursive: true })
-mkdirSync(projectDir, { recursive: true })
-writeFileSync(path.join(projectDir, 'README.md'), '# Routing zero-choice real Electron E2E\n', 'utf8')
-writeFileSync(path.join(userDataDir, 'projects.json'), JSON.stringify([
-  { id: projectId, name: 'Routing Zero Choice Project', path: projectDir, lastUsedAt: Date.now() }
-], null, 2), 'utf8')
-copyBuiltApp()
-
 const report = {
   schemaVersion: 1,
   runId,
+  gate: 'test:routing-zero-choice:required',
   runDir,
   requirement: 'required',
   requirementIds: ['ROUTE-003', 'NFR-UX-001', 'M2-T2'],
@@ -57,7 +47,42 @@ const report = {
   checks: [],
   screenshots: [],
   requests: [],
-  warnings: []
+  warnings: [],
+  failures: []
+}
+
+mkdirSync(runDir, { recursive: true })
+try {
+  report.buildEvidence = verifyBuildEvidence(repoRoot, sourceEvidenceAtStart)
+  assert(report.buildEvidence.status === 'pass',
+    `Routing zero-choice build evidence failed: ${report.buildEvidence.errors.join('; ')}`)
+  assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
+  for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
+    assert(existsSync(path.join(sourceOutDir, entry)), `Built app entry missing: out/${entry}. Run npm run build first.`)
+  }
+
+  mkdirSync(userDataDir, { recursive: true })
+  mkdirSync(projectDir, { recursive: true })
+  writeFileSync(path.join(projectDir, 'README.md'), '# Routing zero-choice real Electron E2E\n', 'utf8')
+  writeFileSync(path.join(userDataDir, 'projects.json'), JSON.stringify([
+    { id: projectId, name: 'Routing Zero Choice Project', path: projectDir, lastUsedAt: Date.now() }
+  ], null, 2), 'utf8')
+  copyBuiltApp()
+} catch (error) {
+  report.error = error instanceof Error ? error.stack || error.message : String(error)
+  report.failures.push({ message: report.error })
+  report.status = 'fail'
+  bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Routing zero-choice Electron setup'
+  )
+  const reportText = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(runDir, 'report.json'), reportText)
+  writeFileSync(path.join(outputRoot, 'latest.json'), reportText)
+  cleanupTempRoot(tempRoot)
+  throw error
 }
 
 const mock = await startResponsesMock()
@@ -463,7 +488,13 @@ try {
   if (browser) await browser.disconnect().catch(() => undefined)
   const exited = await terminate(electron)
   await closeServer(mock.server)
-  const git = readGitState()
+  const sourceEvidenceAtEnd = readSourceEvidenceState(repoRoot)
+  const git = {
+    commit: sourceEvidenceAtEnd.commit,
+    worktreeClean: sourceEvidenceAtEnd.worktreeClean,
+    statusEntryCount: sourceEvidenceAtEnd.statusEntryCount,
+    checkoutDigest: sourceEvidenceAtEnd.checkoutDigest
+  }
   report.gitCommit = git.commit
   report.worktreeClean = git.worktreeClean
   report.statusEntryCount = git.statusEntryCount
@@ -479,7 +510,18 @@ try {
   }
   report.warnings.push(...summarizeProcessOutput(stdout, stderr, exited))
   report.status = report.checks.every((item) => item.status === 'pass') && !report.error ? 'pass' : 'fail'
-  const reportText = JSON.stringify(report, null, 2)
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    sourceEvidenceAtEnd,
+    'Routing zero-choice Electron'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'fail'
+    process.exitCode = 1
+  }
+  if (report.error && report.failures.length === 0) report.failures.push({ message: report.error })
+  const reportText = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(path.join(runDir, 'report.json'), reportText)
   writeFileSync(path.join(outputRoot, 'latest.json'), reportText)
   cleanupTempRoot(tempRoot)
@@ -794,16 +836,6 @@ function summarizeProcessOutput(out, err, exited) {
   if (out.trim()) warnings.push(`[stdout tail]\n${out.trim().slice(-1000)}`)
   if (exited.signal) warnings.push(`Electron exited by signal ${exited.signal}`)
   return warnings
-}
-
-function readGitState() {
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
-  const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repoRoot, encoding: 'utf8' }).trim()
-  return {
-    commit,
-    worktreeClean: status.length === 0,
-    statusEntryCount: status ? status.split(/\r?\n/).length : 0
-  }
 }
 
 function cleanupTempRoot(root) {

@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const outDir = mkdtempSync(path.join(tmpdir(), 'caogen-provider-timeout-'))
 const checks = []
+const runId = new Date().toISOString().replace(/[:.]/g, '-')
+const reportRoot = path.join(repoRoot, 'test-results', 'provider-request-timeout')
+const reportDir = path.join(reportRoot, runId)
+let finalStatus = 'failed'
+let finalError
 
 try {
   execFileSync(process.execPath, [
@@ -96,9 +103,47 @@ try {
     && target.includes('providerRequestTimeouts(provider)'), true,
   'Anthropic adapter enforces timeouts resolved from the active Provider')
 
-  console.log(`provider request timeout smoke ok: ${checks.length}/${checks.length}`)
+  finalStatus = 'passed'
+} catch (error) {
+  finalError = error instanceof Error ? error.stack || error.message : String(error)
+  process.exitCode = 1
 } finally {
   rmSync(outDir, { recursive: true, force: true })
+  const report = {
+    schemaVersion: 1,
+    runId,
+    gate: 'test:provider-request-timeout',
+    status: finalStatus,
+    ok: finalStatus === 'passed',
+    generatedAt: new Date().toISOString(),
+    pass: checks.length,
+    total: checks.length,
+    checks: checks.map((name) => ({ name, status: 'pass' })),
+    failures: finalError ? [{ message: finalError }] : [],
+    warnings: []
+  }
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Provider request timeout'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.ok = false
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const body = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), body, 'utf8')
+  writeFileSync(path.join(reportRoot, 'latest.json'), body, 'utf8')
+}
+
+if (finalStatus === 'passed' && !process.exitCode) {
+  console.log(`provider request timeout smoke ok: ${checks.length}/${checks.length}`)
+} else {
+  console.error(`provider request timeout smoke failed: ${finalError ?? 'evidence provenance failed'}`)
 }
 
 async function checkRejects(action, code, message) {

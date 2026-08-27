@@ -23,6 +23,8 @@ const userDataDir = path.join(tempRoot, 'userData')
 const sourceOutDir = path.join(repoRoot, 'out')
 const isolatedOutDir = path.join(runDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
+const electronRunner = path.join(repoRoot, 'scripts', 'video-studio-golden-electron-runner.cjs')
+const importFixturePath = path.join(tempRoot, 'video-golden-asset.png')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
@@ -32,12 +34,14 @@ const revisedScript = `${initialScript}\nScene three: the ending shows a clear c
 const sourceGitAtStart = readSourceEvidenceState(repoRoot)
 
 assert(existsSync(electronBin), 'Electron binary not found. Run npm install first.')
+assert(existsSync(electronRunner), 'Video Studio Electron test runner is missing.')
 for (const entry of ['main/index.js', 'preload/index.js', 'renderer/index.html']) {
   assert(existsSync(path.join(sourceOutDir, entry)), `Built app entry missing: out/${entry}. Run npm run build first.`)
 }
 
 mkdirSync(runDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
+writeImageFixture(importFixturePath, [32, 108, 196])
 copyBuiltApp()
 
 const report = {
@@ -68,6 +72,8 @@ const report = {
     classification: 'local_targeted_not_release',
     requiredChecks: [
       'script to storyboard structure',
+      'single Shot edit and same-Scene reorder through the UI',
+      'local Asset import versions and Shot binding through the UI',
       'local decodable non-black preview',
       'traceable export Artifact/Evidence/Acceptance',
       'revision produces a new local preview',
@@ -148,154 +154,23 @@ try {
     await screenshot(page, '01-created')
   })
 
-  await check('one primary action produces a playable local preview', async () => {
-    report.ffmpeg = await page.evaluate(() => window.agentDesk.getMediaFfmpegInfo())
-    assert.equal(report.ffmpeg?.available, true, `local FFmpeg is unavailable: ${JSON.stringify(report.ffmpeg)}`)
-    await page.waitForSelector('[data-video-compose-preview]', { visible: true, timeout: 15_000 })
-    await page.click('[data-video-compose-preview]')
-    const composed = await waitForValue(
-      () => page.evaluate(async (projectId) => {
-        const studio = await window.agentDesk.getMediaStudio(projectId)
-        const assets = studio.productions.flatMap((production) => production.assets)
-        const asset = assets.filter((item) => item.kind === 'video' && item.authorization?.source === 'local_composition')
-          .sort((left, right) => right.version - left.version)[0]
-        return asset ? {
-          assetId: asset.id,
-          artifactId: asset.artifactId,
-          status: asset.contentStatus,
-          mediaType: asset.mediaType,
-          sizeBytes: asset.sizeBytes,
-          previewUrl: asset.previewUrl
-        } : null
-      }, report.projectId),
-      (value) => value?.status === 'available' && value.mediaType === 'video/mp4' && Number(value.sizeBytes) > 0 && Boolean(value.previewUrl),
-      60_000,
-      'waiting for local playable composition'
-    )
-    assert.equal(composed.mediaType, 'video/mp4')
-    assert(composed.artifactId, 'composition did not expose a canonical Artifact identity')
-    const trace = await page.evaluate(async ({ projectId, artifactId }) => {
-      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
-      const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, limit: 100 })
-      return {
-        artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
-        evidence: evidence.items.filter((item) => item.artifactId === artifactId),
-        acceptances: ledger.acceptances.items.filter((item) => item.evidenceRefs.some((evidenceId) =>
-          evidence.items.some((item) => item.evidenceId === evidenceId && item.artifactId === artifactId)
-        )),
-        projectId
-      }
-    }, { projectId: report.projectId, artifactId: composed.artifactId })
-    assert(trace.artifact, 'composition Artifact was not readable from the canonical ledger')
-    assert(trace.evidence.length > 0, 'composition Evidence was not readable from the canonical ledger')
-    assert(trace.acceptances.some((item) => item.status === 'passed'), 'composition Acceptance was not passed in the canonical ledger')
-    const adopted = await page.evaluate(async (projectId) => {
-      const studio = await window.agentDesk.getMediaStudio(projectId)
-      const production = studio.productions[0]
-      const asset = production?.assets
-        .filter((item) => item.authorization?.source === 'local_composition')
-        .sort((left, right) => right.version - left.version)[0]
-      if (!asset) return null
-      await window.agentDesk.setMediaAdoption({ productionId: production.id, assetId: asset.id, adopted: true })
-      const refreshed = await window.agentDesk.getMediaStudio(projectId)
-      const next = refreshed.productions.find((item) => item.id === production.id)
-      return {
-        finalAssetId: next?.finalAssetId,
-        adopted: next?.assets.find((item) => item.id === asset.id)?.adopted === true
-      }
-    }, report.projectId)
-    assert.deepEqual(adopted, { finalAssetId: composed.assetId, adopted: true }, 'adopted video did not retain the canonical final asset identity')
-    const exportPath = path.join(tempRoot, 'exports', 'video-final.mp4')
-    const exported = await page.evaluate(async ({ projectId, productionId, assetId, destinationPath }) =>
-      window.agentDesk.exportMediaProduction({ projectId, productionId, assetId, destinationPath }), {
-      projectId: report.projectId,
-      productionId: report.productionId,
-      assetId: composed.assetId,
-      destinationPath: exportPath
-    })
-    assert.equal(exported.canceled, false, 'video export was unexpectedly canceled')
-    assert.equal(exported.filePath, exportPath, 'video export returned the wrong destination')
-    assert(exported.artifactId && exported.evidenceId && exported.acceptanceId, 'video export did not return canonical identities')
-    assert(existsSync(exportPath), 'video export file was not created')
-    const exportedBytes = readFileSync(exportPath)
-    assert.equal(exportedBytes.byteLength, Number(exported.sizeBytes), 'exported byte count differs from the canonical record')
-    const exportedDigest = `sha256:${createHash('sha256').update(exportedBytes).digest('hex')}`
-    assert.equal(exportedDigest, exported.digest, 'exported bytes do not match the returned digest')
-    const exportTrace = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId, sourceArtifactId }) => {
-      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
-      const evidence = await window.agentDesk.queryWorkflowEvidence({ evidenceId, artifactId, limit: 100 })
-      const locations = await window.agentDesk.listWorkflowArtifactLocations({ artifactId, limit: 100 })
-      const graph = await window.agentDesk.queryWorkflowArtifactGraph(artifactId)
-      return {
-        artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
-        evidence: evidence.items.find((item) => item.evidenceId === evidenceId) ?? null,
-        acceptance: ledger.acceptances.items.find((item) => item.id === acceptanceId) ?? null,
-        location: locations.items.find((item) => item.artifactId === artifactId && item.uri?.startsWith('file:')) ?? null,
-        sourceEdge: graph.outbound.find((item) => item.relation === 'derived_from') ?? null
-      }
-    }, { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId, sourceArtifactId: exported.sourceArtifactId })
-    assert(exportTrace.artifact, 'export Artifact was not readable from the canonical ledger')
-    assert(exportTrace.evidence, 'export Evidence was not readable from the canonical ledger')
-    assert.equal(exportTrace.acceptance?.status, 'passed', 'export Acceptance was not passed')
-    assert(exportTrace.location?.uri?.startsWith('file:'), 'export location was not recorded as a file URI')
-    assert.equal(exportTrace.sourceEdge?.toArtifactId, exported.sourceArtifactId, 'export source-version lineage points to the wrong Artifact')
-    const repeatedExport = await page.evaluate(async ({ projectId, productionId, assetId, destinationPath }) =>
-      window.agentDesk.exportMediaProduction({ projectId, productionId, assetId, destinationPath }), {
-      projectId: report.projectId,
-      productionId: report.productionId,
-      assetId: composed.assetId,
-      destinationPath: exportPath
-    })
-    assert.deepEqual(
-      { artifactId: repeatedExport.artifactId, evidenceId: repeatedExport.evidenceId, acceptanceId: repeatedExport.acceptanceId, digest: repeatedExport.digest },
-      { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId, digest: exported.digest },
-      'repeated export did not reuse the canonical output identities'
-    )
-    const repeatedLedger = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId }) => {
-      const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
-      const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, evidenceId, limit: 100 })
-      return {
-        artifacts: ledger.artifacts.items.filter((item) => item.id === artifactId),
-        evidence: evidence.items.filter((item) => item.evidenceId === evidenceId),
-        acceptances: ledger.acceptances.items.filter((item) => item.id === acceptanceId)
-      }
-    }, { artifactId: exported.artifactId, evidenceId: exported.evidenceId, acceptanceId: exported.acceptanceId })
-    assert.equal(repeatedLedger.artifacts.length, 1, 'repeated export created a second Artifact')
-    assert.equal(repeatedLedger.evidence.length, 1, 'repeated export created duplicate Evidence')
-    assert.equal(repeatedLedger.acceptances.length, 1, 'repeated export created duplicate Acceptance')
-    await page.waitForSelector('[data-video-preview]', { visible: true, timeout: 15_000 })
-    await page.waitForFunction(() => {
-      const node = document.querySelector('[data-video-preview]')
-      return node instanceof HTMLVideoElement && node.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && node.videoWidth > 0
-    }, { timeout: 15_000 })
-    const media = await page.$eval('[data-video-preview]', (node) => ({
-      tag: node.tagName,
-      src: node.getAttribute('src') || '',
-      readyState: node instanceof HTMLVideoElement ? node.readyState : 0,
-      width: node instanceof HTMLVideoElement ? node.videoWidth : 0
-    }))
-    assert.equal(media.tag, 'VIDEO', 'preview is not rendered as a video element')
-    assert(media.src.length > 0, 'preview video has no source')
-    assert(media.readyState >= 2 && media.width > 0, `preview video did not decode: ${JSON.stringify(media)}`)
-    const previewScreenshot = await page.$('[data-video-preview]')
-    assert(previewScreenshot, 'preview video element disappeared before visual capture')
-    await page.$eval('[data-video-preview]', async (node) => {
-      if (!(node instanceof HTMLVideoElement)) return
-      node.muted = true
-      await node.play().catch(() => undefined)
-      await new Promise((resolve) => setTimeout(resolve, 150))
-      node.pause()
-    })
-    await page.$eval('[data-video-preview]', (node) => { if (node instanceof HTMLVideoElement) node.removeAttribute('controls') })
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    const png = PNG.sync.read(await previewScreenshot.screenshot())
-    let nonBlack = 0
-    for (let index = 0; index < png.data.length; index += 4) {
-      if (png.data[index] + png.data[index + 1] + png.data[index + 2] > 36) nonBlack += 1
+  await check('storyboard editing, reorder, Asset versions and Shot binding work through the UI', async () => {
+    const shot = await createEditAndReorderShot()
+    const assets = await importAndBindAssetVersions(shot.shotId)
+    report.storyboard = {
+      ...shot,
+      assets: assets.versions,
+      bindings: assets.bindings
     }
-    const nonBlackRatio = nonBlack / Math.max(1, png.width * png.height)
-    assert(nonBlackRatio > 0.05, `preview frame is effectively black: ${JSON.stringify({ ...media, nonBlackRatio })}`)
-    await screenshot(page, '02-preview')
+    assert.deepEqual(report.storyboard.bindings, [
+      { assetId: assets.versions[0].id, assetVersion: 1, adopted: false },
+      { assetId: assets.versions[1].id, assetVersion: 2, adopted: true }
+    ], `versioned Shot bindings drifted: ${JSON.stringify(report.storyboard.bindings)}`)
+    await screenshot(page, '02-storyboard-assets')
+  })
+
+  await check('one primary action produces a playable local preview', async () => {
+    await verifyLocalPreviewWorkflow()
   })
 
   await check('revision stays in the same production and can be previewed again', async () => {
@@ -333,7 +208,7 @@ try {
       'waiting for revised local preview'
     )
     assert(after, 'revised preview did not create a new local composition asset')
-    await screenshot(page, '03-revised-preview')
+    await screenshot(page, '04-revised-preview')
   })
 
   await check('Video Mock jobs expose failure, cancellation and unknown-result states', async () => {
@@ -423,6 +298,40 @@ try {
 
   await check('Video job states survive an Electron restart without replay', async () => {
     await restartElectron()
+    const storyboardAfterRestart = await page.evaluate(async ({ projectId, productionId, expected }) => {
+      const studio = await window.agentDesk.getMediaStudio(projectId)
+      const production = studio.productions.find((item) => item.id === productionId)
+      const scene = production?.scenes.find((item) => item.id === expected.sceneId)
+      const shot = production?.shots.find((item) => item.id === expected.shotId)
+      return production && scene && shot ? {
+        sceneShotIds: scene.shotIds,
+        shot: {
+          id: shot.id,
+          title: shot.title,
+          prompt: shot.prompt,
+          durationMs: shot.durationMs,
+          bindings: shot.assetBindings
+            .filter((binding) => expected.assets.some((asset) => asset.id === binding.assetId))
+            .map(({ assetId, assetVersion, adopted }) => ({ assetId, assetVersion, adopted }))
+            .sort((left, right) => left.assetVersion - right.assetVersion)
+        },
+        assets: production.assets
+          .filter((asset) => expected.assets.some((item) => item.id === asset.id))
+          .map(({ id, version, digest, title }) => ({ id, version, digest, title }))
+          .sort((left, right) => left.version - right.version)
+      } : null
+    }, { projectId: report.projectId, productionId: report.productionId, expected: report.storyboard })
+    assert.deepEqual(storyboardAfterRestart, {
+      sceneShotIds: report.storyboard.sceneShotIds,
+      shot: {
+        id: report.storyboard.shotId,
+        title: report.storyboard.title,
+        prompt: report.storyboard.prompt,
+        durationMs: report.storyboard.durationMs,
+        bindings: report.storyboard.bindings
+      },
+      assets: report.storyboard.assets
+    }, `Storyboard or Asset versions changed after restart: ${JSON.stringify(storyboardAfterRestart)}`)
     const afterRestart = await page.evaluate(async (projectId) => {
       const studio = await window.agentDesk.getMediaStudio(projectId)
       const jobs = studio.jobs
@@ -523,13 +432,15 @@ function startElectronProcess() {
   const child = spawnElectronTestProcess(electronBin, [
     ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
     '--remote-debugging-port=0',
-    mainEntry
+    electronRunner
   ], {
     cwd: repoRoot,
     env: {
       ...process.env,
       CAOGEN_USER_DATA_DIR: userDataDir,
       CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
+      CAOGEN_VIDEO_STUDIO_MAIN_ENTRY: mainEntry,
+      CAOGEN_VIDEO_STUDIO_IMPORT_PATH: importFixturePath,
       OPENAI_API_KEY: '',
       ANTHROPIC_API_KEY: '',
       ANTHROPIC_AUTH_TOKEN: ''
@@ -686,4 +597,349 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)) }
 async function setInputValue(targetPage, selector, value) {
   await targetPage.focus(selector)
   await targetPage.keyboard.type(value)
+}
+async function replaceInputValue(targetPage, selector, value) {
+  await targetPage.$eval(selector, (element) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+      throw new Error('replaceInputValue target is not an input control')
+    }
+    element.focus()
+    element.select()
+  })
+  await targetPage.keyboard.type(value)
+}
+async function waitForEnabledButton(targetPage, selector, timeout = 10_000) {
+  await targetPage.waitForFunction((target) => {
+    const button = document.querySelector(target)
+    return button instanceof HTMLButtonElement && !button.disabled
+  }, { timeout }, selector)
+}
+async function verifyLocalPreviewWorkflow() {
+  const composed = await composeLocalPreview()
+  await verifyCompositionTrace(composed)
+  await exportAndVerifyComposition(composed)
+  await verifyPlayablePreviewFrame()
+  await screenshot(page, '03-preview')
+}
+async function composeLocalPreview() {
+  report.ffmpeg = await page.evaluate(() => window.agentDesk.getMediaFfmpegInfo())
+  assert.equal(report.ffmpeg?.available, true, `local FFmpeg is unavailable: ${JSON.stringify(report.ffmpeg)}`)
+  await page.waitForSelector('[data-video-compose-preview]', { visible: true, timeout: 15_000 })
+  await page.click('[data-video-compose-preview]')
+  const composed = await waitForValue(
+    () => page.evaluate(async (projectId) => {
+      const studio = await window.agentDesk.getMediaStudio(projectId)
+      const assets = studio.productions.flatMap((production) => production.assets)
+      const asset = assets.filter((item) => item.kind === 'video' && item.authorization?.source === 'local_composition')
+        .sort((left, right) => right.version - left.version)[0]
+      return asset ? {
+        assetId: asset.id,
+        artifactId: asset.artifactId,
+        status: asset.contentStatus,
+        mediaType: asset.mediaType,
+        sizeBytes: asset.sizeBytes,
+        previewUrl: asset.previewUrl
+      } : null
+    }, report.projectId),
+    (value) => value?.status === 'available' && value.mediaType === 'video/mp4' &&
+      Number(value.sizeBytes) > 0 && Boolean(value.previewUrl),
+    60_000,
+    'waiting for local playable composition'
+  )
+  assert.equal(composed.mediaType, 'video/mp4')
+  assert(composed.artifactId, 'composition did not expose a canonical Artifact identity')
+  return composed
+}
+async function verifyCompositionTrace(composed) {
+  const trace = await page.evaluate(async ({ projectId, artifactId }) => {
+    const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+    const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, limit: 100 })
+    return {
+      artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
+      evidence: evidence.items.filter((item) => item.artifactId === artifactId),
+      acceptances: ledger.acceptances.items.filter((item) => item.evidenceRefs.some((evidenceId) =>
+        evidence.items.some((item) => item.evidenceId === evidenceId && item.artifactId === artifactId)
+      )),
+      projectId
+    }
+  }, { projectId: report.projectId, artifactId: composed.artifactId })
+  assert(trace.artifact, 'composition Artifact was not readable from the canonical ledger')
+  assert(trace.evidence.length > 0, 'composition Evidence was not readable from the canonical ledger')
+  assert(trace.acceptances.some((item) => item.status === 'passed'), 'composition Acceptance was not passed in the canonical ledger')
+  const adopted = await page.evaluate(async (projectId) => {
+    const studio = await window.agentDesk.getMediaStudio(projectId)
+    const production = studio.productions[0]
+    const asset = production?.assets
+      .filter((item) => item.authorization?.source === 'local_composition')
+      .sort((left, right) => right.version - left.version)[0]
+    if (!asset) return null
+    await window.agentDesk.setMediaAdoption({ productionId: production.id, assetId: asset.id, adopted: true })
+    const refreshed = await window.agentDesk.getMediaStudio(projectId)
+    const next = refreshed.productions.find((item) => item.id === production.id)
+    return { finalAssetId: next?.finalAssetId, adopted: next?.assets.find((item) => item.id === asset.id)?.adopted === true }
+  }, report.projectId)
+  assert.deepEqual(adopted, { finalAssetId: composed.assetId, adopted: true },
+    'adopted video did not retain the canonical final asset identity')
+}
+async function exportAndVerifyComposition(composed) {
+  const exportPath = path.join(tempRoot, 'exports', 'video-final.mp4')
+  const exported = await exportComposition(composed.assetId, exportPath)
+  assert.equal(exported.canceled, false, 'video export was unexpectedly canceled')
+  assert.equal(exported.filePath, exportPath, 'video export returned the wrong destination')
+  assert(exported.artifactId && exported.evidenceId && exported.acceptanceId,
+    'video export did not return canonical identities')
+  assert(existsSync(exportPath), 'video export file was not created')
+  const exportedBytes = readFileSync(exportPath)
+  assert.equal(exportedBytes.byteLength, Number(exported.sizeBytes),
+    'exported byte count differs from the canonical record')
+  const exportedDigest = `sha256:${createHash('sha256').update(exportedBytes).digest('hex')}`
+  assert.equal(exportedDigest, exported.digest, 'exported bytes do not match the returned digest')
+  await verifyExportTrace(exported)
+  await verifyRepeatedExport(composed.assetId, exportPath, exported)
+}
+function exportComposition(assetId, destinationPath) {
+  return page.evaluate(async (input) => window.agentDesk.exportMediaProduction(input), {
+    projectId: report.projectId,
+    productionId: report.productionId,
+    assetId,
+    destinationPath
+  })
+}
+async function verifyExportTrace(exported) {
+  const trace = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId, sourceArtifactId }) => {
+    const ledger = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+    const evidence = await window.agentDesk.queryWorkflowEvidence({ evidenceId, artifactId, limit: 100 })
+    const locations = await window.agentDesk.listWorkflowArtifactLocations({ artifactId, limit: 100 })
+    const graph = await window.agentDesk.queryWorkflowArtifactGraph(artifactId)
+    return {
+      artifact: ledger.artifacts.items.find((item) => item.id === artifactId) ?? null,
+      evidence: evidence.items.find((item) => item.evidenceId === evidenceId) ?? null,
+      acceptance: ledger.acceptances.items.find((item) => item.id === acceptanceId) ?? null,
+      location: locations.items.find((item) => item.artifactId === artifactId && item.uri?.startsWith('file:')) ?? null,
+      sourceEdge: graph.outbound.find((item) =>
+        item.relation === 'derived_from' && item.toArtifactId === sourceArtifactId) ?? null
+    }
+  }, exported)
+  assert(trace.artifact, 'export Artifact was not readable from the canonical ledger')
+  assert(trace.evidence, 'export Evidence was not readable from the canonical ledger')
+  assert.equal(trace.acceptance?.status, 'passed', 'export Acceptance was not passed')
+  assert(trace.location?.uri?.startsWith('file:'), 'export location was not recorded as a file URI')
+  assert.equal(trace.sourceEdge?.toArtifactId, exported.sourceArtifactId,
+    'export source-version lineage points to the wrong Artifact')
+}
+async function verifyRepeatedExport(assetId, exportPath, exported) {
+  const repeated = await exportComposition(assetId, exportPath)
+  const identity = ({ artifactId, evidenceId, acceptanceId, digest }) => ({ artifactId, evidenceId, acceptanceId, digest })
+  assert.deepEqual(identity(repeated), identity(exported), 'repeated export did not reuse the canonical output identities')
+  const ledger = await page.evaluate(async ({ artifactId, evidenceId, acceptanceId }) => {
+    const workflow = await window.agentDesk.listWorkflowLedger({ artifactId, limit: 100 })
+    const evidence = await window.agentDesk.queryWorkflowEvidence({ artifactId, evidenceId, limit: 100 })
+    return {
+      artifacts: workflow.artifacts.items.filter((item) => item.id === artifactId),
+      evidence: evidence.items.filter((item) => item.evidenceId === evidenceId),
+      acceptances: workflow.acceptances.items.filter((item) => item.id === acceptanceId)
+    }
+  }, exported)
+  assert.equal(ledger.artifacts.length, 1, 'repeated export created a second Artifact')
+  assert.equal(ledger.evidence.length, 1, 'repeated export created duplicate Evidence')
+  assert.equal(ledger.acceptances.length, 1, 'repeated export created duplicate Acceptance')
+}
+async function verifyPlayablePreviewFrame() {
+  await page.waitForSelector('[data-video-preview]', { visible: true, timeout: 15_000 })
+  await page.waitForFunction(() => {
+    const node = document.querySelector('[data-video-preview]')
+    return node instanceof HTMLVideoElement &&
+      node.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && node.videoWidth > 0
+  }, { timeout: 15_000 })
+  const media = await page.$eval('[data-video-preview]', (node) => ({
+    tag: node.tagName,
+    src: node.getAttribute('src') || '',
+    readyState: node instanceof HTMLVideoElement ? node.readyState : 0,
+    width: node instanceof HTMLVideoElement ? node.videoWidth : 0
+  }))
+  assert.equal(media.tag, 'VIDEO', 'preview is not rendered as a video element')
+  assert(media.src.length > 0, 'preview video has no source')
+  assert(media.readyState >= 2 && media.width > 0, `preview video did not decode: ${JSON.stringify(media)}`)
+  const previewScreenshot = await page.$('[data-video-preview]')
+  assert(previewScreenshot, 'preview video element disappeared before visual capture')
+  await page.$eval('[data-video-preview]', async (node) => {
+    if (!(node instanceof HTMLVideoElement)) return
+    node.muted = true
+    await node.play().catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    node.pause()
+    node.removeAttribute('controls')
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const png = PNG.sync.read(await previewScreenshot.screenshot())
+  let nonBlack = 0
+  for (let index = 0; index < png.data.length; index += 4) {
+    if (png.data[index] + png.data[index + 1] + png.data[index + 2] > 36) nonBlack += 1
+  }
+  const nonBlackRatio = nonBlack / Math.max(1, png.width * png.height)
+  assert(nonBlackRatio > 0.05, `preview frame is effectively black: ${JSON.stringify({ ...media, nonBlackRatio })}`)
+}
+async function createEditAndReorderShot() {
+  const before = await readInitialStoryboardState()
+  assert(before?.sceneId && before.sceneShotIds.length > 0, `initial Storyboard Scene is missing: ${JSON.stringify(before)}`)
+  await page.click('.video-studio-scene:first-of-type .video-studio-scene-title button')
+  const created = await waitForValue(
+    () => readNewShotState(before.shotIds),
+    (value) => Boolean(value?.shot && value.sceneShotIds.at(-1) === value.shot.id),
+    15_000,
+    'waiting for UI-created Shot'
+  )
+  assert.equal(created.shot.sceneId, before.sceneId, 'new Shot was created outside the selected Scene')
+  await page.waitForFunction((expectedTitle) => {
+    const selected = document.querySelector('.video-studio-shot.is-selected')
+    const title = document.querySelector('[aria-label="\u955c\u5934\u6807\u9898"]')
+    return Boolean(selected?.querySelector('strong')?.textContent === expectedTitle &&
+      title instanceof HTMLInputElement && title.value === expectedTitle)
+  }, { timeout: 15_000 }, created.shot.title)
+
+  const title = 'Golden editable close-up'
+  const prompt = 'Show the verified delivery result with a stable camera move.'
+  const durationMs = 6_500
+  await replaceInputValue(page, '[aria-label="\u955c\u5934\u6807\u9898"]', title)
+  await replaceInputValue(page, '[aria-label="\u955c\u5934\u63d0\u793a\u8bcd"]', prompt)
+  await replaceInputValue(page, '.video-studio-duration input[type="number"]', String(durationMs))
+  await page.click('.video-studio-inspector .video-studio-inline-actions .btn-primary')
+  const edited = await waitForValue(
+    () => readShotState(report.projectId, report.productionId, created.shot.id),
+    (value) => value?.shot.title === title && value.shot.prompt === prompt && value.shot.durationMs === durationMs,
+    15_000,
+    'waiting for edited Shot'
+  )
+  const oldIndex = edited.sceneShotIds.indexOf(created.shot.id)
+  assert(oldIndex > 0, `UI-created Shot cannot be moved up: ${JSON.stringify(edited.sceneShotIds)}`)
+  await waitForEnabledButton(page, '.video-studio-inspector [aria-label="\u955c\u5934\u4e0a\u79fb"]')
+  await page.click('.video-studio-inspector [aria-label="\u955c\u5934\u4e0a\u79fb"]')
+  const reordered = await waitForValue(
+    () => readShotState(report.projectId, report.productionId, created.shot.id),
+    (value) => value?.sceneShotIds.indexOf(created.shot.id) === oldIndex - 1,
+    15_000,
+    'waiting for reordered Shot'
+  )
+  return { sceneId: before.sceneId, shotId: created.shot.id, title, prompt, durationMs, sceneShotIds: reordered.sceneShotIds }
+}
+async function importAndBindAssetVersions(shotId) {
+  await page.click('details[data-video-advanced-section="assets"] > summary')
+  await page.waitForSelector('.video-studio-asset-toolbar button', { visible: true, timeout: 10_000 })
+  await waitForEnabledButton(page, '.video-studio-asset-toolbar button')
+  await page.click('.video-studio-asset-toolbar button')
+  const versionOne = await waitForValue(
+    () => readImportedAssets(report.projectId, report.productionId),
+    (assets) => assets.length === 1 && assets[0].version === 1,
+    30_000,
+    'waiting for first UI Asset import'
+  )
+  await bindSelectedAsset(shotId, versionOne[0], 'v1')
+
+  writeImageFixture(importFixturePath, [208, 72, 82])
+  await waitForEnabledButton(page, '.video-studio-asset-toolbar button')
+  await page.click('.video-studio-asset-toolbar button')
+  const versions = await waitForValue(
+    () => readImportedAssets(report.projectId, report.productionId),
+    (assets) => assets.length === 2 && assets.map((asset) => asset.version).join(',') === '1,2',
+    30_000,
+    'waiting for second UI Asset version'
+  )
+  assert.notEqual(versions[0].digest, versions[1].digest, 'Asset v2 reused v1 bytes')
+  assert.notEqual(versions[0].id, versions[1].id, 'Asset v2 reused v1 identity')
+  await page.waitForFunction(() => {
+    const selected = document.querySelector('.video-studio-asset-row.is-selected small')
+    const button = document.querySelector('.video-studio-asset-actions button')
+    return Boolean(selected?.textContent?.includes('v2') && button instanceof HTMLButtonElement && !button.disabled)
+  }, { timeout: 10_000 })
+  await bindSelectedAsset(shotId, versions[1], 'v2')
+  const finalState = await adoptVersionTwoBinding(shotId, versions[1])
+  return {
+    versions: versions.map(({ id, version, digest, title }) => ({ id, version, digest, title })),
+    bindings: finalState.shot.assetBindings
+      .filter((binding) => versions.some((asset) => asset.id === binding.assetId))
+      .map(({ assetId, assetVersion, adopted }) => ({ assetId, assetVersion, adopted }))
+      .sort((left, right) => left.assetVersion - right.assetVersion)
+  }
+}
+async function bindSelectedAsset(shotId, asset, label) {
+  await waitForEnabledButton(page, '.video-studio-asset-actions button')
+  await page.click('.video-studio-asset-actions button')
+  await waitForValue(
+    () => readShotState(report.projectId, report.productionId, shotId),
+    (value) => value?.shot.assetBindings.some((binding) =>
+      binding.assetId === asset.id && binding.assetVersion === asset.version),
+    15_000,
+    `waiting for ${label} Asset binding`
+  )
+}
+async function adoptVersionTwoBinding(shotId, asset) {
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.video-studio-bindings button'))
+    .some((item) => item instanceof HTMLButtonElement && item.textContent?.includes('v2') && !item.disabled),
+  { timeout: 10_000 })
+  const adopted = await page.evaluate(() => {
+    const button = Array.from(document.querySelectorAll('.video-studio-bindings button'))
+      .find((item) => item.textContent?.includes('v2'))
+    if (!(button instanceof HTMLButtonElement)) return false
+    button.click()
+    return true
+  })
+  assert.equal(adopted, true, 'v2 binding adoption action is not available in the UI')
+  return waitForValue(
+    () => readShotState(report.projectId, report.productionId, shotId),
+    (value) => value?.shot.assetBindings.some((binding) =>
+      binding.assetId === asset.id && binding.assetVersion === asset.version && binding.adopted),
+    15_000,
+    'waiting for adopted v2 binding'
+  )
+}
+function readInitialStoryboardState() {
+  return page.evaluate(async ({ projectId, productionId }) => {
+    const studio = await window.agentDesk.getMediaStudio(projectId)
+    const production = studio.productions.find((item) => item.id === productionId)
+    const sceneId = production?.episodes[0]?.sceneIds[0]
+    const scene = production?.scenes.find((item) => item.id === sceneId)
+    return production && scene ? {
+      shotIds: production.shots.map((item) => item.id),
+      sceneId: scene.id,
+      sceneShotIds: scene.shotIds
+    } : null
+  }, { projectId: report.projectId, productionId: report.productionId })
+}
+function readNewShotState(previousIds) {
+  return page.evaluate(async ({ projectId, productionId, previousIds: priorIds }) => {
+    const studio = await window.agentDesk.getMediaStudio(projectId)
+    const production = studio.productions.find((item) => item.id === productionId)
+    const shot = production?.shots.find((item) => !priorIds.includes(item.id))
+    const scene = production?.scenes.find((item) => item.id === shot?.sceneId)
+    return shot && scene ? { shot, sceneShotIds: scene.shotIds } : null
+  }, { projectId: report.projectId, productionId: report.productionId, previousIds })
+}
+function readShotState(projectId, productionId, shotId) {
+  return page.evaluate(async ({ projectId: scopedProjectId, productionId: scopedProductionId, shotId: scopedShotId }) => {
+    const studio = await window.agentDesk.getMediaStudio(scopedProjectId)
+    const production = studio.productions.find((item) => item.id === scopedProductionId)
+    const shot = production?.shots.find((item) => item.id === scopedShotId)
+    const scene = production?.scenes.find((item) => item.id === shot?.sceneId)
+    return shot && scene ? { shot, sceneShotIds: scene.shotIds } : null
+  }, { projectId, productionId, shotId })
+}
+function readImportedAssets(projectId, productionId) {
+  return page.evaluate(async ({ projectId: scopedProjectId, productionId: scopedProductionId }) => {
+    const studio = await window.agentDesk.getMediaStudio(scopedProjectId)
+    const production = studio.productions.find((item) => item.id === scopedProductionId)
+    return (production?.assets ?? [])
+      .filter((asset) => asset.authorization?.source === 'user_import' && asset.kind === 'image')
+      .map(({ id, version, digest, title }) => ({ id, version, digest, title }))
+      .sort((left, right) => left.version - right.version)
+  }, { projectId, productionId })
+}
+function writeImageFixture(filePath, [red, green, blue]) {
+  const png = new PNG({ width: 32, height: 32 })
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    png.data[offset] = red
+    png.data[offset + 1] = green
+    png.data[offset + 2] = blue
+    png.data[offset + 3] = 255
+  }
+  writeFileSync(filePath, PNG.sync.write(png), { mode: 0o600 })
 }

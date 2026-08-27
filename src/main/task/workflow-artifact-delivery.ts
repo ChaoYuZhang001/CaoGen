@@ -2,7 +2,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { lstat, mkdir, open, readFile, rm } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, readdir, rm } from 'node:fs/promises'
 import { basename, dirname, extname, resolve } from 'node:path'
 import type { Readable } from 'node:stream'
 import ZipStream from 'zip-stream'
@@ -24,7 +24,7 @@ import {
   type WorkflowArtifactExportSource
 } from './workflow-artifact-export'
 import { readTaskSnapshotDatabase } from './task-snapshot'
-import { writeDurableFile } from '../durable-file'
+import { readDurableFileDigest, writeDurableFile } from '../durable-file'
 import { findWorkflowArtifact } from './workflow-ledger-query'
 import { setupWorkflowLedgerSchema } from './workflow-ledger-store'
 import {
@@ -73,6 +73,8 @@ interface WorkflowProjectPackageEntry {
   mediaType?: string
   path: string
 }
+
+const activeDeliveryZipTemporaryPaths = new Set<string>()
 
 interface WorkflowProjectDeliveryPackageManifest {
   schemaVersion: 1
@@ -427,7 +429,10 @@ async function writeDeliveryZipAtomically(
   }
   const parent = dirname(targetPath)
   await mkdir(parent, { recursive: true, mode: 0o700 })
+  await removeOrphanedDeliveryZipTemporaryFiles(parent, basename(targetPath))
+  const expectedTargetDigest = await readDurableFileDigest(targetPath)
   const temporaryPath = resolve(parent, `.${basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`)
+  activeDeliveryZipTemporaryPaths.add(temporaryPath)
   const archive = new ZipStream({ forceZip64: true, zlib: { level: 6 } })
   const writer = createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600 })
   archive.pipe(writer)
@@ -453,9 +458,11 @@ async function writeDeliveryZipAtomically(
     const handle = await open(temporaryPath, 'r+')
     try { await handle.sync() } finally { await handle.close() }
     const observed = await hashStableFile(temporaryPath)
-    await beforePublish()
     const packageBytes = await readFile(temporaryPath)
-    await writeDurableFile(targetPath, packageBytes)
+    await writeDurableFile(targetPath, packageBytes, {
+      expectedTargetDigest,
+      beforePublish
+    })
     const afterPublish = await lstat(targetPath, { bigint: true })
     if (!afterPublish.isFile() || afterPublish.isSymbolicLink()) {
       throw new Error('Delivery package target is not a regular file after durable publish')
@@ -470,8 +477,37 @@ async function writeDeliveryZipAtomically(
   } catch (error) {
     archive.destroy()
     await closeWriteStream(writer)
-    await rm(temporaryPath, { force: true }).catch(() => undefined)
     throw error
+  } finally {
+    activeDeliveryZipTemporaryPaths.delete(temporaryPath)
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+  }
+}
+
+async function removeOrphanedDeliveryZipTemporaryFiles(parent: string, targetName: string): Promise<void> {
+  const prefix = `.${targetName}.`
+  const suffix = '.tmp'
+  const entries = await readdir(parent, { withFileTypes: true })
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith(suffix)) return
+    const candidate = resolve(parent, entry.name)
+    if (activeDeliveryZipTemporaryPaths.has(candidate)) return
+    const identity = entry.name.slice(prefix.length, -suffix.length)
+    const owner = /^(\d+)\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.exec(identity)
+    if (!owner) return
+    const ownerPid = Number(owner[1])
+    if (ownerPid !== process.pid && processIsRunning(ownerPid)) return
+    await rm(candidate, { force: true }).catch(() => undefined)
+  }))
+}
+
+function processIsRunning(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
 
@@ -590,7 +626,8 @@ async function writeManifestAtomically(
   const bytes = Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8')
   const parent = dirname(targetPath)
   await mkdir(parent, { recursive: true, mode: 0o700 })
-  await writeDurableFile(targetPath, bytes)
+  const expectedTargetDigest = await readDurableFileDigest(targetPath)
+  await writeDurableFile(targetPath, bytes, { expectedTargetDigest })
   const stats = await lstat(targetPath)
   if (!stats.isFile() || stats.isSymbolicLink()) throw new Error('Delivery manifest target is not a regular file')
   const observed = await readFile(targetPath)

@@ -4,16 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { verifyBuildEvidence } from './lib/build-evidence.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
-if (!existsSync(path.join(repoRoot, 'out', 'main', 'index.js'))) {
-  throw new Error('Built Electron main entry not found. Run npm run build first.')
-}
-
-const tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-cc-switch-import-e2e-'))
-const userDataDir = path.join(tempRoot, 'userData')
-const sourceDir = path.join(tempRoot, 'cc-switch')
-const statePath = path.join(tempRoot, 'state.json')
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportDir = path.join(repoRoot, 'test-results', 'cc-switch-import-e2e', runId)
 const runner = path.join(repoRoot, 'scripts', 'cc-switch-import-runner.cjs')
@@ -21,8 +16,32 @@ const electron = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
 const secret = ['cc', 'switch', 'electron', 'secret', 'canary'].join('-')
+let report = {
+  schemaVersion: 1,
+  runId,
+  gate: 'test:cc-switch-import:e2e',
+  status: 'failed',
+  failures: [],
+  warnings: []
+}
+let runError
+let tempRoot
+let userDataDir
+let sourceDir
+let statePath
 
 try {
+  report.buildEvidence = verifyBuildEvidence(repoRoot, sourceEvidenceAtStart)
+  if (report.buildEvidence.status !== 'pass') {
+    throw new Error(`CC Switch Provider build evidence failed: ${report.buildEvidence.errors.join('; ')}`)
+  }
+  if (!existsSync(path.join(repoRoot, 'out', 'main', 'index.js'))) {
+    throw new Error('Built Electron main entry not found. Run npm run build first.')
+  }
+  tempRoot = mkdtempSync(path.join(tmpdir(), 'caogen-cc-switch-import-e2e-'))
+  userDataDir = path.join(tempRoot, 'userData')
+  sourceDir = path.join(tempRoot, 'cc-switch')
+  statePath = path.join(tempRoot, 'state.json')
   mkdirSync(sourceDir, { recursive: true })
   mkdirSync(reportDir, { recursive: true })
   createFixture()
@@ -38,28 +57,47 @@ try {
       CAOGEN_CC_SWITCH_E2E_SECRET: secret
     }
   })
-  const report = JSON.parse(readFileSync(statePath, 'utf8'))
-  if (!report.ok || report.pass !== report.total || report.total < 12) {
-    throw new Error(`CC Switch import E2E incomplete: ${JSON.stringify({ pass: report.pass, total: report.total })}`)
+  const runnerReport = JSON.parse(readFileSync(statePath, 'utf8'))
+  if (!runnerReport.ok || runnerReport.pass !== runnerReport.total || runnerReport.total < 12) {
+    throw new Error(`CC Switch import E2E incomplete: ${JSON.stringify({ pass: runnerReport.pass, total: runnerReport.total })}`)
   }
-  if (JSON.stringify(report).includes(secret)) throw new Error('CC Switch import E2E report contains secret material')
-  report.sourceRevision = gitOutput(['rev-parse', 'HEAD'])
-  report.worktreeStatusCount = gitStatusCount()
-  writeFileSync(path.join(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-  writeFileSync(path.join(repoRoot, 'test-results', 'cc-switch-import-e2e', 'latest.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
-  console.log(`CC Switch import E2E passed: ${report.pass}/${report.total}`)
-  console.log(reportDir)
+  if (JSON.stringify(runnerReport).includes(secret)) throw new Error('CC Switch import E2E report contains secret material')
+  report = {
+    ...runnerReport,
+    schemaVersion: 1,
+    runId,
+    gate: 'test:cc-switch-import:e2e',
+    status: 'passed',
+    buildEvidence: report.buildEvidence,
+    failures: [],
+    warnings: []
+  }
+} catch (error) {
+  runError = error
+  report.failures.push({ message: error instanceof Error ? error.stack || error.message : String(error) })
+  process.exitCode = 1
 } finally {
-  rmSync(tempRoot, { recursive: true, force: true })
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'CC Switch Provider import Electron'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    process.exitCode = 1
+  }
+  mkdirSync(reportDir, { recursive: true })
+  const output = `${JSON.stringify(report, null, 2)}\n`
+  writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
+  writeFileSync(path.join(repoRoot, 'test-results', 'cc-switch-import-e2e', 'latest.json'), output, 'utf8')
+  if (tempRoot) rmSync(tempRoot, { recursive: true, force: true })
 }
 
-function gitOutput(args) {
-  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
-}
-
-function gitStatusCount() {
-  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
-}
+if (runError) throw runError
+if (report.status !== 'passed') throw new Error(report.error || 'CC Switch import evidence provenance failed')
+console.log(`CC Switch import E2E passed: ${report.pass}/${report.total}`)
+console.log(reportDir)
 
 function createFixture() {
   const database = new DatabaseSync(path.join(sourceDir, 'cc-switch.db'))

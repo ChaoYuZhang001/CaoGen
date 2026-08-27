@@ -19,6 +19,10 @@ export interface MediaProviderRuntimeDependencies {
   now?: () => number
 }
 
+const CANCELLED_REMOTE_STATUSES = new Set(['cancelled', 'canceled', 'cancelled_by_user'])
+const FAILED_REMOTE_STATUSES = new Set(['failed', 'failure', 'error', 'expired'])
+const COMPLETED_REMOTE_STATUSES = new Set(['succeeded', 'success', 'complete', 'completed', 'done'])
+
 export async function executeRemoteMediaOperation(
   profile: MediaProviderProfile,
   job: MediaJobRecord,
@@ -181,8 +185,8 @@ async function parseObservation(
   const externalJobId = extractExternalJobId(body) ?? job.providerExternalJobId ?? job.externalJobId
   const billing = providerBilling(body, bytes)
   const status = extractRemoteStatus(body)
-  if (status === 'cancelled' || status === 'canceled' || status === 'cancelled_by_user') return { status: 'cancelled', externalJobId, ...billing }
-  if (status === 'failed' || status === 'failure' || status === 'error' || status === 'expired') return { status: 'failed', externalJobId, reason: providerError(body), ...billing }
+  if (CANCELLED_REMOTE_STATUSES.has(status)) return { status: 'cancelled', externalJobId, ...billing }
+  if (FAILED_REMOTE_STATUSES.has(status)) return { status: 'failed', externalJobId, reason: providerError(body), ...billing }
   const output = extractJsonOutput(body)
   if (output.base64) {
     const decoded = Buffer.from(output.base64, 'base64')
@@ -192,7 +196,7 @@ async function parseObservation(
     const persisted = await persistRemoteBytes(decoded, rootDir, job, output.mediaType)
     return { status: 'downloading', externalJobId, ...persisted, ...billing }
   }
-  if (output.url || status === 'succeeded' || status === 'success' || status === 'complete' || status === 'completed' || status === 'done') {
+  if (output.url || COMPLETED_REMOTE_STATUSES.has(status)) {
     const outputUrl = output.url ? safeDownloadUrl(output.url, base) : undefined
     if (output.url && !outputUrl) return { status: 'failed', externalJobId, reason: 'Remote media output URL is outside the bound Provider origin', ...billing }
     return { status: 'downloading', externalJobId, ...(outputUrl ? { outputUrl } : {}), mediaType: output.mediaType, ...billing }

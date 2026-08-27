@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const mode = process.argv[2]
@@ -28,7 +29,13 @@ const secret = ['restart', 'credential', 'canary', '91'].join('-')
 if (mode) {
   await runWorker(mode)
 } else {
+  const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
   const checks = []
+  const reportRoot = path.join(repoRoot, 'test-results', 'cc-switch-import-restart')
+  const runId = new Date().toISOString().replace(/[:.]/g, '-')
+  const reportDir = path.join(reportRoot, runId)
+  let finalStatus = 'failed'
+  let finalError
   try {
     compile()
     installRuntimeStubs()
@@ -56,9 +63,49 @@ if (mode) {
     equal(rolledBack.backupCount, 0, 'recovered rollback is not offered a second time')
     equal(sha256File(path.join(sourceDir, 'cc-switch.db')), sourceBefore, 'source CC Switch database remains byte-identical')
 
-    console.log(`CC Switch import restart E2E passed: ${checks.length}/${checks.length}`)
+    finalStatus = 'passed'
+  } catch (error) {
+    finalError = error instanceof Error ? error.stack || error.message : String(error)
+    process.exitCode = 1
   } finally {
+    const report = {
+      schemaVersion: 1,
+      runId,
+      gate: 'test:cc-switch-import:restart',
+      status: finalStatus,
+      ok: finalStatus === 'passed',
+      generatedAt: new Date().toISOString(),
+      faultClasses: ['strong_kill', 'duplicate_idempotency', 'out_of_order'],
+      pass: checks.filter((item) => item.status === 'pass').length,
+      total: checks.length,
+      checks,
+      failures: finalError ? [{ message: finalError }] : [],
+      warnings: []
+    }
+    const provenance = bindSourceEvidence(
+      report,
+      sourceEvidenceAtStart,
+      readSourceEvidenceState(repoRoot),
+      'CC Switch Provider import restart'
+    )
+    if (provenance.status !== 'pass') {
+      report.status = 'failed'
+      report.ok = false
+      report.failures.push({ message: report.error })
+      process.exitCode = 1
+    }
+    mkdirSync(reportDir, { recursive: true })
+    const output = `${JSON.stringify(report, null, 2)}\n`
+    writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
+    writeFileSync(path.join(reportRoot, 'latest.json'), output, 'utf8')
     rmSync(tempRoot, { recursive: true, force: true })
+  }
+
+  if (finalStatus === 'passed' && !process.exitCode) {
+    console.log(`CC Switch import restart E2E passed: ${checks.length}/${checks.length}`)
+    console.log(reportDir)
+  } else {
+    console.error(`CC Switch import restart E2E failed: ${finalError ?? 'evidence provenance failed'}`)
   }
 
   function assert(condition, message) {

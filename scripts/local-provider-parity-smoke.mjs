@@ -5,8 +5,10 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const require = createRequire(import.meta.url)
 process.env.NODE_PATH = [path.join(repoRoot, 'node_modules'), process.env.NODE_PATH]
   .filter(Boolean)
@@ -17,6 +19,21 @@ const dataDir = mkdtempSync(path.join(tmpdir(), 'caogen-local-provider-parity-da
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const reportRoot = path.join(repoRoot, 'test-results', 'local-provider-parity')
 const reportDir = path.join(reportRoot, runId)
+const checks = []
+const decisions = []
+let finalError
+let report = {
+  schemaVersion: 1,
+  gate: 'test:local-provider-parity:required',
+  status: 'failed',
+  runId,
+  requirement: 'required',
+  requirementIds: ['NFR-PRIV-004'],
+  checks,
+  decisions,
+  failures: [],
+  warnings: []
+}
 
 try {
   compileRouter()
@@ -46,9 +63,6 @@ try {
     openaiProtocol: 'chat'
   })
   const providers = [local, remote]
-  const checks = []
-  const decisions = []
-
   for (const routeCase of routeCases()) {
     const baseline = router.routeModel({ providers, ...routeCase.input })
     const reversed = router.routeModel({ providers: [...providers].reverse(), ...routeCase.input })
@@ -174,8 +188,9 @@ try {
   )
   checks.push('all-unhealthy-local-equal-fallback')
 
-  const report = {
+  report = {
     schemaVersion: 1,
+    gate: 'test:local-provider-parity:required',
     status: 'passed',
     runId,
     requirement: 'required',
@@ -196,16 +211,37 @@ try {
       automaticSelectionSupported: true,
       crossValidationSupported: true
     },
-    failures: []
+    failures: [],
+    warnings: []
+  }
+} catch (error) {
+  finalError = error instanceof Error ? error.stack || error.message : String(error)
+  report.failures.push({ message: finalError })
+  process.exitCode = 1
+} finally {
+  rmSync(buildDir, { recursive: true, force: true })
+  rmSync(dataDir, { recursive: true, force: true })
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Local Provider parity'
+  )
+  if (provenance.status !== 'pass') {
+    report.status = 'failed'
+    report.failures.push({ message: report.error })
+    process.exitCode = 1
   }
   mkdirSync(reportDir, { recursive: true })
   const body = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(path.join(reportDir, 'report.json'), body)
   writeFileSync(path.join(reportRoot, 'latest.json'), body)
+}
+
+if (report.status === 'passed' && !process.exitCode) {
   console.log(JSON.stringify({ ...report, reportDir }, null, 2))
-} finally {
-  rmSync(buildDir, { recursive: true, force: true })
-  rmSync(dataDir, { recursive: true, force: true })
+} else {
+  console.error(`local Provider parity failed: ${finalError ?? 'evidence provenance failed'}`)
 }
 
 function compileRouter() {

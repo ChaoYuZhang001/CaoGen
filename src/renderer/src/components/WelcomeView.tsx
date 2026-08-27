@@ -47,6 +47,7 @@ import {
   patchFirstTaskOnboardingRecord,
   runFirstTaskSubmissionExclusive
 } from './experience/first-task-onboarding'
+import BoundedSelect from './BoundedSelect'
 
 type WelcomeStoreState = ReturnType<typeof useStore.getState>
 type WelcomeProjection = ReturnType<typeof useExperienceProjection>
@@ -348,19 +349,19 @@ function WelcomeProjectSelector({
   return (
     <div className="welcome-project-bar" data-welcome-project-context hidden={hidden}>
       <Folder size={15} strokeWidth={1.8} aria-hidden="true" />
-      <select
-        className="welcome-project-select"
-        aria-label={t('project')}
+      <BoundedSelect
+        ariaLabel={t('project')}
+        nativeClassName="welcome-project-select"
+        rootClassName="welcome-bounded-select-project"
         title={cwd || t('welcomePickProject')}
         value={projectChoice}
-        onChange={(event) => onProjectChange(event.target.value)}
-      >
-        <option value={UNASSIGNED}>{t('directStartNoProject')}</option>
-        {availableProjects.map((project) => (
-          <option key={project.id} value={project.id}>{project.name}</option>
-        ))}
-        <option value={NEW_PROJECT_SESSION_CHOICE}>{t('newProjectDirectory')}</option>
-      </select>
+        onChange={onProjectChange}
+        options={[
+          { value: UNASSIGNED, label: t('directStartNoProject') },
+          ...availableProjects.map((project) => ({ value: project.id, label: project.name })),
+          { value: NEW_PROJECT_SESSION_CHOICE, label: t('newProjectDirectory') }
+        ]}
+      />
       {projectChoice === NEW_PROJECT_SESSION_CHOICE ? (
         <>
           <input
