@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
@@ -66,9 +67,9 @@ const first = await new SearchBroker({
   publicEndpointChecker,
   now: () => 1_700_000_000_000,
   idempotencyStore,
-  evidenceWriter: (record) => {
-    evidence.push(record)
-    writeFileSync(evidencePath, `${JSON.stringify(record)}\n`, { flag: 'a' })
+  evidenceWriter: (records) => {
+    evidence.push(...records)
+    for (const record of records) writeFileSync(evidencePath, `${JSON.stringify(record)}\n`, { flag: 'a' })
   }
 }).search({
   mode: 'model_native',
@@ -177,12 +178,45 @@ check('all required failure states remain explicit and fail closed', () => {
   }
 })
 
+const partialEvidence = []
+const partialFailure = await new SearchBroker({
+  modelNative: {
+    async search() {
+      return {
+        status: 'success',
+        results: [
+          { url: 'https://example.com/caogen-source' },
+          { url: 'https://example.com/unavailable' }
+        ]
+      }
+    }
+  },
+  fetchImpl: async (url) => url.pathname === '/caogen-source'
+    ? new Response(body, { status: 200, headers: { 'content-type': 'text/html' } })
+    : new Response('unavailable', { status: 503, headers: { 'content-type': 'text/plain' } }),
+  publicEndpointChecker,
+  evidenceWriter: (records) => { partialEvidence.push(...records) }
+}).search({
+  mode: 'model_native',
+  query: 'multi-source atomic evidence',
+  operationId: 'multi-source-atomic-evidence',
+  limit: 2
+})
+
+check('a later source failure leaves no partial Evidence batch', () => {
+  assert.equal(partialFailure.ok, false)
+  assert.equal(partialFailure.status, 'provider_failure')
+  assert.equal(partialEvidence.length, 0)
+})
+
 const report = {
   schemaVersion: 1,
   gate: 'test:search-broker:runtime',
   runId,
   status: 'passed',
   classification: 'local_targeted_verified',
+  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
+  worktreeStatusCount: gitStatusCount(),
   checks,
     evidence: {
     sourceSha256: bodySha,
@@ -202,6 +236,14 @@ writeFileSync(path.join(runDir, 'report.json'), `${JSON.stringify(report, null, 
 writeFileSync(path.join(reportRoot, 'latest.json'), `${JSON.stringify(report, null, 2)}\n`)
 console.log(`search broker runtime e2e: PASS (${checks.length}/${checks.length})`)
 console.log(path.join(runDir, 'report.json'))
+
+function gitOutput(args) {
+  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
+}
+
+function gitStatusCount() {
+  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
+}
 
 function diskStore(root) {
   mkdirSync(root, { recursive: true })

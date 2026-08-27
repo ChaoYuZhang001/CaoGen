@@ -40,6 +40,7 @@ const fetchImpl = async (url) => {
 const endpointPolicy = () => undefined
 
 const evidence = []
+let evidenceBatchWrites = 0
 const native = new SearchBroker({
   modelNative: {
     async search(input) {
@@ -51,7 +52,10 @@ const native = new SearchBroker({
   fetchImpl,
   publicEndpointChecker: endpointPolicy,
   now: () => 1_700_000_000_000,
-  evidenceWriter: (record) => { evidence.push(record) }
+  evidenceWriter: (records) => {
+    evidenceBatchWrites += 1
+    evidence.push(...records)
+  }
 })
 const nativeResult = await native.search({ mode: 'model_native', query: 'CaoGen search', operationId: 'native-success', runId: 'run-1', artifactId: 'artifact-1' })
 assert.equal(nativeResult.ok, true)
@@ -70,6 +74,7 @@ assert.equal(evidence.length, 1)
 assert.equal(evidence[0].contentDigest, sourceSha)
 assert.equal(evidence[0].uri, nativeResult.url)
 assert.equal(evidence[0].artifactId, 'artifact-1')
+assert.equal(evidenceBatchWrites, 1)
 assert.equal(fetchCalls, 1)
 
 const evidenceFailure = new SearchBroker({
@@ -85,6 +90,34 @@ const evidenceFailureResult = await evidenceFailure.search({
 })
 assert.equal(evidenceFailureResult.ok, false)
 assert.equal(evidenceFailureResult.status, 'provider_failure')
+
+const partialFailureEvidence = []
+const partialFailureResult = await new SearchBroker({
+  modelNative: {
+    async search() {
+      return {
+        status: 'success',
+        results: [
+          { url: 'https://example.com/source' },
+          { url: 'https://example.com/unavailable' }
+        ]
+      }
+    }
+  },
+  fetchImpl: async (url) => url.pathname === '/source'
+    ? new Response(sourceBody, { status: 200, headers: { 'content-type': 'text/html' } })
+    : new Response('unavailable', { status: 503, headers: { 'content-type': 'text/plain' } }),
+  publicEndpointChecker: endpointPolicy,
+  evidenceWriter: (records) => { partialFailureEvidence.push(...records) }
+}).search({
+  mode: 'model_native',
+  query: 'partial failure must not persist evidence',
+  operationId: 'partial-evidence-failure',
+  limit: 2
+})
+assert.equal(partialFailureResult.ok, false)
+assert.equal(partialFailureResult.status, 'provider_failure')
+assert.equal(partialFailureEvidence.length, 0)
 
 const byok = new SearchBroker({
   byokSearchAdapter: {

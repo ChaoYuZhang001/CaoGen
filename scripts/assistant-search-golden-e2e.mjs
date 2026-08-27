@@ -23,6 +23,8 @@ const userDataDir = path.join(tempRoot, 'userData')
 const workspaceDir = path.join(tempRoot, 'workspace')
 const isolatedOutDir = path.join(reportDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
+const networkGuardPath = path.join(tempRoot, 'network-guard.cjs')
+const sourceFixtureUrl = 'https://search-golden.invalid/source'
 const checks = []
 const modelRequests = []
 const searchRequests = []
@@ -34,6 +36,7 @@ mkdirSync(reportDir, { recursive: true })
 mkdirSync(userDataDir, { recursive: true })
 mkdirSync(workspaceDir, { recursive: true })
 writeFileSync(path.join(workspaceDir, 'README.md'), '# Assistant search golden workspace\n', 'utf8')
+writeFileSync(networkGuardPath, networkGuardSource(sourceFixtureUrl), 'utf8')
 copyBuiltApp()
 
 const server = http.createServer(async (request, response) => {
@@ -66,7 +69,7 @@ const server = http.createServer(async (request, response) => {
     }
     return json(response, 200, {
       status: 'success',
-      results: [{ url: 'https://example.com/', title: 'Example Domain', summary: 'fixture snippet is advisory only' }]
+      results: [{ url: sourceFixtureUrl, title: 'Search Golden Fixture', summary: 'fixture snippet is advisory only' }]
     })
   }
   response.writeHead(404).end('not found')
@@ -103,9 +106,12 @@ try {
       CAOGEN_USER_DATA_DIR: userDataDir,
       CAOGEN_MEMORY_DIR: path.join(tempRoot, 'memory'),
       CAOGEN_SEARCH_MODEL_NATIVE_URL: `${serverBase}/search`,
+      CAOGEN_SEARCH_MODEL_NATIVE_API_KEY: '',
       CAOGEN_SEARCH_BYOK_URL: '',
+      CAOGEN_SEARCH_BYOK_API_KEY: '',
       OPENAI_API_KEY: '',
-      ANTHROPIC_API_KEY: ''
+      ANTHROPIC_API_KEY: '',
+      NODE_OPTIONS: nodeOptionsWithRequire(networkGuardPath)
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })
@@ -149,7 +155,7 @@ try {
     assert.equal(result.ok, true)
     assert.equal(result.status, 'success')
     assert.equal(result.projectId, null)
-    assert(result.results[0].url === 'https://example.com/', 'verified source URL missing')
+    assert(result.results[0].url === sourceFixtureUrl, 'verified source URL missing')
     assert(result.results[0].contentSha256.length === 64, 'content SHA-256 missing')
     assert(result.results[0].evidenceId, 'Evidence ID missing')
   })
@@ -243,6 +249,7 @@ try {
     sourceRevision: gitOutput(['rev-parse', 'HEAD']),
     worktreeStatusCount: gitStatusCount(),
     checks, searchRequests, modelRequestCount: modelRequests.length,
+    networkPolicy: 'loopback_and_in_process_source_fixture_only',
     explicitlyNotVerified: ['five-user timed acceptance', 'clean release SHA binding', 'commercial search account parity']
   }
   writeReport(report)
@@ -366,4 +373,37 @@ async function findFreePort(start) {
     } catch { /* try next port */ }
   }
   throw new Error('no free Electron debug port')
+}
+
+function nodeOptionsWithRequire(preloadPath) {
+  return `--require=${JSON.stringify(preloadPath)}`
+}
+
+function networkGuardSource(fixtureUrl) {
+  return `
+const dnsPromises = require('node:dns/promises')
+const originalLookup = dnsPromises.lookup.bind(dnsPromises)
+const originalFetch = globalThis.fetch.bind(globalThis)
+const fixture = ${JSON.stringify(fixtureUrl)}
+dnsPromises.lookup = async (hostname, options) => {
+  if (hostname === 'search-golden.invalid') {
+    const answer = { address: '93.184.216.34', family: 4 }
+    return options && typeof options === 'object' && options.all ? [answer] : answer
+  }
+  return originalLookup(hostname, options)
+}
+globalThis.fetch = async (input, init) => {
+  const url = input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url)
+  if (url.toString() === fixture) {
+    return new Response('<html><title>Search Golden Source</title><body>Deterministic source material for Assistant evidence.</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' }
+    })
+  }
+  if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1') {
+    return originalFetch(input, init)
+  }
+  throw new Error('Assistant Search Golden blocked non-fixture outbound request')
+}
+`
 }

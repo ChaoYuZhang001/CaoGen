@@ -122,8 +122,12 @@ export interface SearchBrokerOptions {
   idFactory?: (kind: 'operation' | 'evidence', input: string) => string
   /** Tests and local policy callers may supply a DNS/public-address checker. */
   publicEndpointChecker?: (url: URL) => Promise<void> | void
-  /** Optional canonical Evidence writer. No write is attempted when omitted. */
-  evidenceWriter?: (record: SearchBrokerEvidenceRecord) => Promise<void> | void
+  /**
+   * Optional canonical Evidence batch writer. It runs only after every source
+   * candidate has been fetched and verified, so callers can commit the batch
+   * transactionally without exposing Evidence for a failed search.
+   */
+  evidenceWriter?: (records: readonly SearchBrokerEvidenceRecord[]) => Promise<void> | void
   /** An injected store is the only persistence mechanism used by this module. */
   idempotencyStore?: SearchBrokerIdempotencyStore
   timeoutMs?: number
@@ -305,6 +309,7 @@ export class SearchBroker {
     }
 
     const citations: SearchBrokerCitation[] = []
+    const evidenceRecords: SearchBrokerEvidenceRecord[] = []
     for (const candidate of response.results.slice(0, input.limit)) {
       if (!candidate || typeof candidate.url !== 'string' || !candidate.url.trim()) {
         return failure('unknown_result', input, 'The search provider returned an unverified result.')
@@ -347,41 +352,42 @@ export class SearchBroker {
         runId: input.runId ?? null,
         evidenceId
       }
-      if (this.options.evidenceWriter) {
-        try {
-          await this.options.evidenceWriter({
-            evidenceId,
-            ...(input.projectId ? { projectId: input.projectId } : {}),
-            ...(input.goalId ? { goalId: input.goalId } : {}),
-            ...(input.workItemId ? { workItemId: input.workItemId } : {}),
-            ...(input.runId ? { runId: input.runId } : {}),
-            ...(input.artifactId ? { artifactId: input.artifactId } : {}),
-            kind: 'research_source',
-            title: `Web search source: ${url.hostname}`,
-            summary,
-            uri: item.url,
-            mediaType: 'text/plain',
-            verifier: 'caogen-search-broker',
-            observedAt: fetchedAt,
-            // Workflow Evidence stores the canonical digest as bare lowercase SHA-256;
-            // the human-facing citation retains the `sha256:` label.
-            contentDigest: contentSha256,
-            metadata: {
-              mode: input.mode,
-              fetchedAt,
-              contentSha256,
-              citation
-            }
-          })
-        } catch {
-          return failure('provider_failure', input, 'Search evidence could not be recorded.')
+      evidenceRecords.push({
+        evidenceId,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.goalId ? { goalId: input.goalId } : {}),
+        ...(input.workItemId ? { workItemId: input.workItemId } : {}),
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.artifactId ? { artifactId: input.artifactId } : {}),
+        kind: 'research_source',
+        title: `Web search source: ${url.hostname}`,
+        summary,
+        uri: item.url,
+        mediaType: 'text/plain',
+        verifier: 'caogen-search-broker',
+        observedAt: fetchedAt,
+        // Workflow Evidence stores the canonical digest as bare lowercase SHA-256;
+        // the human-facing citation retains the `sha256:` label.
+        contentDigest: contentSha256,
+        metadata: {
+          mode: input.mode,
+          fetchedAt,
+          contentSha256,
+          citation
         }
-      }
+      })
       citations.push(item)
     }
 
     const first = citations[0]
     if (!first) return failure('no_results', input, 'The search provider returned no results.')
+    if (this.options.evidenceWriter) {
+      try {
+        await this.options.evidenceWriter(evidenceRecords)
+      } catch {
+        return failure('provider_failure', input, 'Search evidence could not be recorded.')
+      }
+    }
     return {
       ok: true,
       status: 'success',

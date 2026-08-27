@@ -53,7 +53,7 @@ function createSearchBroker(root: string, projectId: string, evidence: SearchBro
     modelNative: configuredSearchAdapter('CAOGEN_SEARCH_MODEL_NATIVE_URL', 'CAOGEN_SEARCH_MODEL_NATIVE_API_KEY'),
     byokSearchAdapter: configuredSearchAdapter('CAOGEN_SEARCH_BYOK_URL', 'CAOGEN_SEARCH_BYOK_API_KEY'),
     idempotencyStore: createDurableSearchStore(root, projectId),
-    evidenceWriter: async (record) => { evidence.push(record) }
+    evidenceWriter: async (records) => { evidence.push(...records) }
   })
 }
 
@@ -67,9 +67,10 @@ function buildSearchRequest(args: Record<string, unknown>, meta: NonNullable<P2T
 }
 
 async function persistSearchOutcome(result: SearchBrokerResult, pending: SearchBrokerEvidenceRecord[], automaticArtifact: { artifactId: string; } | undefined, binding: { projectId: string; goalId?: string; workItemId?: string; runId?: string; artifactId?: string }, root: string): Promise<void> {
-  if (pending.length > 0 && result.ok && automaticArtifact) return persistSearchArtifact(automaticArtifact as Parameters<typeof persistSearchArtifact>[0], result, pending, root)
+  if (!result.ok) return
+  if (pending.length > 0 && automaticArtifact) return persistSearchArtifact(automaticArtifact as Parameters<typeof persistSearchArtifact>[0], result, pending, root)
   if (pending.length > 0) for (const record of pending) await recordSearchEvidence(record, root, binding)
-  if (pending.length === 0 && result.ok && automaticArtifact) await assertSearchArtifactReplay(automaticArtifact as Parameters<typeof assertSearchArtifactReplay>[0], root)
+  if (pending.length === 0 && automaticArtifact) await assertSearchArtifactReplay(automaticArtifact as Parameters<typeof assertSearchArtifactReplay>[0], root)
 }
 
 async function recordSearchEvidence(record: SearchBrokerEvidenceRecord, rootDir: string, binding: { projectId: string; goalId?: string; workItemId?: string; runId?: string; artifactId?: string }): Promise<void> {

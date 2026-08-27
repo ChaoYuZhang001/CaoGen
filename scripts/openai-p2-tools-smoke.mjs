@@ -29,7 +29,7 @@ try {
       headers: { 'content-type': 'text/html' }
     }),
     publicEndpointChecker: () => undefined,
-    evidenceWriter: (record) => { searchEvidence.push(record) }
+    evidenceWriter: (records) => { searchEvidence.push(...records) }
   })
   const searchedWeb = await toolsModule.executeCodingTool(
     'web_search',
