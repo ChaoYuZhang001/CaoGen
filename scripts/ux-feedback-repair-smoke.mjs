@@ -9,6 +9,7 @@ const videoView = source('src/renderer/src/components/studio/VideoStudioView.tsx
 const videoPanel = source('src/renderer/src/components/studio/VideoStudioPanel.tsx')
 const videoQuickProvider = source('src/renderer/src/components/studio/VideoProviderQuickEnable.tsx')
 const project = source('src/renderer/src/components/studio/ProjectWorkspaceStudio.tsx')
+const projectPicker = source('src/renderer/src/components/studio/ProjectPicker.tsx')
 const projectForm = source('src/renderer/src/components/studio/ProjectWorkspaceStudioForms.tsx')
 const providerList = source('src/renderer/src/components/settings/ProviderList.tsx')
 const providerManager = source('src/renderer/src/components/settings/ProviderProfileManager.tsx')
@@ -26,6 +27,7 @@ const assertions = [
   [project.indexOf('data-project-flow-step="supervisor"') < project.indexOf('data-project-flow-step="delivery"'), 'Project execution appears before delivery in the DOM'],
   [!project.includes('data-project-flow-step="supervisor" aria-labelledby="project-execution-actions-title"'), 'Execution actions do not shadow the execution flow anchor'],
   [projectForm.includes('data-project-template-details') && projectForm.includes('创建后立即输入一句话目标'), 'Project creation keeps template details collapsed and points to the first goal'],
+  [project.includes('<ProjectPicker') && projectPicker.includes('data-project-workspace-select-trigger') && projectPicker.includes('data-project-workspace-select-menu') && projectPicker.includes('data-project-workspace-select'), 'Project selection uses a bounded accessible picker with a native automation bridge'],
   [providerList.includes('data-provider-empty-action'), 'Provider empty state exposes a primary add action'],
   [providerManager.indexOf('<section className="provider-compatibility-tools"') > providerManager.indexOf('{children}'), 'Provider migration tools are secondary to the provider list'],
   [providerQuick.includes('ProviderQuickPresetPicker') && providerQuickPicker.includes('data-provider-quick-preset-picker') && providerQuickPicker.includes('providerQuickSelectedPreset'), 'Provider quick setup keeps the preset catalog progressive and shows the selected service']

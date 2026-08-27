@@ -108,6 +108,36 @@ try {
       await waitForProjectStatus(page, 'active')
     })
 
+    await check('Project picker stays inside the supported desktop viewport and restores keyboard focus', async () => {
+      const trigger = '[data-project-workspace-select-trigger]'
+      const menu = '[data-project-workspace-select-menu]'
+      await page.waitForSelector(trigger, { visible: true, timeout: 5_000 })
+      for (const viewport of [{ width: 1280, height: 800 }, { width: 960, height: 640 }]) {
+        await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
+        await page.click(trigger)
+        await page.waitForSelector(menu, { visible: true, timeout: 5_000 })
+        const bounds = await page.$eval(menu, (element) => {
+          const rect = element.getBoundingClientRect()
+          return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight }
+        })
+        assert(bounds.left >= 0 && bounds.right <= bounds.viewportWidth,
+          `Project picker overflowed horizontally at ${viewport.width}: ${JSON.stringify(bounds)}`)
+        assert(bounds.top >= 0 && bounds.bottom <= bounds.viewportHeight,
+          `Project picker overflowed vertically at ${viewport.width}: ${JSON.stringify(bounds)}`)
+        await screenshot(page, `project-picker-${viewport.width}`)
+
+        await page.keyboard.press('End')
+        await page.keyboard.press('Home')
+        const activeOption = await page.evaluate(() => document.activeElement?.getAttribute('data-project-workspace-option'))
+        assert(activeOption, `Project picker did not move focus to an option at ${viewport.width}`)
+        await page.keyboard.press('Escape')
+        await page.waitForSelector(menu, { hidden: true, timeout: 5_000 })
+        const triggerFocused = await page.evaluate(() => document.activeElement?.hasAttribute('data-project-workspace-select-trigger'))
+        assert(triggerFocused, `Project picker did not restore trigger focus at ${viewport.width}`)
+      }
+      await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
+    })
+
     await check('one input starts exactly one canonical task and owned Session without a hidden legacy Project',
       () => verifyOneInputGoalTask(page))
 

@@ -113,6 +113,13 @@
   flex-wrap: wrap;
 }
 
+.pws-project-picker {
+  position: relative;
+  width: min(280px, 34vw);
+  min-width: 150px;
+  flex: 0 1 280px;
+}
+
 .pws-project-empty-actions {
   display: flex;
   align-items: center;
@@ -121,8 +128,80 @@
 }
 
 .pws-project-select {
-  width: min(280px, 34vw);
   min-width: 150px;
+}
+
+.pws-project-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  text-align: left;
+}
+
+.pws-project-select-trigger svg {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.pws-project-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pws-project-select-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(320px, calc(100vh - 120px));
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 22%);
+}
+
+.pws-project-select-option {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.pws-project-select-option svg {
+  flex: 0 0 14px;
+  margin-right: 5px;
+  color: var(--accent);
+}
+
+.pws-project-select-option:not([aria-selected='true']) svg {
+  visibility: hidden;
+}
+
+.pws-project-select-option:hover,
+.pws-project-select-option:focus-visible {
+  outline: none;
+  background: var(--bg-hover);
+}
+
+.pws-project-select-option[aria-selected='true'] {
+  background: var(--accent-soft);
+  font-weight: 600;
 }
 
 .pws-project-content {
@@ -1805,6 +1884,12 @@
     width: 100%;
   }
 
+  .pws-project-picker {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
   .pws-project-select {
     flex: 1;
     width: auto;
@@ -1879,12 +1964,18 @@
     flex-basis: 100%;
   }
 
+  .pws-project-picker {
+    width: 100%;
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
   .pws-project-controls {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .pws-project-controls .pws-project-select {
+  .pws-project-controls .pws-project-picker {
     grid-column: 1 / -1;
   }
 

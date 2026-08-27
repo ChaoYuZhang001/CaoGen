@@ -31,6 +31,7 @@ import './ProjectWorkspaceStudio.css'
 import './remote-continuation.css'
 import { RemoteContinuationPanel } from './RemoteContinuationPanel'
 import { ProjectDeliveryWorkbench } from './ProjectDeliveryWorkbench'
+import ProjectPicker from './ProjectPicker'
 import { useStore } from '../../store'
 
 export interface ProjectWorkspaceStudioProps {
@@ -688,15 +689,13 @@ function StudioHeader({
         )}
       </div>
       <div className="pws-project-controls">
-        <label className="pws-visually-hidden" htmlFor={selectId}>{TEXT.selectProject}</label>
-        <select id={selectId} className="select pws-project-select" value={selectedProjectId} onChange={(event) => onSelect(event.target.value)} disabled={disabled || projects.length === 0} aria-label={TEXT.selectProject} data-project-workspace-select>
-          {projects.length === 0 && <option value="">{TEXT.noProjects}</option>}
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}{project.status === 'active' ? '' : ` · ${PROJECT_STATUS_LABELS[project.status]}`}
-            </option>
-          ))}
-        </select>
+        <ProjectPicker
+          labelId={selectId}
+          projects={projects}
+          selectedProjectId={selectedProjectId}
+          disabled={disabled}
+          onSelect={onSelect}
+        />
         <button type="button" className="btn btn-primary" onClick={onCreate} disabled={disabled} data-studio-action="create-project">{TEXT.createProject}</button>
         <input
           ref={importInputRef}
