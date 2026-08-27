@@ -146,6 +146,15 @@
   color: var(--text-dim);
 }
 
+.pws-project-select-static {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  color: var(--text);
+  cursor: default;
+}
+
 .pws-project-select-label {
   min-width: 0;
   overflow: hidden;

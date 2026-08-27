@@ -115,10 +115,32 @@ try {
       await waitForProjectStatus(page, 'active')
     })
 
-    await check('Project picker stays inside the supported desktop viewport and restores keyboard focus', async () => {
+    await check('single Project is static while the multi-Project picker stays bounded and restores focus', async () => {
       const trigger = '[data-project-workspace-select-trigger]'
       const menu = '[data-project-workspace-select-menu]'
+      const staticProject = '[data-project-workspace-select-static]'
+      await page.waitForSelector(staticProject, { visible: true, timeout: 5_000 })
+      assert(await page.$(trigger) === null, 'single Project exposed a meaningless picker trigger')
+      const singleProjectState = await page.$eval('[data-project-workspace-select]', (select) => ({
+        disabled: select.disabled,
+        optionCount: select.options.length
+      }))
+      assert(singleProjectState.disabled && singleProjectState.optionCount === 1,
+        `single Project automation bridge is not static: ${JSON.stringify(singleProjectState)}`)
+
+      const alternative = await page.evaluate(() => window.agentDesk.createProjectWorkspace({
+        id: 'project-picker-alternative',
+        name: 'Project picker alternative',
+        kind: 'research'
+      }))
+      await page.click('[data-studio-action="refresh"]')
       await page.waitForSelector(trigger, { visible: true, timeout: 5_000 })
+      await page.waitForFunction(
+        (selector) => document.querySelector('[data-project-workspace-studio]')?.getAttribute('aria-busy') === 'false' &&
+          document.querySelector(selector)?.disabled === false,
+        { timeout: 10_000 },
+        trigger
+      )
       for (const viewport of [{ width: 1280, height: 800 }, { width: 960, height: 640 }]) {
         await page.setViewport({ ...viewport, deviceScaleFactor: 1 })
         await page.click(trigger)
@@ -143,6 +165,13 @@ try {
         assert(triggerFocused, `Project picker did not restore trigger focus at ${viewport.width}`)
       }
       await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 })
+      await page.evaluate(async (projectId) => {
+        await window.agentDesk.deleteProjectWorkspace(projectId)
+        await window.agentDesk.purgeProjectWorkspace(projectId)
+      }, alternative.id)
+      await page.click('[data-studio-action="refresh"]')
+      await page.waitForSelector(staticProject, { visible: true, timeout: 5_000 })
+      assert(await page.$(trigger) === null, 'single Project picker trigger returned after cleanup')
     })
 
     await check('one input starts exactly one canonical task and owned Session without a hidden legacy Project',

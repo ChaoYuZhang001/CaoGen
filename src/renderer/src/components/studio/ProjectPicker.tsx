@@ -36,28 +36,40 @@ export default function ProjectPicker({
     triggerRef
   } = useProjectPickerController(props)
   const { disabled, labelId, onSelect, projects, selectedProjectId } = props
+  const selectable = projects.length > 1
 
   return (
     <div ref={rootRef} className="pws-project-picker">
       <label id={labelId} className="pws-visually-hidden" htmlFor={nativeSelectId}>{TEXT.selectProject}</label>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="select pws-project-select pws-project-select-trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-labelledby={labelId}
-        title={selectedLabel}
-        disabled={disabled || projects.length === 0}
-        onClick={() => open ? close(false) : openPicker()}
-        onKeyDown={onTriggerKeyDown}
-        data-project-workspace-select-trigger
-      >
-        <span className="pws-project-select-label">{selectedLabel}</span>
-        <ChevronDown size={15} aria-hidden="true" />
-      </button>
-      {open && (
+      {selectable ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          className="select pws-project-select pws-project-select-trigger"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-labelledby={labelId}
+          title={selectedLabel}
+          disabled={disabled}
+          onClick={() => open ? close(false) : openPicker()}
+          onKeyDown={onTriggerKeyDown}
+          data-project-workspace-select-trigger
+        >
+          <span className="pws-project-select-label">{selectedLabel}</span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </button>
+      ) : (
+        <div
+          className="select pws-project-select pws-project-select-static"
+          aria-labelledby={labelId}
+          title={selectedLabel}
+          data-project-workspace-select-static
+        >
+          <span className="pws-project-select-label">{selectedLabel}</span>
+        </div>
+      )}
+      {selectable && open && (
         <ProjectPickerMenu
           activeIndex={activeIndex}
           listboxId={listboxId}
@@ -69,7 +81,7 @@ export default function ProjectPicker({
         />
       )}
       <ProjectPickerNativeSelect
-        disabled={disabled || projects.length === 0}
+        disabled={disabled || !selectable}
         id={nativeSelectId}
         onSelect={onSelect}
         projects={projects}
@@ -138,9 +150,9 @@ function useProjectPickerController({
   }, [activeIndex, open])
 
   useEffect(() => {
-    if (!disabled) return
+    if (!disabled && projects.length > 1) return
     setOpen(false)
-  }, [disabled])
+  }, [disabled, projects.length])
 
   const close = (restoreFocus: boolean): void => {
     if (restoreFocus) triggerRef.current?.focus()
@@ -157,7 +169,7 @@ function useProjectPickerController({
   }
 
   const openPicker = (index = selectedIndex): void => {
-    if (disabled || projects.length === 0) return
+    if (disabled || projects.length <= 1) return
     setActiveIndex(Math.max(0, Math.min(index, projects.length - 1)))
     setOpen(true)
   }
@@ -194,7 +206,7 @@ function handleTriggerKeyDown(
   close: (restoreFocus: boolean) => void,
   openPicker: (index?: number) => void
 ): void {
-  if (disabled || projectCount === 0) return
+  if (disabled || projectCount <= 1) return
   if (event.key === 'Escape' && open) {
     event.preventDefault()
     close(true)
