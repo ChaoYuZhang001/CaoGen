@@ -128,11 +128,12 @@ try {
       assert(singleProjectState.disabled && singleProjectState.optionCount === 1,
         `single Project automation bridge is not static: ${JSON.stringify(singleProjectState)}`)
 
-      const alternative = await page.evaluate(() => window.agentDesk.createProjectWorkspace({
+      const longProjectName = 'Project picker long name '.repeat(8) + '终点'
+      const alternative = await page.evaluate((name) => window.agentDesk.createProjectWorkspace({
         id: 'project-picker-alternative',
-        name: 'Project picker alternative',
+        name,
         kind: 'research'
-      }))
+      }), longProjectName)
       await page.click('[data-studio-action="refresh"]')
       await page.waitForSelector(trigger, { visible: true, timeout: 5_000 })
       await page.waitForFunction(
@@ -153,6 +154,21 @@ try {
           `Project picker overflowed horizontally at ${viewport.width}: ${JSON.stringify(bounds)}`)
         assert(bounds.top >= 0 && bounds.bottom <= bounds.viewportHeight,
           `Project picker overflowed vertically at ${viewport.width}: ${JSON.stringify(bounds)}`)
+        const optionLayout = await page.$eval(`${menu} [role="option"]`, (element) => {
+          const option = element.getBoundingClientRect()
+          const label = element.querySelector('span')?.getBoundingClientRect()
+          return {
+            optionRight: option.right,
+            menuRight: element.parentElement?.getBoundingClientRect().right ?? 0,
+            labelRight: label?.right ?? 0,
+            optionScrollWidth: element.scrollWidth,
+            optionClientWidth: element.clientWidth
+          }
+        })
+        assert(optionLayout.optionRight <= optionLayout.menuRight + 1 &&
+          optionLayout.labelRight <= optionLayout.optionRight + 1 &&
+          optionLayout.optionScrollWidth <= optionLayout.optionClientWidth + 1,
+        `Long project name escaped the bounded picker at ${viewport.width}: ${JSON.stringify(optionLayout)}`)
         await screenshot(page, `project-picker-${viewport.width}`)
 
         await page.keyboard.press('End')
