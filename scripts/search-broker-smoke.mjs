@@ -120,7 +120,26 @@ assert.equal(invalidModeResult.status, 'unknown_result')
 assert.match(invalidModeResult.message, /model_native or byok_search_adapter/)
 assert.equal(invalidModeAdapterCalls, 0)
 
-assert.deepEqual(searchResultViewState({ ok: true, status: 'success' }), { ok: true, status: 'success' })
+const validRendererCitation = {
+  url: 'https://example.com/source',
+  fetchedAt: 1_700_000_000_000,
+  summary: 'verified source',
+  contentSha256: 'a'.repeat(64),
+  citation: '[https://example.com/source] (sha256:' + 'a'.repeat(64) + ')',
+  evidenceId: 'evidence-1'
+}
+assert.deepEqual(searchResultViewState({
+  ok: true,
+  status: 'success',
+  url: validRendererCitation.url,
+  fetchedAt: validRendererCitation.fetchedAt,
+  summary: validRendererCitation.summary,
+  contentSha256: validRendererCitation.contentSha256,
+  citation: validRendererCitation.citation,
+  evidenceId: validRendererCitation.evidenceId,
+  results: [validRendererCitation]
+}), { ok: true, status: 'success' })
+assert.deepEqual(searchResultViewState({ ok: true, status: 'success' }), { ok: false, status: 'unknown_result' })
 assert.deepEqual(searchResultViewState({ ok: true, status: 'timeout' }), { ok: false, status: 'timeout' })
 assert.deepEqual(searchResultViewState({ ok: false, status: 'success' }), { ok: false, status: 'unknown_result' })
 assert.deepEqual(searchResultViewState({ ok: true }), { ok: false, status: 'unknown_result' })
@@ -227,6 +246,8 @@ try {
   assert.equal((await adapter.search({ query: 'invalid item', mode: 'byok_search_adapter', operationId: 'adapter-invalid-item', limit: 1 })).status, 'unknown_result')
   adapterBody = { status: 'no_results', message: 'none' }
   assert.equal((await adapter.search({ query: 'none', mode: 'byok_search_adapter', operationId: 'adapter-no-results', limit: 1 })).status, 'no_results')
+  adapterBody = null
+  assert.equal((await adapter.search({ query: 'null body', mode: 'byok_search_adapter', operationId: 'adapter-null-body', limit: 1 })).status, 'unknown_result')
 } finally {
   globalThis.fetch = previousFetch
   if (previousEndpoint === undefined) delete process.env.CAOGEN_SEARCH_ADAPTER_SMOKE_URL

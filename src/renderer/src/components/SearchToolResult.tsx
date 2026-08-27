@@ -50,6 +50,16 @@ function safeFetchedAt(value: unknown): number | undefined {
   return Number.isNaN(date.getTime()) ? undefined : value
 }
 
+function isVerifiedCitation(value: SearchResultRecord): boolean {
+  const url = safeCitationUrl(value.url)
+  const fetchedAt = safeFetchedAt(value.fetchedAt)
+  const summary = typeof value.summary === 'string' && value.summary.trim().length > 0
+  const digest = typeof value.contentSha256 === 'string' && /^[a-f0-9]{64}$/i.test(value.contentSha256)
+  const citation = typeof value.citation === 'string' && value.citation.trim().length > 0
+  const evidenceId = typeof value.evidenceId === 'string' && value.evidenceId.trim().length > 0
+  return Boolean(url && fetchedAt !== undefined && summary && digest && citation && evidenceId)
+}
+
 function SearchCitation({ item, index }: { item: SearchResultRecord; index: number }): React.JSX.Element {
   const url = safeCitationUrl(item.url)
   const title = typeof item.title === 'string' && item.title.trim() ? item.title : url
@@ -72,7 +82,13 @@ function SearchCitation({ item, index }: { item: SearchResultRecord; index: numb
 
 export function searchResultViewState(parsed: SearchResultRecord): { ok: boolean; status: string } {
   const declaredStatus = typeof parsed.status === 'string' ? parsed.status : ''
-  if (parsed.ok === true && declaredStatus === 'success') return { ok: true, status: 'success' }
+  const results = searchResultRecords(parsed.results)
+  const first = results[0]
+  const topLevelMatchesFirst = Boolean(first) && parsed.url === first.url && parsed.evidenceId === first.evidenceId &&
+    parsed.contentSha256 === first.contentSha256 && parsed.citation === first.citation && parsed.fetchedAt === first.fetchedAt
+  if (parsed.ok === true && declaredStatus === 'success' && results.length > 0 && results.every(isVerifiedCitation) && topLevelMatchesFirst) {
+    return { ok: true, status: 'success' }
+  }
   if (declaredStatus !== 'success' && Object.prototype.hasOwnProperty.call(SEARCH_STATUS_LABELS, declaredStatus)) {
     return { ok: false, status: declaredStatus }
   }

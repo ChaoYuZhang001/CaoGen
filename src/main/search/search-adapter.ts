@@ -23,7 +23,11 @@ export function configuredSearchAdapter(urlEnv: string, keyEnv: string): SearchP
           body: JSON.stringify({ query: input.query, limit: input.limit, operationId: input.operationId, mode: input.mode }), signal: input.signal
         })
         if (!response.ok) return { status: 'provider_failure', message: `Search adapter returned HTTP ${response.status}.` }
-        return normalizeSearchAdapterResponse(await response.json() as Record<string, unknown>)
+        const body: unknown = await response.json()
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return { status: 'unknown_result', results: [], message: 'Search adapter returned a non-object response.' }
+        }
+        return normalizeSearchAdapterResponse(body as Record<string, unknown>)
       } catch (error) {
         if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return { status: 'timeout', message: 'Search adapter timed out.' }
         return { status: 'provider_failure', message: 'Search adapter failed before a verified result was produced.' }
