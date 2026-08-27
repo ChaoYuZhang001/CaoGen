@@ -205,6 +205,13 @@ export class SearchBroker {
   private readonly options: SearchBrokerOptions
   private readonly dependencies: SearchBrokerDependencies
   private readonly ephemeralStore = new Map<string, SearchBrokerResult>()
+  /**
+   * Collapse concurrent retries for one operation identity. A durable store
+   * protects the result after a restart, but without this in-flight guard two
+   * callers in the same process could still fetch and publish the same source
+   * twice before either one reached the store.
+   */
+  private readonly inFlight = new Map<string, Promise<SearchBrokerResult>>()
 
   constructor(options: SearchBrokerOptions = {}) {
     this.options = options
@@ -225,6 +232,7 @@ export class SearchBroker {
   }
 
   async search(input: SearchBrokerRequest): Promise<SearchBrokerResult> {
+    if (!isSearchMode(input.mode)) return invalidModeFailure(input, this.dependencies.idFactory)
     const mode = input.mode
     const query = normalizeQuery(input.query)
     const projectId = optionalText(input.projectId)
@@ -240,7 +248,10 @@ export class SearchBroker {
       : this.ephemeralStore.get(operationId)
     if (replay) return withReplayFlag(replay)
 
-    const result = await this.executeSearch({
+    const concurrent = this.inFlight.get(operationId)
+    if (concurrent) return withReplayFlag(await concurrent)
+
+    const execution = this.executeAndPersist({
       query,
       mode,
       operationId,
@@ -252,14 +263,27 @@ export class SearchBroker {
       limit,
       signal: input.signal
     })
-    if (store) await store.put(operationId, result)
-    else this.ephemeralStore.set(operationId, result)
-    return result
+    this.inFlight.set(operationId, execution)
+    try {
+      return await execution
+    } finally {
+      if (this.inFlight.get(operationId) === execution) this.inFlight.delete(operationId)
+    }
   }
 
   /** Alias for orchestration callers that use execute terminology. */
   execute(input: SearchBrokerRequest): Promise<SearchBrokerResult> {
     return this.search(input)
+  }
+
+  private async executeAndPersist(
+    input: SearchProviderRequest & { artifactId?: string }
+  ): Promise<SearchBrokerResult> {
+    const result = await this.executeSearch(input)
+    const store = this.options.idempotencyStore
+    if (store) await store.put(input.operationId, result)
+    else this.ephemeralStore.set(input.operationId, result)
+    return result
   }
 
   private async executeSearch(input: SearchProviderRequest & { artifactId?: string }): Promise<SearchBrokerResult> {
@@ -298,9 +322,7 @@ export class SearchBroker {
       return failure('unknown_result', input, 'The search provider returned an unknown result.')
     }
     const providerState = response.status
-    if (providerState && providerState !== 'success') {
-      return failure(providerState, input, response.message ?? failureMessage(providerState))
-    }
+    if (providerState !== undefined && providerState !== 'success') return providerFailure(providerState, input, response.message)
     if (!response || !Array.isArray(response.results)) {
       return failure('unknown_result', input, 'The search provider returned an unknown result.')
     }
@@ -489,6 +511,50 @@ function failure(
 
 function withReplayFlag(result: SearchBrokerResult): SearchBrokerResult {
   return { ...result, idempotentReplay: true }
+}
+
+function isFailureState(value: unknown): value is SearchBrokerFailureState {
+  return value === 'no_results' || value === 'timeout' || value === 'no_credentials' ||
+    value === 'egress_denied' || value === 'provider_failure' || value === 'unknown_result'
+}
+
+function providerFailure(
+  providerState: unknown,
+  input: SearchProviderRequest & { artifactId?: string },
+  message: unknown
+): SearchBrokerFailure {
+  const status = isFailureState(providerState) ? providerState : 'unknown_result'
+  return failure(status, input, typeof message === 'string' ? message : failureMessage(status))
+}
+
+function isSearchMode(value: unknown): value is SearchBrokerMode {
+  return value === 'model_native' || value === 'byok_search_adapter'
+}
+
+function invalidModeFailure(
+  input: SearchBrokerRequest,
+  idFactory: (kind: 'operation' | 'evidence', input: string) => string
+): SearchBrokerFailure {
+  const operationId = optionalText(input.operationId) ?? optionalText(input.requestId) ??
+    idFactory('operation', `invalid-mode\0${String(input.mode)}`)
+  return {
+    ok: false,
+    status: 'unknown_result',
+    // The result contract only permits the two known modes. Keep a valid
+    // sentinel here while the explicit failure message identifies the bad
+    // runtime value and guarantees that no adapter was called.
+    mode: 'model_native',
+    operationId,
+    projectId: optionalText(input.projectId) ?? null,
+    goalId: optionalText(input.goalId) ?? null,
+    workItemId: optionalText(input.workItemId) ?? null,
+    runId: optionalText(input.runId) ?? null,
+    ...(optionalText(input.artifactId) ? { artifactId: optionalText(input.artifactId) } : {}),
+    results: [],
+    citations: [],
+    message: 'Search mode must be model_native or byok_search_adapter.',
+    idempotentReplay: false
+  }
 }
 
 async function adapterAvailable(adapter: SearchProviderAdapter): Promise<boolean> {

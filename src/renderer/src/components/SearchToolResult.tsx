@@ -3,6 +3,16 @@ import { Check, Copy, Download } from 'lucide-react'
 
 type SearchResultRecord = Record<string, unknown>
 
+const SEARCH_STATUS_LABELS: Record<string, string> = {
+  success: '已找到已验证来源',
+  no_results: '没有找到来源',
+  timeout: '搜索超时',
+  no_credentials: '没有可用的搜索凭据',
+  egress_denied: '外发请求被安全策略拒绝',
+  provider_failure: '搜索服务失败',
+  unknown_result: '搜索结果无法确认'
+}
+
 function parseSearchResult(content: string): SearchResultRecord | null {
   try {
     const value: unknown = JSON.parse(content)
@@ -18,16 +28,38 @@ function searchResultRecords(value: unknown): SearchResultRecord[] {
   return value.filter((item): item is SearchResultRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
 }
 
+function safeCitationUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 4096) return ''
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return ''
+    for (const [name, queryValue] of url.searchParams.entries()) {
+      if (/(?:api[_-]?key|auth(?:orization)?|bearer|credential|password|secret|token|signature)/i.test(name) ||
+          /(?:secret|token|password|api[_-]?key)=/i.test(`${name}=${queryValue}`)) return ''
+    }
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+function safeFetchedAt(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 8.64e15) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : value
+}
+
 function SearchCitation({ item, index }: { item: SearchResultRecord; index: number }): React.JSX.Element {
-  const url = typeof item.url === 'string' ? item.url : ''
+  const url = safeCitationUrl(item.url)
   const title = typeof item.title === 'string' && item.title.trim() ? item.title : url
   const summary = typeof item.summary === 'string' ? item.summary : ''
-  const fetchedAt = typeof item.fetchedAt === 'number' && Number.isFinite(item.fetchedAt) ? item.fetchedAt : undefined
+  const fetchedAt = safeFetchedAt(item.fetchedAt)
   const digest = typeof item.contentSha256 === 'string' ? item.contentSha256 : ''
   const evidenceId = typeof item.evidenceId === 'string' ? item.evidenceId : ''
   return (
     <li key={`${url}:${evidenceId || index}`}>
-      {url ? <a href={url} target="_blank" rel="noreferrer">{title}</a> : <strong>{title}</strong>}
+      {url ? <a href={url} target="_blank" rel="noopener noreferrer">{title}</a> : <strong>{title || '未验证来源'}</strong>}
       {summary && <span>{summary}</span>}
       <small>
         {fetchedAt !== undefined && <time dateTime={new Date(fetchedAt).toISOString()}>抓取 {new Date(fetchedAt).toLocaleString()}</time>}
@@ -38,14 +70,15 @@ function SearchCitation({ item, index }: { item: SearchResultRecord; index: numb
   )
 }
 
-const SEARCH_STATUS_LABELS: Record<string, string> = {
-  success: '已找到已验证来源',
-  no_results: '没有找到来源',
-  timeout: '搜索超时',
-  no_credentials: '没有可用的搜索凭据',
-  egress_denied: '外发请求被安全策略拒绝',
-  provider_failure: '搜索服务失败',
-  unknown_result: '搜索结果无法确认'
+export function searchResultViewState(parsed: SearchResultRecord): { ok: boolean; status: string } {
+  const declaredStatus = typeof parsed.status === 'string' ? parsed.status : ''
+  if (parsed.ok === true && declaredStatus === 'success') return { ok: true, status: 'success' }
+  if (declaredStatus !== 'success' && Object.prototype.hasOwnProperty.call(SEARCH_STATUS_LABELS, declaredStatus)) {
+    return { ok: false, status: declaredStatus }
+  }
+  // Contradictory, missing, or unrecognised status values must never render
+  // as a completed source-backed search.
+  return { ok: false, status: 'unknown_result' }
 }
 
 function SearchResultActions({ content }: { content: string }): React.JSX.Element {
@@ -81,8 +114,9 @@ function SearchResultActions({ content }: { content: string }): React.JSX.Elemen
 }
 
 function SearchResultView({ content, parsed }: { content: string; parsed: SearchResultRecord }): React.JSX.Element {
-  const ok = parsed.ok === true
-  const status = typeof parsed.status === 'string' ? parsed.status : ok ? 'success' : 'unknown_result'
+  const viewState = searchResultViewState(parsed)
+  const ok = viewState.ok
+  const status = viewState.status
   const message = typeof parsed.message === 'string' ? parsed.message : ''
   const summary = typeof parsed.summary === 'string' ? parsed.summary : ''
   const results = searchResultRecords(parsed.results)
