@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
@@ -9,6 +8,7 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { spawnElectronTestProcess, terminateElectronTestProcess } from './lib/electron-test-process.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -25,7 +25,17 @@ const userDataDir = path.join(tempRoot, 'userData')
 const projectRoot = path.join(tempRoot, 'project')
 const isolatedOutDir = path.join(reportDir, 'app', 'out')
 const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
+const sourceEvidenceAtStart = readSourceEvidenceState(repoRoot)
 const fixtureCredential = randomUUID()
+const OFFICE_MAX_VISIBLE_SESSIONS = 9
+const CONTROL_ROOM_TEST_SESSION_COUNT = 11
+const CONTROL_ROOM_REQUIRED_GATES = [
+  'office_nine_workstation_capacity',
+  'office_tenth_session_overflow_list',
+  'office_active_session_prioritized',
+  'office_source_entry_return',
+  'office_equivalent_list_view'
+]
 const ids = {
   project: 'ux-golden-005-project',
   goal: 'ux-golden-005-goal',
@@ -55,11 +65,19 @@ const report = {
   gate: 'test:cross-entry-continuity',
   requirement: 'UX-GOLDEN-005',
   classification: 'local_targeted_not_release',
-  sourceRevision: gitOutput(['rev-parse', 'HEAD']),
-  worktreeStatusCount: gitStatusCount(),
+  sourceRevision: sourceEvidenceAtStart.commit,
+  sourceWorktreeClean: sourceEvidenceAtStart.worktreeClean,
+  worktreeStatusCount: sourceEvidenceAtStart.statusEntryCount,
   status: 'failed',
   checks,
   continuity: {},
+  controlRoom: {
+    sessionFixtureCount: CONTROL_ROOM_TEST_SESSION_COUNT,
+    maxExpensiveWorkstations: OFFICE_MAX_VISIBLE_SESSIONS,
+    requiredGates: CONTROL_ROOM_REQUIRED_GATES,
+    gates: []
+  },
+  warnings: [],
   explicitlyNotVerified: ['five-user timed acceptance', 'clean release SHA binding', 'multi-device collaboration']
 }
 let server
@@ -74,8 +92,8 @@ try {
   serverBase = server.baseUrl
   await launchElectron(false)
 
-  const session = await check('Assistant starts a project-bound task without changing canonical identity', async () => {
-    const created = await page.evaluate(async ({ ids: entityIds, cwd, baseUrl, credential }) => {
+  const fixture = await check('Assistant starts a project-bound task without changing canonical identity', async () => {
+    const created = await page.evaluate(async ({ ids: entityIds, cwd, baseUrl, credential, sessionCount }) => {
       const project = await window.agentDesk.createProjectWorkspace({ id: entityIds.project, name: 'Cross-entry continuity', kind: 'research' })
       const goal = await window.agentDesk.createProjectGoal({
         id: entityIds.goal, projectId: project.id, title: 'One continuous delivery',
@@ -94,16 +112,32 @@ try {
         providerId: provider.id, model: 'cross-entry-model', routingScope: 'fixed',
         isolated: false, taskStrategy: 'execute', experienceModeOverride: 'assistant', title: 'Cross-entry task'
       })
-      return { project, goal, workItem, session }
-    }, { ids, cwd: projectRoot, baseUrl: serverBase, credential: fixtureCredential })
+      const overflowSessions = []
+      for (let index = 1; index < sessionCount; index += 1) {
+        overflowSessions.push(await window.agentDesk.createSession({
+          cwd, workspaceId: project.id, goalId: goal.id, workItemId: workItem.id,
+          providerId: provider.id, model: 'cross-entry-model', routingScope: 'fixed',
+          isolated: false, taskStrategy: 'execute', experienceModeOverride: 'assistant',
+          title: `Cross-entry overflow ${String(index).padStart(2, '0')}`
+        }))
+      }
+      return { project, goal, workItem, session, overflowSessions }
+    }, {
+      ids,
+      cwd: projectRoot,
+      baseUrl: serverBase,
+      credential: fixtureCredential,
+      sessionCount: CONTROL_ROOM_TEST_SESSION_COUNT
+    })
     assert.equal(created.session.workspaceId, ids.project)
     assert.equal(created.session.goalId, ids.goal)
     assert.equal(created.session.workItemId, ids.workItem)
+    const fixtureSessionIds = [created.session.id, ...created.overflowSessions.map((item) => item.id)]
     await waitForValue(
-      () => page.evaluate((id) => window.agentDesk.listSessions().then((items) => items.find((item) => item.id === id)), created.session.id),
-      (meta) => Boolean(meta?.sdkSessionId && meta.status === 'idle'),
-      20_000,
-      'waiting for cross-entry Session initialization'
+      () => page.evaluate((expectedIds) => window.agentDesk.listSessions().then((items) => expectedIds.map((id) => items.find((item) => item.id === id))), fixtureSessionIds),
+      (metas) => metas.length === CONTROL_ROOM_TEST_SESSION_COUNT && metas.every((meta) => Boolean(meta?.sdkSessionId && meta.status === 'idle')),
+      35_000,
+      'waiting for bounded control-room Session fixture initialization'
     )
     // The fixture creates through preload, so rehydrate the renderer before using
     // sidebar navigation. Otherwise the new active Session can be mistaken for a
@@ -132,8 +166,10 @@ try {
       25_000,
       'waiting for Assistant result'
     )
-    return created.session
+    return created
   })
+  const session = fixture.session
+  const overflowSessionIds = fixture.overflowSessions.map((item) => item.id)
 
   await check('Artifact, Evidence and Acceptance are linked before projection switching', async () => {
     const linked = await page.evaluate(async ({ ids: entityIds, projectPath, fileDigest }) => {
@@ -195,26 +231,78 @@ try {
       { timeout: 45_000 }
     )
     const office = await waitForValue(
-      () => page.$eval('.office-canvas-wrap', (node) => ({
-        capacity: node.getAttribute('data-office-session-capacity'),
-        sessions: node.getAttribute('data-office-sessions'),
-        projects: node.getAttribute('data-office-projects'),
-        selected: node.getAttribute('data-office-selected-session'),
-        returnMode: node.getAttribute('data-office-return-mode')
-      })),
-      (value) => value.returnMode === 'studio' && Number(value.projects) >= 1,
+      () => readOfficeProjection(page),
+      (value) => value.returnMode === 'studio' && value.businessView === 'project' && value.projects >= 1 &&
+        value.sessions === OFFICE_MAX_VISIBLE_SESSIONS && value.hiddenSessions === CONTROL_ROOM_TEST_SESSION_COUNT - OFFICE_MAX_VISIBLE_SESSIONS &&
+        value.workstationIds.length === OFFICE_MAX_VISIBLE_SESSIONS,
       20_000,
       'waiting for live Control Room projection'
     )
-    assert.equal(Number(office.capacity), 9)
-    assert(Number(office.sessions) >= 0 && Number(office.sessions) <= 9)
-    assert(Number(office.projects) >= 1)
-    await page.click('.office-actions .btn-primary')
-    await page.waitForSelector('[data-experience-mode-option="studio"]', { visible: true, timeout: 15_000 })
-    await page.click('[data-experience-mode-option="studio"]')
-    await waitForProjectDeliveryAction(page)
-    await openProjectDelivery(page)
-    const after = await page.evaluate(async ({ id, projectId, entityIds }) => {
+    await verifyControlRoomGate('office_nine_workstation_capacity', () => {
+      assert.equal(office.capacity, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(office.sessions, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(office.clickableWorkstations, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(office.workstationIds.length, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(new Set(office.workstationIds).size, OFFICE_MAX_VISIBLE_SESSIONS)
+    })
+
+    await page.click('[data-office-hidden-sessions-toggle]')
+    const overflowList = await waitForValue(
+      () => page.$$eval('[data-office-hidden-session]', (buttons) => buttons.map((button) => ({
+        id: button.getAttribute('data-office-hidden-session') ?? '',
+        title: button.querySelector('span')?.textContent?.trim() ?? '',
+        model: button.querySelector('small')?.textContent?.trim() ?? ''
+      }))),
+      (items) => items.length === CONTROL_ROOM_TEST_SESSION_COUNT - OFFICE_MAX_VISIBLE_SESSIONS,
+      10_000,
+      'waiting for the 10th and later Sessions in the equivalent list'
+    )
+    await verifyControlRoomGate('office_tenth_session_overflow_list', () => {
+      assert.equal(office.hiddenSessions, CONTROL_ROOM_TEST_SESSION_COUNT - OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(overflowList.length, CONTROL_ROOM_TEST_SESSION_COUNT - OFFICE_MAX_VISIBLE_SESSIONS)
+      assert(overflowList.every((item) => overflowSessionIds.includes(item.id)), 'overflow list contains a Session outside the bounded fixture')
+    })
+    await verifyControlRoomGate('office_active_session_prioritized', () => {
+      assert.equal(office.selected, session.id)
+      assert(office.workstationIds.includes(session.id), 'selected source Session was not prioritized onto the bounded floor')
+      assert(!overflowList.some((item) => item.id === session.id), 'selected source Session leaked into the overflow list')
+    })
+
+    const overflowTarget = overflowList[0]
+    await verifyControlRoomGate('office_equivalent_list_view', async () => {
+      assert(overflowTarget?.id, 'overflow list did not expose a selectable Session')
+      assert(overflowTarget.title.startsWith('Cross-entry overflow'), `overflow list omitted the Session title: ${JSON.stringify(overflowTarget)}`)
+      assert.equal(overflowTarget.model, 'cross-entry-model')
+      await page.$$eval('[data-office-hidden-session]', (buttons, targetId) => {
+        const target = buttons.find((button) => button.getAttribute('data-office-hidden-session') === targetId)
+        if (!(target instanceof HTMLButtonElement)) throw new Error(`overflow Session ${targetId} is not selectable`)
+        target.click()
+      }, overflowTarget.id)
+      const revealed = await waitForValue(
+        () => readOfficeProjection(page),
+        (value) => value.selected === overflowTarget.id && value.workstationIds.includes(overflowTarget.id),
+        15_000,
+        'waiting for overflow Session selection to enter the bounded floor'
+      )
+      assert.equal(revealed.capacity, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(revealed.sessions, OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(revealed.hiddenSessions, CONTROL_ROOM_TEST_SESSION_COUNT - OFFICE_MAX_VISIBLE_SESSIONS)
+      assert.equal(revealed.returnMode, 'studio')
+      report.controlRoom.revealedSessionId = overflowTarget.id
+      report.controlRoom.afterOverflowSelection = revealed
+    })
+
+    await verifyControlRoomGate('office_source_entry_return', async () => {
+      await page.click('.office-actions .btn-primary')
+      await page.waitForFunction(
+        () => document.querySelector('.experience-pane')?.getAttribute('data-experience-mode') === 'studio' &&
+          Boolean(document.querySelector('[data-project-workspace-studio]')),
+        { timeout: 15_000 }
+      )
+      await waitForProjectDeliveryAction(page)
+      await openProjectDelivery(page)
+    })
+    const after = await page.evaluate(async ({ id, projectId, entityIds, fixtureIds }) => {
       const [sessions, ledger, evidencePage, audit] = await Promise.all([
         window.agentDesk.listSessions(),
         window.agentDesk.listWorkflowLedger({ projectId, limit: 500 }),
@@ -223,14 +311,22 @@ try {
       ])
       return {
         matchingSessions: sessions.filter((item) => item.id === id).length,
+        fixtureSessions: sessions.filter((item) => fixtureIds.includes(item.id)).length,
         runs: ledger.runs.items.filter((item) => item.sessionId === id).length,
         artifacts: ledger.artifacts.items.filter((item) => item.id === entityIds.artifact).length,
         evidence: evidencePage.items.filter((item) => item.evidenceId === entityIds.evidence).length,
         acceptances: ledger.acceptances.items.filter((item) => item.id === entityIds.acceptance).length,
         auditItems: audit.items.length
       }
-      }, { id: session.id, projectId: ids.project, entityIds: ids })
+      }, {
+        id: session.id,
+        projectId: ids.project,
+        entityIds: ids,
+        fixtureIds: [session.id, ...overflowSessionIds]
+      })
     assert.equal(after.matchingSessions, 1)
+    assert.equal(after.fixtureSessions, CONTROL_ROOM_TEST_SESSION_COUNT)
+    assert.equal(after.runs, 1)
     assert.equal(after.artifacts, 1)
     assert.equal(after.evidence, 1)
     assert.equal(after.acceptances, 1)
@@ -272,10 +368,20 @@ try {
     assert(!stderr.includes('Conversation Ledger archive failed'), `Conversation Ledger archive failed after restart:\n${stderr}`)
   })
 
+  assert.deepEqual(
+    report.controlRoom.gates.filter((gate) => gate.status === 'pass').map((gate) => gate.id).sort(),
+    [...CONTROL_ROOM_REQUIRED_GATES].sort(),
+    'CONTROL-ROOM-009 required gates are incomplete'
+  )
   report.status = 'passed'
   writeReport()
-  console.log(`cross-entry continuity e2e: passed (${checks.length}/${checks.length})`)
-  console.log(path.join(reportDir, 'report.json'))
+  if (report.status === 'passed') {
+    console.log(`cross-entry continuity e2e: passed (${checks.length}/${checks.length})`)
+    console.log(path.join(reportDir, 'report.json'))
+  } else {
+    console.error(`cross-entry continuity e2e: failed: ${report.error}`)
+    process.exitCode = 1
+  }
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error)
   report.rendererDiagnostic = await captureRendererDiagnostic(page)
@@ -299,6 +405,50 @@ async function check(name, run) {
     checks.push({ name, status: 'fail', durationMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) })
     throw error
   }
+}
+
+async function verifyControlRoomGate(id, run) {
+  assert(CONTROL_ROOM_REQUIRED_GATES.includes(id), `unknown CONTROL-ROOM-009 gate: ${id}`)
+  assert(!report.controlRoom.gates.some((gate) => gate.id === id), `duplicate CONTROL-ROOM-009 gate: ${id}`)
+  const startedAt = Date.now()
+  try {
+    const value = await run()
+    report.controlRoom.gates.push({ id, status: 'pass', durationMs: Date.now() - startedAt })
+    return value
+  } catch (error) {
+    report.controlRoom.gates.push({
+      id,
+      status: 'fail',
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    throw error
+  }
+}
+
+async function readOfficeProjection(activePage) {
+  return activePage.$eval('.office-canvas-wrap', (node) => {
+    let workstationTargets = []
+    try {
+      const parsed = JSON.parse(node.getAttribute('data-office-workstation-hit-targets') ?? '[]')
+      if (Array.isArray(parsed)) workstationTargets = parsed
+    } catch {
+      workstationTargets = []
+    }
+    return {
+      businessView: node.getAttribute('data-office-business-view') ?? '',
+      capacity: Number(node.getAttribute('data-office-session-capacity') ?? 0),
+      sessions: Number(node.getAttribute('data-office-sessions') ?? 0),
+      hiddenSessions: Number(node.getAttribute('data-office-hidden-sessions') ?? 0),
+      clickableWorkstations: Number(node.getAttribute('data-office-clickable-workstations') ?? 0),
+      projects: Number(node.getAttribute('data-office-projects') ?? 0),
+      selected: node.getAttribute('data-office-selected-session') ?? '',
+      returnMode: node.getAttribute('data-office-return-mode') ?? '',
+      workstationIds: workstationTargets
+        .map((target) => target && typeof target === 'object' && typeof target.id === 'string' ? target.id : '')
+        .filter(Boolean)
+    }
+  })
 }
 
 async function waitForProjectDeliveryAction(activePage) {
@@ -446,17 +596,16 @@ async function findFreePort(start) {
 function close(target) { return new Promise((resolve) => target.close(() => resolve())) }
 
 function writeReport() {
+  const provenance = bindSourceEvidence(
+    report,
+    sourceEvidenceAtStart,
+    readSourceEvidenceState(repoRoot),
+    'Cross-entry continuity'
+  )
+  if (provenance.status !== 'pass') report.status = 'failed'
   mkdirSync(reportDir, { recursive: true })
   const output = `${JSON.stringify(report, null, 2)}\n`
   writeFileSync(path.join(reportDir, 'report.json'), output, 'utf8')
   mkdirSync(reportRoot, { recursive: true })
   writeFileSync(path.join(reportRoot, 'latest.json'), output, 'utf8')
-}
-
-function gitOutput(args) {
-  try { return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim() } catch { return '' }
-}
-
-function gitStatusCount() {
-  return gitOutput(['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean).length
 }

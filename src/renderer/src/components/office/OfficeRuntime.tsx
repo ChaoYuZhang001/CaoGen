@@ -321,8 +321,9 @@ export default function OfficeView(): React.JSX.Element {
   const setShowNewSession = useStore((s) => s.setShowNewSession)
   const experienceMode = useStore((s) => s.experienceMode)
   const setExperienceMode = useStore((s) => s.setExperienceMode)
+  const sourceExperienceModeRef = useRef(experienceMode)
   const initialBusinessViewRef = useRef<OfficeFacilityKey>(
-    experienceMode === 'studio' ? 'project' : experienceMode === 'video' ? 'video' : 'assistant'
+    sourceExperienceModeRef.current === 'studio' ? 'project' : sourceExperienceModeRef.current === 'video' ? 'video' : 'assistant'
   )
   const [businessView, setBusinessView] = useState<OfficeBusinessView>(initialBusinessViewRef.current)
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>('facilities')
@@ -688,7 +689,7 @@ export default function OfficeView(): React.JSX.Element {
     setView('list')
   }
   const returnToWorkspace = (): void => {
-    setExperienceMode(experienceMode)
+    setExperienceMode(sourceExperienceModeRef.current)
     setView('list')
   }
 
@@ -721,7 +722,7 @@ export default function OfficeView(): React.JSX.Element {
         <div
           className="office-canvas-wrap"
           data-office-business-view={businessView}
-          data-office-return-mode={experienceMode}
+          data-office-return-mode={sourceExperienceModeRef.current}
           data-office-session-capacity={OFFICE_MAX_VISIBLE_SESSIONS}
           data-office-hidden-sessions={hiddenSessionCount}
           data-office-sessions={visibleIds.length}
