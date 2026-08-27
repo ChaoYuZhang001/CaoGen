@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -8,6 +8,7 @@ import net from 'node:net'
 import { createRequire } from 'node:module'
 import { dismissRecoveryCenter } from './lib/project-workspace-lifecycle-ui.mjs'
 import { clickProjectResourceAdd, openProjectDetails, setControlledInputWhenStable } from './lib/project-workspace-lifecycle-actions.mjs'
+import { bindSourceEvidence, readSourceEvidenceState } from './lib/source-evidence-binding.mjs'
 
 const repoRoot = process.cwd()
 const require = createRequire(path.join(repoRoot, 'package.json'))
@@ -31,6 +32,10 @@ const mainEntry = path.join(isolatedOutDir, 'main', 'index.js')
 const electronBin = process.platform === 'win32'
   ? path.join(repoRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(repoRoot, 'node_modules', '.bin', 'electron')
+// Capture the checkout before preparing the isolated fixture. A concurrent
+// commit or edit during the six-launch run would otherwise leave a report
+// that names the wrong source revision.
+const sourceGitAtStart = readSourceEvidenceState(repoRoot)
 
 const state = {
   projectId: '',
@@ -52,6 +57,8 @@ const report = {
   requirement: 'required',
   requirements: ['PROJ-001', 'PROJ-002', 'PROJ-004', 'WORK-004'],
   packageVersion: packageJson.version,
+  sourceRevision: sourceGitAtStart.commit,
+  worktreeStatusCount: sourceGitAtStart.statusEntryCount,
   gitCommit: '',
   worktreeClean: false,
   platform: process.platform,
@@ -551,12 +558,15 @@ try {
   if (activeRuntime?.page) await screenshot(activeRuntime.page, 'failure').catch(() => undefined)
 } finally {
   if (activeRuntime) await stopRuntime(activeRuntime)
-  const git = readGitState()
+  const git = readSourceEvidenceState(repoRoot)
   report.gitCommit = git.commit
   report.worktreeClean = git.worktreeClean
+  bindSourceEvidence(report, sourceGitAtStart, git, 'Project lifecycle')
   report.releaseBinding = {
     requirement: report.requirement,
     packageVersion: report.packageVersion,
+    sourceRevision: report.sourceRevision,
+    sourceRevisionAtEnd: report.sourceRevisionAtEnd,
     git,
     platform: report.platform,
     arch: report.arch,
@@ -1229,16 +1239,6 @@ function summarizeProcessOutput(phase, output, exited) {
   if (output.stdout.trim()) warnings.push(`${phase} [stdout tail]\n${output.stdout.trim().slice(-600)}`)
   if (exited.signal) warnings.push(`${phase} Electron exited by signal ${exited.signal}`)
   return warnings
-}
-
-function readGitState() {
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim()
-  const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repoRoot, encoding: 'utf8' }).trim()
-  return {
-    commit,
-    worktreeClean: status.length === 0,
-    statusEntryCount: status ? status.split(/\r?\n/).length : 0
-  }
 }
 
 function cleanupTempRoot() {
