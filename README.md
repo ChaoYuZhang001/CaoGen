@@ -98,3 +98,9 @@ CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、Wor
 - 提交 [Bug](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=bug_report.yml)、[功能建议](https://github.com/ChaoYuZhang001/CaoGen/issues/new?template=feature_request.yml) 或 Pull Request。
 
 安全问题请按 [SECURITY.md](./SECURITY.md) 私下报告。CaoGen 采用 [AGPL-3.0-only](./LICENSE) 开源许可，并提供独立的 [商业授权](./COMMERCIAL-LICENSE.md)。
+
+## 社区与讨论
+
+- Linux.do：https://linux.do/t/你的帖子链接（先发帖后回填）
+- GitHub Issues：https://github.com/ChaoYuZhang001/CaoGen/issues
+
