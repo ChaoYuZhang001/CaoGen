@@ -101,6 +101,6 @@ CaoGen 的长期方向是厂商中立的 Agent Work OS：用持久的 Goal、Wor
 
 ## 社区与讨论
 
-- Linux.do：https://linux.do/t/你的帖子链接（先发帖后回填）
+- CaoGen 在 [Linux.do](https://linux.do) 设有开源推广与讨论帖，欢迎参与。
 - GitHub Issues：https://github.com/ChaoYuZhang001/CaoGen/issues
 
